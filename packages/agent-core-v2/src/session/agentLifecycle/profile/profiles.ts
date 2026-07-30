@@ -50,6 +50,11 @@ const AGENT_TOOLS = [
   'GetGoal',
   'SetGoalBudget',
   'UpdateGoal',
+  'TeamHire',
+  'TeamFire',
+  'TeamScore',
+  'TeamMessage',
+  'TeamConcurrency',
   'mcp__*',
 ] as const;
 

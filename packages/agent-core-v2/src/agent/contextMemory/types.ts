@@ -85,6 +85,12 @@ export interface RetryOrigin {
   readonly trigger?: string;
 }
 
+/** Origin when the main agent injects a message directly to a subagent via TeamMessage. */
+export interface AgentMessageOrigin {
+  readonly kind: 'agent_message';
+  readonly agentId: string;
+}
+
 export type PromptOrigin =
   | UserPromptOrigin
   | SkillActivationOrigin
@@ -97,7 +103,8 @@ export type PromptOrigin =
   | CronJobOrigin
   | CronMissedOrigin
   | HookResultOrigin
-  | RetryOrigin;
+  | RetryOrigin
+  | AgentMessageOrigin;
 
 export type ContextMessage = Message & {
   readonly id?: string;

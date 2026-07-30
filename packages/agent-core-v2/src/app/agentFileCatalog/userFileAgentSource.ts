@@ -11,7 +11,12 @@
  * `${base_prompt}` with it. Bound at App scope.
  */
 
+import { join } from 'pathe';
+import fs, { type FSWatcher } from 'node:fs';
+
+import { Disposable, type IDisposable } from '#/_base/di/lifecycle';
 import { createDecorator, type ServiceIdentifier } from '#/_base/di/instantiation';
+import { Emitter, type Event } from '#/_base/event';
 import { LifecycleScope, ScopeActivation, registerScopedService } from '#/_base/di/scope';
 import { ILogService } from '#/_base/log/log';
 import {
@@ -39,13 +44,19 @@ export interface IUserFileAgentSource extends IAgentProfileSource {
 export const IUserFileAgentSource: ServiceIdentifier<IUserFileAgentSource> =
   createDecorator<IUserFileAgentSource>('userFileAgentSource');
 
-export class UserFileAgentSource implements IUserFileAgentSource {
+export class UserFileAgentSource extends Disposable implements IUserFileAgentSource {
   declare readonly _serviceBrand: undefined;
 
   readonly id = 'user';
   readonly priority = AGENT_PROFILE_SOURCE_PRIORITY.user;
 
+  private readonly onDidChangeEmitter = this._register(new Emitter<void>());
+  readonly onDidChange: Event<void> = this.onDidChangeEmitter.event;
+
   private defaultProfile: AgentProfile;
+
+  /** Active watchers by directory — drives incremental updates on each load(). */
+  private readonly _watchers = new Map<string, IDisposable>();
 
   constructor(
     @IBootstrapService private readonly bootstrap: IBootstrapService,
@@ -53,6 +64,7 @@ export class UserFileAgentSource implements IUserFileAgentSource {
     @ILogService private readonly log: ILogService,
     @IAgentProfileCatalogService private readonly builtin: IAgentProfileCatalogService,
   ) {
+    super();
     this.defaultProfile = builtin.getDefault();
   }
 
@@ -69,6 +81,18 @@ export class UserFileAgentSource implements IUserFileAgentSource {
         this.log.warn(message, error);
       },
     );
+
+    // Watch every root that the source actually discovers (existing dirs).
+    // For candidate directories that do not exist yet we silently ignore
+    // them — if they are later created by TeamHire a subsequent load() will
+    // pick one up and start watching it.
+    this.updateWatches([
+      ...roots.map((r) => r.path),
+
+      join(this.bootstrap.homeDir, 'agents'),
+      join(this.bootstrap.osHomeDir, '.kimi-code/agents'),
+    ]);
+
     const systemMd = await loadSystemMdProfile(
       this.fs,
       this.bootstrap.homeDir,
@@ -82,6 +106,34 @@ export class UserFileAgentSource implements IUserFileAgentSource {
     );
     if (systemMd === undefined) return contribution;
     return { ...contribution, profiles: [...contribution.profiles, systemMd] };
+  }
+
+  // ---------------------------------------------------------------------
+  // fs watch management
+  // ---------------------------------------------------------------------
+
+  private updateWatches(candidateDirs: string[]): void {
+    const wanted = new Set(candidateDirs);
+
+    // Close watchers whose directory is no longer a candidate (e.g. deleted).
+    for (const [dir, disposable] of this._watchers) {
+      if (!wanted.has(dir)) {
+        disposable.dispose();
+        this._watchers.delete(dir);
+      }
+    }
+
+    for (const dir of wanted) {
+      if (this._watchers.has(dir)) continue;
+      try {
+        const watcher = fs.watch(dir, () => {
+          this.onDidChangeEmitter.fire();
+        });
+        this._watchers.set(dir, this._register({ dispose: () => watcher.close() }));
+      } catch {
+        // Directory does not exist or OS is unable to watch it — skip.
+      }
+    }
   }
 }
 

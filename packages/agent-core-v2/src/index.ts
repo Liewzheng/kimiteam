@@ -159,6 +159,8 @@ export * from '#/app/agentProfileCatalog/agentProfileCatalog';
 export * from '#/app/agentProfileCatalog/agentProfileCatalogService';
 export * from '#/app/agentProfileCatalog/profile-shared';
 export * from '#/app/agentProfileCatalog/promptPrefix';
+export * from '#/app/agentPerformance/agentPerformance';
+import '#/app/agentPerformance/agentPerformanceService';
 export {
   registerAgentProfile,
   getAgentProfileContributions,
@@ -327,6 +329,10 @@ export * from '#/session/subagent/mirrorAgentRun';
 import '#/session/subagent/configSection';
 export * from '#/agent/tools/agent/agent';
 import '#/agent/tools/agent/agentTool';
+import '#/agent/tools/team-hire/team-hireTool';
+import '#/agent/tools/team-fire/team-fireTool';
+import '#/agent/tools/team-score/teamScoreTool';
+import '#/agent/tools/team-message/teamMessageTool';
 export * from '#/app/sessionLifecycle/sessionLifecycle';
 export * from '#/app/sessionLifecycle/sessionLifecycleService';
 export * from '#/session/externalHooks/externalHooks';
