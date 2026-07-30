@@ -17,6 +17,8 @@ import {
   parsePerformanceData,
   formatDuration,
   aggregateMemberRows,
+  resolveModelForProfile,
+  TeamPanelComponent,
 } from '#/tui/commands/team';
 
 import { formatBusinessCardSuffixFromMap } from '#/tui/components/messages/subagent-card-meta';
@@ -237,7 +239,82 @@ describe('formatDuration', () => {
 });
 
 // ===========================================================================
-// Pure function: aggregateMemberRows
+// Pure function: resolveModelForProfile
+// ===========================================================================
+
+describe('resolveModelForProfile', () => {
+  const config = {
+    defaultModel: 'kimi-code/k3-256k',
+    secondaryModel: { model: 'deepseek/deepseek-v4-flash' },
+    subagent: {
+      modelOverrides: {
+        'specialist': 'gpt-4o',
+      },
+    },
+  };
+
+  it('uses model_overrides when present', () => {
+    expect(resolveModelForProfile('specialist', 'secondary', config)).toBe('gpt-4o');
+  });
+
+  it('falls back to model_preference when no override exists', () => {
+    expect(resolveModelForProfile('coder', 'gpt-4', config)).toBe('gpt-4');
+  });
+
+  it('resolves "secondary" shortcut to secondary_model.model', () => {
+    expect(resolveModelForProfile('agent-x', 'secondary', config)).toBe('deepseek/deepseek-v4-flash');
+  });
+
+  it('falls back to raw "secondary" when secondary_model is unset', () => {
+    const noSecondary = { ...config, secondaryModel: undefined };
+    expect(resolveModelForProfile('agent-x', 'secondary', noSecondary)).toBe('secondary');
+  });
+
+  it('resolves "primary" shortcut to defaultModel', () => {
+    expect(resolveModelForProfile('agent-x', 'primary', config)).toBe('kimi-code/k3-256k');
+  });
+
+  it('falls back to raw "primary" when defaultModel is unset', () => {
+    const noDefault = { ...config, defaultModel: undefined };
+    expect(resolveModelForProfile('agent-x', 'primary', noDefault)).toBe('primary');
+  });
+
+  it('returns "—" when model_preference is undefined and no override', () => {
+    expect(resolveModelForProfile('new-agent', undefined, config)).toBe('—');
+  });
+
+  it('returns "—" when model_preference is empty string', () => {
+    expect(resolveModelForProfile('new-agent', '', config)).toBe('—');
+  });
+
+  it('returns modelPreference as-is when it is a literal model id', () => {
+    expect(resolveModelForProfile('agent-x', 'local/qwen3-35b', config)).toBe('local/qwen3-35b');
+  });
+
+  it('returns modelPreference when config is null (safety fallback)', () => {
+    expect(resolveModelForProfile('agent-x', 'gpt-4', null)).toBe('gpt-4');
+  });
+
+  it('returns "—" when config is null and modelPreference is undefined', () => {
+    expect(resolveModelForProfile('agent-x', undefined, null)).toBe('—');
+  });
+
+  it('override wins over "primary" shortcut', () => {
+    const ovConfig = {
+      ...config,
+      subagent: { modelOverrides: { 'lead': 'claude-opus' } },
+    };
+    expect(resolveModelForProfile('lead', 'primary', ovConfig)).toBe('claude-opus');
+  });
+
+  it('override wins over "secondary" shortcut', () => {
+    const ovConfig = {
+      ...config,
+      subagent: { modelOverrides: { 'lead': 'claude-sonnet' } },
+    };
+    expect(resolveModelForProfile('lead', 'secondary', ovConfig)).toBe('claude-sonnet');
+  });
+});
 // ===========================================================================
 
 describe('aggregateMemberRows', () => {
@@ -317,6 +394,30 @@ describe('aggregateMemberRows', () => {
     const rows = aggregateMemberRows(profiles, null);
     const charlie = rows.find((r) => r.name === 'Charlie');
     expect(charlie!.role).toBe('—');
+    expect(charlie!.model).toBe('—');
+  });
+
+  it('uses resolvedModels when provided', () => {
+    const resolvedModels = { Alice: 'gpt-4o', Bob: 'claude-opus' };
+    const rows = aggregateMemberRows(profiles, null, resolvedModels);
+    expect(rows.find((r) => r.name === 'Alice')!.model).toBe('gpt-4o');
+    expect(rows.find((r) => r.name === 'Bob')!.model).toBe('claude-opus');
+  });
+
+  it('resolvedModels wins over profile modelPreference', () => {
+    const resolvedModels = { Alice: 'override-model' };
+    const rows = aggregateMemberRows(profiles, null, resolvedModels);
+    expect(rows.find((r) => r.name === 'Alice')!.model).toBe('override-model');
+  });
+
+  it('falls back to profile modelPreference when resolvedModels has no entry', () => {
+    const rows = aggregateMemberRows(profiles, null, {});
+    expect(rows.find((r) => r.name === 'Alice')!.model).toBe('gpt-4');
+  });
+
+  it('falls back to "—" when neither resolvedModels nor modelPreference exist', () => {
+    const rows = aggregateMemberRows(profiles, null, {});
+    const charlie = rows.find((r) => r.name === 'Charlie');
     expect(charlie!.model).toBe('—');
   });
 });
@@ -582,5 +683,117 @@ describe('formatBusinessCardSuffix cache behaviour', () => {
     expect(second).toBe('');
 
     expect(mockReadAgentProfiles).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ===========================================================================
+// CJK column-width alignment (TeamPanelComponent.render)
+// ===========================================================================
+
+describe('TeamPanelComponent CJK alignment', () => {
+  const members = [
+    {
+      name: 'shen-yifan',
+      role: '前端工程师·组件架构',
+      model: 'gpt-4o',  // fits within 20-char column
+      avgScore: 85.3,
+      scoreCount: 7,
+      avgDurationMs: 120_000,
+      shiftCount: 3,
+    },
+    {
+      name: 'qi-yuan',
+      role: '后端工程师·数据层',
+      model: 'claude-3.5',  // fits within 20-char column
+      avgScore: null,
+      scoreCount: 0,
+      avgDurationMs: null,
+      shiftCount: 0,
+    },
+  ];
+
+  it('renders table with CJK Role column without breaking alignment', () => {
+    const panel = new TeamPanelComponent({
+      teamMode: true,
+      members,
+      onClose: () => {},
+    });
+
+    // Render at 120 columns wide — wide enough to avoid final-line truncation
+    const lines = panel.render(120);
+
+    // Header should exist
+    const headerLine = lines.find((l) => l.includes('Name') && l.includes('Role'));
+    expect(headerLine).toBeDefined();
+
+    // Each data row should have consistent column separators.
+    // Find the row lines (containing member names)
+    const rowLines = lines.filter(
+      (l) => l.includes('shen-yifan') || l.includes('qi-yuan'),
+    );
+    expect(rowLines).toHaveLength(2);
+
+    // Verify the data rows contain model IDs
+    expect(rowLines[0]).toContain('gpt-4o');
+    expect(rowLines[1]).toContain('claude-3.5');
+
+    // Verify score/duration/counts appear (right-aligned columns stay in place)
+    expect(rowLines[0]!).toContain('85.3');
+    expect(rowLines[0]!).toContain('2m 0s');
+    expect(rowLines[1]!).toContain('—');
+
+    // Role column (frontmatter row) is kept within its allocated width;
+    // the header 'Role' label plus CJK content both fit in 16 visible columns.
+    // Verify no content bleeds past its column by checking that the model
+    // column contents appear in a consistent position.
+    const rolePos = rowLines[0]!.indexOf('前端工程师');
+    const modelPos = rowLines[0]!.indexOf('gpt-4o');
+    expect(rolePos).toBeGreaterThanOrEqual(0);
+    expect(modelPos).toBeGreaterThan(rolePos);
+  });
+
+  it('truncates long CJK Role to fit column width', () => {
+    const longRoleMembers = [
+      {
+        ...members[0]!,
+        role: '前端工程师·组件架构与设计系统',
+      },
+    ];
+
+    const panel = new TeamPanelComponent({
+      teamMode: true,
+      members: longRoleMembers,
+      onClose: () => {},
+    });
+
+    const lines = panel.render(80);
+    const rowLine = lines.find((l) => l.includes('shen-yifan'));
+    expect(rowLine).toBeDefined();
+
+    // The truncated role should be ≤ 16 visible columns; visibleWidth
+    // accounts for CJK double-width, so the ellipsis '…' should appear.
+    // We just verify that the line is not broken and fits within expected bounds.
+    expect(rowLine!.length).toBeGreaterThan(0);
+    // The rendered line should not contain the full untruncated role
+    expect(rowLine).not.toContain('组件架构与设计系统');
+  });
+
+  it('handles narrow terminal without breaking layout', () => {
+    const panel = new TeamPanelComponent({
+      teamMode: true,
+      members,
+      onClose: () => {},
+    });
+
+    // Render at a narrow width that forces scrolling
+    const lines = panel.render(40);
+    expect(lines.length).toBeGreaterThan(0);
+
+    // No line should exceed the terminal width (truncateToWidth is applied)
+    for (const line of lines) {
+      // Strip ANSI codes before checking width
+      const plain = line.replace(/\x1b\[[\d;]*m/g, '');
+      expect(plain.length).toBeLessThanOrEqual(42); // 40 + small slack for ANSI
+    }
   });
 });

@@ -16,8 +16,9 @@ import {
   matchesKey,
   Key,
   decodeKittyPrintable,
-  type Focusable,
   truncateToWidth,
+  visibleWidth,
+  type Focusable,
 } from '@moonshot-ai/pi-tui';
 import { currentTheme } from '#/tui/theme';
 import { getDataDir } from '#/utils/paths';
@@ -179,6 +180,11 @@ export function formatDuration(ms: number): string {
 export function aggregateMemberRows(
   profiles: readonly AgentProfile[],
   perf: PerformanceData | null,
+  /**
+   * Pre-resolved model ID per profile name, keyed by `profileName`.
+   * When omitted, falls back to `profile.modelPreference ?? '—'`.
+   */
+  resolvedModels?: Readonly<Record<string, string>>,
 ): TeamMemberRow[] {
   return profiles.map((profile) => {
     const profileData = perf?.[profile.name];
@@ -200,13 +206,61 @@ export function aggregateMemberRows(
     return {
       name: profile.name,
       role: profile.role ?? '—',
-      model: profile.modelPreference ?? '—',
+      model: resolvedModels?.[profile.name] ?? profile.modelPreference ?? '—',
       avgScore,
       scoreCount,
       avgDurationMs,
       shiftCount,
     };
   });
+}
+
+/**
+ * Resolve the effective model ID for an agent profile.
+ *
+ * Precedence (highest first):
+ *  1. `[subagent.model_overrides][<profileName>]` in config.toml
+ *  2. Profile frontmatter `model_preference`
+ *  3. If resolved value is `"secondary"` → `[secondary_model].model`
+ *     (falls back to `"secondary"` if unset)
+ *  4. If resolved value is `"primary"` → `defaultModel`
+ *     (falls back to `"primary"` if unset)
+ *  5. Otherwise use the resolved value as-is
+ *
+ * When `config` is null (unavailable), falls back to raw `modelPreference`
+ * or `'—'` — same as the pre-resolution behaviour.
+ */
+export function resolveModelForProfile(
+  profileName: string,
+  modelPreference: string | undefined,
+  config: {
+    readonly defaultModel?: string;
+    readonly subagent?: { readonly modelOverrides?: Record<string, string> };
+    readonly secondaryModel?: { readonly model?: string };
+  } | null,
+): string {
+  if (config === null) return modelPreference ?? '—';
+
+  // 1) Per-profile override from [subagent.model_overrides]
+  const override = config.subagent?.modelOverrides?.[profileName];
+  if (override !== undefined && override.length > 0) return override;
+
+  // 2) Profile frontmatter model_preference
+  const preference = modelPreference;
+  if (preference === undefined || preference.length === 0) return '—';
+
+  // 3) Resolve the "secondary" shortcut
+  if (preference === 'secondary') {
+    return config.secondaryModel?.model ?? 'secondary';
+  }
+
+  // 4) Resolve the "primary" shortcut
+  if (preference === 'primary') {
+    return config.defaultModel ?? 'primary';
+  }
+
+  // 5) Literal model id
+  return preference;
 }
 
 // ---------------------------------------------------------------------------
@@ -262,6 +316,24 @@ export function readPerformanceData(dataDir: string): PerformanceData | null {
 // ---------------------------------------------------------------------------
 // Panel component
 // ---------------------------------------------------------------------------
+
+/**
+ * Pad `text` to exactly `targetWidth` visible (display) columns.
+ * Uses `visibleWidth` for CJK-aware measurement. If text already exceeds
+ * the target width it is returned as-is (caller should truncate first).
+ */
+function padToVisibleWidth(text: string, targetWidth: number): string {
+  const current = visibleWidth(text);
+  if (current >= targetWidth) return text;
+  return text + ' '.repeat(targetWidth - current);
+}
+
+/** Right-align `text` within a given visible width, prepending spaces. */
+function padStartVisible(text: string, targetWidth: number): string {
+  const current = visibleWidth(text);
+  if (current >= targetWidth) return text;
+  return ' '.repeat(targetWidth - current) + text;
+}
 
 export interface TeamPanelOptions {
   readonly teamMode: boolean;
@@ -363,7 +435,9 @@ export class TeamPanelComponent extends Container implements Focusable {
       { label: '#', width: 4 },
     ] as const;
 
-    const header = colDefs.map((c) => bold(c.label.padEnd(c.width))).join(' ');
+    const header = colDefs
+      .map((c) => bold(padToVisibleWidth(c.label, c.width)))
+      .join(' ');
     lines.push(`  ${dim('─'.repeat(width - 4))}`);
     lines.push(`  ${header}`);
 
@@ -375,14 +449,19 @@ export class TeamPanelComponent extends Container implements Focusable {
         member.avgDurationMs !== null
           ? formatDuration(member.avgDurationMs)
           : '—';
+      // Role may contain CJK double-width characters; truncate to column
+      // width so it never pushes subsequent columns out of alignment.
+      const roleDisplay = truncateToWidth(member.role, 16, '…');
+      const nameDisplay = truncateToWidth(member.name, 18, '…');
+      const modelDisplay = truncateToWidth(member.model, 20, '…');
       const cells = [
-        member.name.padEnd(18),
-        member.role.padEnd(16),
-        member.model.padEnd(20),
-        scoreStr.padStart(6) + ' ',
-        String(member.scoreCount).padStart(3) + ' ',
-        durationStr.padStart(9) + ' ',
-        String(member.shiftCount).padStart(3),
+        padToVisibleWidth(nameDisplay, 18),
+        padToVisibleWidth(roleDisplay, 16),
+        padToVisibleWidth(modelDisplay, 20),
+        padStartVisible(scoreStr, 6) + ' ',
+        padStartVisible(String(member.scoreCount), 3) + ' ',
+        padStartVisible(durationStr, 9) + ' ',
+        padStartVisible(String(member.shiftCount), 3),
       ];
       lines.push(`  ${dim(cells.join(' '))}`);
     }
@@ -418,12 +497,15 @@ async function showTeamPanel(host: SlashCommandHost): Promise<void> {
   let loadError: string | undefined;
   let members: TeamMemberRow[] = [];
 
-  // Read current team mode from config
+  // Read full config — used for teamMode toggle AND model resolution
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let fullConfig: any = null;
+
   try {
-    const config = (await host.harness.getConfig()) as { subagent?: { teamMode?: boolean } };
-    teamMode = config?.subagent?.teamMode ?? false;
+    fullConfig = await host.harness.getConfig();
+    teamMode = fullConfig?.subagent?.teamMode ?? false;
   } catch {
-    // default to false on error
+    // defaults remain at initial values
   }
 
   // Read agent profiles and performance data
@@ -433,7 +515,18 @@ async function showTeamPanel(host: SlashCommandHost): Promise<void> {
     const cwd = process.cwd();
     const profiles = readAgentProfiles(dataDir, cwd);
     const perf = readPerformanceData(dataDir);
-    members = aggregateMemberRows(profiles, perf);
+
+    // Resolve effective model for each profile
+    const resolvedModels: Record<string, string> = {};
+    for (const p of profiles) {
+      resolvedModels[p.name] = resolveModelForProfile(
+        p.name,
+        p.modelPreference,
+        fullConfig,
+      );
+    }
+
+    members = aggregateMemberRows(profiles, perf, resolvedModels);
   } catch (error) {
     loadError = `Could not load team data: ${formatErrorMessage(error)}`;
   }
