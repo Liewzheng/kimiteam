@@ -93,6 +93,19 @@ export class SubAgentEventHandler {
     if (info === undefined || info.parentToolCallId.length === 0) return true;
 
     const { parentToolCallId } = info;
+
+    // Accumulate usage before swarm/tool component checks. Background agents'
+    // parent tool components may already be destroyed by resetToolUi()
+    // (StreamingUIController clears _pendingToolComponents on turn begin/end,
+    // step begin, interrupted, or session error), so we must capture usage
+    // deltas regardless of whether the UI component exists.
+    if (event.type === 'agent.status.updated') {
+      const currentByModel = event.usage?.byModel;
+      if (currentByModel !== undefined) {
+        this.accumulateSubAgentUsage(childAgentId, currentByModel);
+      }
+    }
+
     const swarmProgress = this.agentSwarmProgress.get(parentToolCallId);
     if (swarmProgress !== undefined) {
       this.applySubagentEventToSwarmProgress(swarmProgress, event, childAgentId);
@@ -138,8 +151,11 @@ export class SubAgentEventHandler {
       const usageObj = event.usage;
       const totalUsage = usageObj?.total ?? usageObj?.currentTurn;
 
-      // Differential accumulation: compare current byModel with the last
-      // snapshot for this agent, add only the delta.
+      // NOTE: accumulateSubAgentUsage was already called earlier in this
+      // function (before the swarm/tool checks) to ensure background-agent
+      // usage is captured even when the parent tool component is gone. This
+      // second call is redundant but harmless — accumulateSubAgentUsage is
+      // idempotent (same snapshot → delta=0), so no double-counting occurs.
       const currentByModel = usageObj?.byModel;
       if (currentByModel !== undefined) {
         this.accumulateSubAgentUsage(childAgentId, currentByModel);
@@ -539,6 +555,14 @@ export class SubAgentEventHandler {
     } else if (event.type === 'tool.call.started') {
       progress.recordToolCall({ agentId: subagentId, toolCallId: event.toolCallId });
     } else if (event.type === 'agent.status.updated' && event.model !== undefined) {
+      // Accumulate usage even though this goes through the swarm progress path.
+      // The swarm panel is transient (may be cleared on turn boundaries), but
+      // usage must persist in the accumulator for /usage display.
+      const currentByModel = event.usage?.byModel;
+      if (currentByModel !== undefined) {
+        this.accumulateSubAgentUsage(subagentId, currentByModel);
+      }
+
       // The bound model alias rides every child status update (emitted right
       // after spawn). Swarm members share one binding, so the panel shows it
       // once in the header instead of per cell. `modelDisplayName` falls back

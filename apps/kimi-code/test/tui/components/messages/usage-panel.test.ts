@@ -2,6 +2,7 @@ import { visibleWidth } from '@moonshot-ai/pi-tui';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { buildSubAgentUsageSection, buildUsageReportLines, UsagePanelComponent } from '#/tui/components/messages/usage-panel';
+import { AgentSwarmProgressComponent } from '#/tui/components/messages/agent-swarm-progress';
 import { SubAgentEventHandler } from '#/tui/controllers/subagent-event-handler';
 import { MAIN_AGENT_ID } from '#/tui/constant/kimi-tui';
 import { currentTheme, darkColors, lightColors } from '#/tui/theme';
@@ -468,15 +469,18 @@ describe('SubAgentEventHandler accumulation', () => {
     const toolCall = mockToolCall();
     return {
       state: {
-        appState: { subAgentUsage: undefined },
+        appState: { subAgentUsage: undefined, availableModels: {} },
         ui: { requestRender: vi.fn() },
         transcriptContainer: { children: [] },
       },
       streamingUI: {
         getToolComponent: vi.fn(() => toolCall),
+        getActiveToolCall: vi.fn(() => undefined),
+        onToolCallStart: vi.fn(),
       },
       btwPanelController: { routeEvent: vi.fn(() => false) },
       updateActivityPane: vi.fn(),
+      appendTranscriptEntry: vi.fn(),
     };
   }
 
@@ -717,6 +721,90 @@ describe('SubAgentEventHandler accumulation', () => {
     });
     expect(handler.subAgentUsage.byMember['agent-beta']?.[modelX]).toEqual({
       inputOther: 200, output: 40, inputCacheRead: 60, inputCacheCreation: 20,
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Case 9: 后台场景 — tool component 不存在时仍累积 byModel
+  // -----------------------------------------------------------------------
+  it('accumulates usage when tool component is undefined (background agent)', () => {
+    const host = makeHost();
+    host.streamingUI.getToolComponent = vi.fn(() => undefined);
+    const handler = new SubAgentEventHandler(host as any, makeDeps());
+    // Manually register agent in subagentInfo (simulates background agent
+    // spawned via handleSubagentSpawned which calls rememberSubagent).
+    handler.subagentInfo.set(agentA, {
+      parentToolCallId: toolCallId,
+      name: 'agent-alpha',
+      runInBackground: true,
+    });
+
+    // Feed status — the early accumulate in routeChildAgentEvent should
+    // fire before getToolComponent returns undefined and causes early return.
+    feedStatus(handler, agentA, {
+      [modelX]: { inputOther: 100, output: 20, inputCacheRead: 30, inputCacheCreation: 10 },
+    });
+
+    // Accumulation should have happened despite missing tool component
+    expect(handler.subAgentUsage.byModel[modelX]).toEqual({
+      inputOther: 100, output: 20, inputCacheRead: 30, inputCacheCreation: 10,
+    });
+    expect(handler.subAgentUsage.byMember['agent-alpha']?.[modelX]).toEqual({
+      inputOther: 100, output: 20, inputCacheRead: 30, inputCacheCreation: 10,
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Case 10: swarm 场景 — swarmProgress 路径下 agent.status.updated 也累积
+  // -----------------------------------------------------------------------
+  it('accumulates usage via swarm progress path', () => {
+    const host = makeHost();
+    // Need addChild on transcriptContainer for swarm progress creation
+    host.state.transcriptContainer.addChild = vi.fn();
+    const handler = new SubAgentEventHandler(host as any, makeDeps());
+    registerSpawn(handler, agentA, 'agent-alpha');
+
+    // Inject a swarm progress into the private map so routeChildAgentEvent
+    // takes the swarm path (lines 109-114).
+    const progress = new AgentSwarmProgressComponent({
+      description: 'test swarm',
+      requestRender: vi.fn(),
+    });
+    (handler as any).agentSwarmProgress.set(toolCallId, progress);
+
+    // Feed status event with model so applySubagentEventToSwarmProgress
+    // also fires its accumulate (the early accumulate fires regardless).
+    const event = {
+      ...statusEvent(agentA, {
+        [modelX]: { inputOther: 100, output: 20, inputCacheRead: 30, inputCacheCreation: 10 },
+      }),
+      model: 'some-model',
+    };
+    handler.routeChildAgentEvent(event as any);
+
+    expect(handler.subAgentUsage.byModel[modelX]).toEqual({
+      inputOther: 100, output: 20, inputCacheRead: 30, inputCacheCreation: 10,
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Case 11: 幂等 — 同快照喂两次(触发早+晚双 accumulate),总量不翻倍
+  // -----------------------------------------------------------------------
+  it('does not double-count when early + late accumulate both fire (idempotent)', () => {
+    const host = makeHost();
+    const handler = new SubAgentEventHandler(host as any, makeDeps());
+    registerSpawn(handler, agentA, 'agent-alpha');
+
+    // Each feedStatus triggers accumulate twice in routeChildAgentEvent:
+    // 1. Early (before swarm/tool checks) — captures the delta
+    // 2. Original site (lines 150-162) — same snapshot → delta=0
+    // The accumulator must only count the first delta.
+    feedStatus(handler, agentA, {
+      [modelX]: { inputOther: 100, output: 20, inputCacheRead: 30, inputCacheCreation: 10 },
+    });
+
+    expect(handler.subAgentUsage.byModel[modelX]).toEqual({
+      inputOther: 100, output: 20, inputCacheRead: 30, inputCacheCreation: 10,
     });
   });
 });
