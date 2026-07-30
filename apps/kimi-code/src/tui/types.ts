@@ -6,6 +6,7 @@ import type {
   ProviderConfig,
   PromptPart,
   ThinkingEffort,
+  TokenUsage,
   ToolInputDisplay,
 } from '@moonshot-ai/kimi-code-sdk';
 
@@ -62,6 +63,17 @@ export interface AppState {
   mcpServersSummary: string | null;
   /** Optional banner shown below the welcome panel; null means no banner to render. */
   banner?: BannerState | null;
+  /** Mutable subagent usage accumulator; mutated in-place by SubAgentEventHandler. */
+  subAgentUsage?: SubAgentUsage;
+}
+
+export interface SubAgentUsage {
+  /** Model → cumulative delta token usage across all subagents. */
+  byModel: Record<string, TokenUsage>;
+  /** Member name → model → cumulative delta token usage. */
+  byMember: Record<string, Record<string, TokenUsage>>;
+  /** Number of subagent spawns in this session. */
+  runs: number;
 }
 
 export interface ToolCallBlockData {

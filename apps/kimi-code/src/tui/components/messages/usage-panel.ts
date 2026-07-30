@@ -18,6 +18,7 @@ import {
 } from '#/utils/usage/usage-format';
 import { currentTheme } from '#/tui/theme';
 import type { ColorToken } from '#/tui/theme';
+import type { SubAgentUsage } from '../../types';
 
 const LEFT_MARGIN = 2;
 const SIDE_PADDING = 1;
@@ -80,6 +81,7 @@ export interface UsageReportOptions {
   readonly maxContextTokens: number;
   readonly managedUsage?: ManagedUsageReport;
   readonly managedUsageError?: string;
+  readonly subAgentUsage?: SubAgentUsage;
 }
 
 export interface ManagedUsageReportLineOptions {
@@ -133,6 +135,60 @@ function buildSessionUsageSection(
       )}  total ${value(formatTokenCount(totalInput + totalOutput))}`,
     );
   }
+  return lines;
+}
+
+export function buildSubAgentUsageSection(
+  usage: SubAgentUsage | undefined,
+  value: Colorize,
+  muted: Colorize,
+): string[] {
+  if (usage === undefined || usage.runs === 0) return [];
+  const entries = Object.entries(usage.byModel);
+  if (entries.length === 0) return [];
+
+  const lines: string[] = [];
+  let totalInput = 0;
+  let totalOutput = 0;
+  const isMultiModel = entries.length > 1;
+
+  for (const [model, row] of entries) {
+    const input = usageInputTotal(row);
+    const output = usageNumber(row.output);
+    totalInput += input;
+    totalOutput += output;
+    const header = `  ${muted(model)}  input ${value(formatTokenCount(input))}  output ${value(
+      formatTokenCount(output),
+    )}  total ${value(formatTokenCount(input + output))}`;
+    lines.push(header);
+
+    // Member breakdown for this model
+    const memberLines: string[] = [];
+    for (const [memberName, memberByModel] of Object.entries(usage.byMember)) {
+      const memberRow = memberByModel[model];
+      if (memberRow === undefined) continue;
+      const mInput = usageInputTotal(memberRow);
+      const mOutput = usageNumber(memberRow.output);
+      if (mInput === 0 && mOutput === 0) continue;
+      memberLines.push(
+        `    ${muted(memberName)}  input ${value(formatTokenCount(mInput))}  output ${value(
+          formatTokenCount(mOutput),
+        )}  total ${value(formatTokenCount(mInput + mOutput))}`,
+      );
+    }
+    if (memberLines.length > 0) {
+      lines.push(...memberLines);
+    }
+  }
+
+  if (isMultiModel) {
+    lines.push(
+      `  ${muted('total')}  input ${value(formatTokenCount(totalInput))}  output ${value(
+        formatTokenCount(totalOutput),
+      )}  total ${value(formatTokenCount(totalInput + totalOutput))}`,
+    );
+  }
+
   return lines;
 }
 
@@ -328,6 +384,17 @@ export function buildUsageReportLines(options: UsageReportOptions): string[] {
   if (extraSection.length > 0) {
     lines.push('');
     lines.push(...extraSection);
+  }
+
+  const subAgentSection = buildSubAgentUsageSection(
+    options.subAgentUsage,
+    value,
+    muted,
+  );
+  if (subAgentSection.length > 0) {
+    lines.push('');
+    lines.push(accent('Subagent usage'));
+    lines.push(...subAgentSection);
   }
 
   return lines;

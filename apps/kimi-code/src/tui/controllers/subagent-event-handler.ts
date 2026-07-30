@@ -1,6 +1,7 @@
 import type {
   BackgroundTaskInfo,
   Event,
+  TokenUsage,
 } from '@moonshot-ai/kimi-code-sdk';
 import type { Component } from '@moonshot-ai/pi-tui';
 
@@ -13,6 +14,7 @@ import { modelDisplayName } from '../components/dialogs/model-selector';
 import { MAIN_AGENT_ID } from '../constant/kimi-tui';
 import type {
   BackgroundAgentMetadata,
+  SubAgentUsage,
   ToolCallBlockData,
   ToolResultBlockData,
   TranscriptEntry,
@@ -57,15 +59,27 @@ export class SubAgentEventHandler {
   private readonly agentSwarmProgress: Map<string, AgentSwarmProgressComponent> = new Map();
   backgroundAgentMetadata: Map<string, BackgroundAgentMetadata> = new Map();
 
+  /** Per-agent last-seen byModel snapshot, for delta computation. */
+  private readonly lastUsageByAgent = new Map<string, Record<string, TokenUsage>>();
+  /** Accumulator of subagent token usage deltas (mutated in-place). */
+  readonly subAgentUsage: SubAgentUsage = { byModel: {}, byMember: {}, runs: 0 };
+
   constructor(
     private readonly host: SessionEventHost,
     private readonly deps: SubAgentEventHandlerDependencies,
-  ) {}
+  ) {
+    // Wire the mutable accumulator into AppState so /usage can read it.
+    this.host.state.appState.subAgentUsage = this.subAgentUsage;
+  }
 
   resetRuntimeState(): void {
     this.subagentInfo.clear();
     this.backgroundAgentMetadata.clear();
     this.clearAgentSwarmProgress();
+    this.lastUsageByAgent.clear();
+    this.subAgentUsage.byModel = {};
+    this.subAgentUsage.byMember = {};
+    this.subAgentUsage.runs = 0;
   }
 
   routeChildAgentEvent(event: Event): boolean {
@@ -123,6 +137,14 @@ export class SubAgentEventHandler {
     } else if (event.type === 'agent.status.updated') {
       const usageObj = event.usage;
       const totalUsage = usageObj?.total ?? usageObj?.currentTurn;
+
+      // Differential accumulation: compare current byModel with the last
+      // snapshot for this agent, add only the delta.
+      const currentByModel = usageObj?.byModel;
+      if (currentByModel !== undefined) {
+        this.accumulateSubAgentUsage(childAgentId, currentByModel);
+      }
+
       toolCall.updateSubagentMetrics({
         contextTokens: event.contextTokens,
         usage: totalUsage,
@@ -251,6 +273,7 @@ export class SubAgentEventHandler {
     event: SubagentLifecycleEventOf<'subagent.spawned'>,
   ): void {
     this.rememberSubagent(event);
+    this.subAgentUsage.runs++;
 
     if (event.runInBackground) {
       const meta = this.buildBackgroundAgentMetadata(event);
@@ -282,6 +305,8 @@ export class SubAgentEventHandler {
   private handleSubagentCompleted(
     event: SubagentLifecycleEventOf<'subagent.completed'>,
   ): void {
+    this.lastUsageByAgent.delete(event.subagentId);
+    
     const backgroundMeta = this.backgroundAgentMetadata.get(event.subagentId);
     if (backgroundMeta !== undefined) {
       const taskId = this.findAgentTaskId(
@@ -311,6 +336,8 @@ export class SubAgentEventHandler {
   private handleSubagentFailed(
     event: SubagentLifecycleEventOf<'subagent.failed'>,
   ): void {
+    this.lastUsageByAgent.delete(event.subagentId);
+    
     const backgroundMeta = this.backgroundAgentMetadata.get(event.subagentId);
     if (backgroundMeta !== undefined) {
       const taskId = this.findAgentTaskId(
@@ -637,6 +664,60 @@ export class SubAgentEventHandler {
 
   private requestRender(): void {
     this.host.state.ui.requestRender();
+  }
+
+  /** Diff `currentByModel` against the last snapshot for agentId, accumulate deltas.
+   *  Stores a shallow copy of the incoming byModel as the new snapshot so that
+   *  even if the source object is later mutated the next delta stays correct. */
+  private accumulateSubAgentUsage(
+    agentId: string,
+    currentByModel: Record<string, TokenUsage>,
+  ): void {
+    const prevByModel = this.lastUsageByAgent.get(agentId);
+    // Shallow-copy each entry so external mutations cannot corrupt the snapshot.
+    const snapshot: Record<string, TokenUsage> = {};
+    for (const [m, tu] of Object.entries(currentByModel)) {
+      snapshot[m] = { ...tu };
+    }
+    this.lastUsageByAgent.set(agentId, snapshot);
+
+    const memberName = this.subagentInfo.get(agentId)?.name ?? 'unknown';
+    const { byModel, byMember } = this.subAgentUsage;
+    let byMemberModel = byMember[memberName];
+    if (byMemberModel === undefined) {
+      byMemberModel = {};
+      byMember[memberName] = byMemberModel;
+    }
+
+    for (const [model, current] of Object.entries(currentByModel)) {
+      const prev = prevByModel?.[model];
+      // Clamp delta to ≥0 so compressed/restarted state never injects negative
+      // token counts into the accumulator.
+      const delta: TokenUsage = {
+        inputOther: Math.max(0, current.inputOther - (prev?.inputOther ?? 0)),
+        output: Math.max(0, current.output - (prev?.output ?? 0)),
+        inputCacheRead: Math.max(0, current.inputCacheRead - (prev?.inputCacheRead ?? 0)),
+        inputCacheCreation: Math.max(0, current.inputCacheCreation - (prev?.inputCacheCreation ?? 0)),
+      };
+
+      // Accumulate into byModel (replace readonly record)
+      const prevAggModel = byModel[model];
+      byModel[model] = prevAggModel === undefined ? delta : {
+        inputOther: prevAggModel.inputOther + delta.inputOther,
+        output: prevAggModel.output + delta.output,
+        inputCacheRead: prevAggModel.inputCacheRead + delta.inputCacheRead,
+        inputCacheCreation: prevAggModel.inputCacheCreation + delta.inputCacheCreation,
+      };
+
+      // Accumulate into byMember (replace readonly record)
+      const prevAggMember = byMemberModel[model];
+      byMemberModel[model] = prevAggMember === undefined ? delta : {
+        inputOther: prevAggMember.inputOther + delta.inputOther,
+        output: prevAggMember.output + delta.output,
+        inputCacheRead: prevAggMember.inputCacheRead + delta.inputCacheRead,
+        inputCacheCreation: prevAggMember.inputCacheCreation + delta.inputCacheCreation,
+      };
+    }
   }
 }
 
