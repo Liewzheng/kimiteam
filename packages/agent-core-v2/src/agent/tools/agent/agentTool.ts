@@ -71,6 +71,10 @@ import { ILogService } from '#/_base/log/log';
 import { IConfigService } from '#/app/config/config';
 import { IFlagService } from '#/app/flag/flag';
 import { IModelCatalog } from '#/kosong/model/catalog';
+import {
+  IAgentPerformanceService,
+  type PerformanceSummary,
+} from '#/app/agentPerformance/agentPerformance';
 import { IAgentLifecycleService } from '#/session/agentLifecycle/agentLifecycle';
 import { isSubagentMeta, subagentLabels, subagentParentAgentId } from '#/session/agentLifecycle/subagentMetadata';
 import { ISessionProcessRunner } from '#/session/process/processRunner';
@@ -111,8 +115,17 @@ export class SubagentTool implements ISubagentTool {
   readonly name: string = 'Agent';
   readonly parameters: Record<string, unknown> = toInputJsonSchema(SubagentToolInputSchema);
 
+  /** How long to keep a performance cache entry before refreshing it. */
+  private static readonly PERF_CACHE_TTL_MS = 60_000;
+
   private readonly callerAgentId: string;
   private readonly canRunInBackground: () => boolean;
+
+  /** Lazy-loaded profile performance cache (team mode). `undefined` = never loaded. */
+  private perfCache: Map<string, PerformanceSummary> | undefined;
+  private perfCacheLoadedAt: number = 0;
+  /** Non-undefined while an async refresh is in-flight — guards against concurrent duplicate calls. */
+  private pendingRefresh: Promise<void> | undefined;
 
   constructor(
     @IAgentLifecycleService private readonly lifecycle: IAgentLifecycleService,
@@ -131,6 +144,7 @@ export class SubagentTool implements ISubagentTool {
     @IConfigService private readonly config: IConfigService,
     @IFlagService private readonly flags: IFlagService,
     @IModelCatalog private readonly modelCatalog: IModelCatalog,
+    @IAgentPerformanceService private readonly performance: IAgentPerformanceService,
   ) {
     this.callerAgentId = scopeContext.agentId;
     this.canRunInBackground = () =>
@@ -163,12 +177,21 @@ export class SubagentTool implements ISubagentTool {
       allowlist === undefined
         ? this.catalog.list()
         : this.catalog.list().filter((profile) => allowlist.includes(profile.name));
+
+    // Team mode: kick off an async perf data refresh if the cache is empty or
+    // stale (≥60 s). The current render uses whatever cache is available — the
+    // first render may show no scores; subsequent LLM turns will pick them up.
+    if (teamMode) {
+      this.refreshPerfCache();
+    }
+
     const typeLines = buildProfileDescriptions(
       profiles,
       this.knownToolReferences(),
       (profile, name, source) =>
         this.toolPolicy.isToolActiveForProfile(profile, name, source),
       this.flags.enabled(SECONDARY_MODEL_FLAG_ID),
+      teamMode ? this.perfCache : undefined,
     );
     if (typeLines) {
       description += `\n\nAvailable agent types (pass via subagent_type):\n${typeLines}`;
@@ -182,6 +205,46 @@ export class SubagentTool implements ISubagentTool {
       description += `\n\n${modelLines}`;
     }
     return description;
+  }
+
+  /**
+   * Fire-and-forget refresh of the performance cache. Does not block the
+   * caller — on failure the cache stays as-is (possibly empty Map) and the
+   * loaded-at timestamp is bumped so the TTL guard prevents retries for a
+   * while.
+   *
+   * Concurrent calls during an in-flight refresh are deduplicated: only the
+   * first one kicks off the request; subsequent ones piggyback on the same
+   * pending promise.
+   */
+  private refreshPerfCache(): void {
+    if (this.pendingRefresh !== undefined) return;
+    const now = Date.now();
+    if (this.perfCache !== undefined && now - this.perfCacheLoadedAt < SubagentTool.PERF_CACHE_TTL_MS) {
+      return; // cache is fresh enough
+    }
+    this.pendingRefresh = this.performance
+      .list()
+      .then((entries) => {
+        const map = new Map<string, PerformanceSummary>();
+        for (const entry of entries) {
+          map.set(entry.profileName, entry.summary);
+        }
+        this.perfCache = map;
+        this.perfCacheLoadedAt = Date.now();
+      })
+      .catch(() => {
+        // On error, set to empty Map so the getter renders no spurious
+        // scores. Bump the timestamp too — a failed load also occupies a
+        // TTL window before the next retry.
+        if (this.perfCache === undefined) {
+          this.perfCache = new Map();
+        }
+        this.perfCacheLoadedAt = Date.now();
+      })
+      .finally(() => {
+        this.pendingRefresh = undefined;
+      });
   }
 
   private knownToolReferences(): ToolReference[] {
@@ -509,6 +572,7 @@ function buildProfileDescriptions(
     source: ToolReference['source'],
   ) => boolean,
   showModelPreferences: boolean,
+  perfByProfile?: ReadonlyMap<string, PerformanceSummary>,
 ): string {
   return profiles
     .map((profile) => {
@@ -517,10 +581,14 @@ function buildProfileDescriptions(
       );
       const roleSuffix = profile.role === undefined ? '' : ` — ${profile.role}`;
       const dutySuffix = profile.duty === true ? ' [duty: no timeout; stop via TaskStop]' : '';
+      // Append performance score suffix when team-mode data is available.
+      const perfSuffix = perfByProfile !== undefined
+        ? buildPerfSuffix(perfByProfile.get(profile.name))
+        : '';
       const header =
         details.length === 0
-          ? `- ${profile.name}${roleSuffix}${dutySuffix}`
-          : `- ${profile.name}${roleSuffix}${dutySuffix}: ${details.join(' ')}`;
+          ? `- ${profile.name}${roleSuffix}${dutySuffix}${perfSuffix}`
+          : `- ${profile.name}${roleSuffix}${dutySuffix}${perfSuffix}: ${details.join(' ')}`;
       const headerLines =
         !showModelPreferences || profile.modelPreference === undefined
           ? header
@@ -552,6 +620,18 @@ function buildProfileDescriptions(
       return `${headerLines}\n  Tools: ${activeTools.join(', ')}`;
     })
     .join('\n');
+}
+
+/**
+ * Build a short performance suffix for a profile line.
+ * Returns empty string when the profile has no scored entries.
+ */
+function buildPerfSuffix(summary: PerformanceSummary | undefined): string {
+  if (summary === undefined || summary.count === 0 || summary.average === undefined) {
+    return '';
+  }
+  const avg = Math.round(summary.average);
+  return ` — avg score ${avg} (${summary.count} scored)`;
 }
 
 function formatBackgroundAgentResult(

@@ -19,6 +19,10 @@ import {
   SECONDARY_MODEL_FLAG_ENV,
   SECONDARY_MODEL_FLAG_ID,
 } from '#/session/subagent/flag';
+import {
+  IAgentPerformanceService,
+  type ProfilePerformanceEntry,
+} from '#/app/agentPerformance/agentPerformance';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { IAgentContextInjectorService } from '#/agent/contextInjector/contextInjector';
@@ -776,6 +780,120 @@ describe('Agent tool description', () => {
     const description = agentDescription();
     expect(description).toContain('Default to a foreground subagent');
     expect(description).not.toContain('default to running in the background');
+  });
+
+  it('includes average scores in team mode when performance data is available', async () => {
+    const mockPerformances: ProfilePerformanceEntry[] = [
+      {
+        profileName: 'coder',
+        summary: { average: 84.7, count: 7, last: 90 },
+      },
+      {
+        profileName: 'explore',
+        summary: { average: 92, count: 3, last: 95 },
+      },
+    ];
+    const perfService: IAgentPerformanceService = {
+      _serviceBrand: undefined,
+      record: async () => {},
+      recordShift: async () => {},
+      summary: async () => ({ count: 0 }),
+      list: async () => mockPerformances,
+    };
+    ctx = createTestAgent(
+      appService(IAgentPerformanceService, perfService),
+      { initialConfig: { subagent: { teamMode: true } } },
+    );
+
+    // First access triggers the async cache load, so the first render may not
+    // have scores yet. Await a tick so the cache promise settles.
+    agentDescription(); // trigger cache load
+    await vi.waitFor(() => {
+      const description = agentDescription();
+      expect(description).toContain('avg score');
+    });
+  });
+
+  it('omits average scores when team mode is off even if performance data exists', async () => {
+    const mockPerformances: ProfilePerformanceEntry[] = [
+      {
+        profileName: 'coder',
+        summary: { average: 84.7, count: 7, last: 90 },
+      },
+    ];
+    const perfService: IAgentPerformanceService = {
+      _serviceBrand: undefined,
+      record: async () => {},
+      recordShift: async () => {},
+      summary: async () => ({ count: 0 }),
+      list: async () => mockPerformances,
+    };
+    ctx = createTestAgent(
+      appService(IAgentPerformanceService, perfService),
+    );
+
+    const description = agentDescription();
+    expect(description).not.toContain('avg score');
+  });
+
+  it('handles performance service rejection gracefully — no scores, no retry within TTL', async () => {
+    const listSpy = vi.fn().mockRejectedValue(new Error('perf service unavailable'));
+    const perfService: IAgentPerformanceService = {
+      _serviceBrand: undefined,
+      record: async () => {},
+      recordShift: async () => {},
+      summary: async () => ({ count: 0 }),
+      list: listSpy,
+    };
+    ctx = createTestAgent(
+      appService(IAgentPerformanceService, perfService),
+      { initialConfig: { subagent: { teamMode: true } } },
+    );
+
+    // (a) First access triggers async refresh; description renders without error or scores.
+    const desc1 = agentDescription();
+    expect(desc1).not.toContain('avg score');
+    expect(desc1).toContain('Available agent types');
+
+    // Wait for the rejected promise to settle.
+    await vi.waitFor(() => {
+      expect(listSpy).toHaveBeenCalledTimes(1);
+    });
+
+    // (b) Second access within the TTL window: list() must NOT be called again.
+    const desc2 = agentDescription();
+    expect(desc2).not.toContain('avg score');
+    expect(listSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('deduplicates concurrent refreshPerfCache calls', async () => {
+    const listSpy = vi.fn().mockResolvedValue([
+      { profileName: 'coder', summary: { average: 85, count: 5, last: 90 } },
+    ]);
+    const perfService: IAgentPerformanceService = {
+      _serviceBrand: undefined,
+      record: async () => {},
+      recordShift: async () => {},
+      summary: async () => ({ count: 0 }),
+      list: listSpy,
+    };
+    ctx = createTestAgent(
+      appService(IAgentPerformanceService, perfService),
+      { initialConfig: { subagent: { teamMode: true } } },
+    );
+
+    // Two sync accesses in the same tick: HIGH-2 dedup should ensure one call.
+    agentDescription();
+    agentDescription();
+
+    // Wait for the single pending refresh to settle.
+    await vi.waitFor(() => {
+      expect(listSpy).toHaveBeenCalledTimes(1);
+    });
+
+    // Cache is now populated; subsequent access shows scores.
+    const desc = agentDescription();
+    expect(desc).toContain('avg score 85');
   });
 });
 
