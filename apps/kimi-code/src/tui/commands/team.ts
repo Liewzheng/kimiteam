@@ -417,8 +417,13 @@ export class TeamPanelComponent extends Container implements Focusable {
 
     // Empty state
     if (this.opts.members.length === 0) {
-      lines.push(`  ${dim('No team members yet.')}`);
-      lines.push(`  ${dim('Use TeamHire to recruit your first member.')}`);
+      if (this.opts.teamMode) {
+        // Team mode ON, no members — onboarding guidance (Chinese, target audience)
+        lines.push(`  ${dim('还没有团队成员')} ${muted('—')} ${dim('对 Kimi 说「组建我的团队」，回答 4 个问题即可定制初始团队')}`);
+      } else {
+        lines.push(`  ${dim('No team members yet.')}`);
+        lines.push(`  ${dim('Use TeamHire to recruit your first member.')}`);
+      }
       lines.push('');
       lines.push(accent('─'.repeat(width)));
       return lines.map((line) => truncateToWidth(line, width));

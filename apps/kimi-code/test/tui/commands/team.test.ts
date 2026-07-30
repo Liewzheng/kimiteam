@@ -687,6 +687,73 @@ describe('formatBusinessCardSuffix cache behaviour', () => {
 });
 
 // ===========================================================================
+// Empty state rendering (TeamPanelComponent.render)
+// ===========================================================================
+
+describe('TeamPanelComponent empty state', () => {
+  it('shows team-mode-off guidance when teamMode is false and no members', () => {
+    const panel = new TeamPanelComponent({
+      teamMode: false,
+      members: [],
+      onClose: () => {},
+    });
+    const lines = panel.render(80);
+    const joined = lines.join('\n');
+    // Should show the team-mode-off message
+    expect(joined).toContain('Team mode is off');
+    // Should NOT mention the onboarding prompt (that's for teamMode ON)
+    expect(joined).not.toContain('组建我的团队');
+    // Should NOT show table header
+    expect(joined).not.toContain('Name');
+    expect(joined).not.toContain('Role');
+  });
+
+  it('shows onboarding guidance when teamMode is on and no members', () => {
+    const panel = new TeamPanelComponent({
+      teamMode: true,
+      members: [],
+      onClose: () => {},
+    });
+    const lines = panel.render(80);
+    const joined = lines.join('\n');
+    // Should show the Chinese onboarding guidance
+    expect(joined).toContain('还没有团队成员');
+    expect(joined).toContain('组建我的团队');
+    // Should NOT show "Team mode is off" message
+    expect(joined).not.toContain('Team mode is off');
+    // Should NOT show table header
+    expect(joined).not.toContain('Name');
+    expect(joined).not.toContain('Role');
+  });
+
+  it('shows team-mode label ON in empty state when teamMode is true', () => {
+    const panel = new TeamPanelComponent({
+      teamMode: true,
+      members: [],
+      onClose: () => {},
+    });
+    const lines = panel.render(80);
+    const joined = lines.join('\n');
+    expect(joined).toContain('Team mode:');
+    // The ON label should be present; we check that it's the ON state
+    // by verifying the line doesn't say OFF (the OFF rendering text)
+    expect(joined).not.toContain('Team mode is off');
+  });
+
+  it('shows team-mode label OFF in empty state when teamMode is false', () => {
+    const panel = new TeamPanelComponent({
+      teamMode: false,
+      members: [],
+      onClose: () => {},
+    });
+    const lines = panel.render(80);
+    const joined = lines.join('\n');
+    expect(joined).toContain('Team mode:');
+    expect(joined).toContain('Team mode is off');
+  });
+});
+
+// ===========================================================================
 // CJK column-width alignment (TeamPanelComponent.render)
 // ===========================================================================
 

@@ -18,6 +18,7 @@ import {
   SUB_SKILL_PARENT,
   SUB_SKILL_REVIEW,
 } from './sub-skill';
+import { TEAM_ONBOARDING_SKILL } from './team-onboarding';
 import { UPDATE_CONFIG_SKILL } from './update-config';
 import { WRITE_GOAL_SKILL } from './write-goal';
 
@@ -28,6 +29,7 @@ export const BUILTIN_SKILLS: readonly SkillDefinition[] = [
   CUSTOM_THEME_SKILL,
   WRITE_GOAL_SKILL,
   CHECK_KIMI_CODE_DOCS_SKILL,
+  TEAM_ONBOARDING_SKILL,
   SUB_SKILL_PARENT,
   SUB_SKILL_REVIEW,
   SUB_SKILL_CONSOLIDATE,
@@ -47,6 +49,7 @@ export {
   SUB_SKILL_CONSOLIDATE,
   SUB_SKILL_PARENT,
   SUB_SKILL_REVIEW,
+  TEAM_ONBOARDING_SKILL,
   UPDATE_CONFIG_SKILL,
   WRITE_GOAL_SKILL,
 };
