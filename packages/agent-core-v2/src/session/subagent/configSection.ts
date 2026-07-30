@@ -68,6 +68,14 @@ export const SubagentConfigSchema = z.object({
    */
   maxConcurrency: z.number().int().min(1).optional(),
   /**
+   * Team mode (`[subagent] team_mode` on disk, default off). When off, the
+   * five Team* management tools (TeamHire/TeamFire/TeamScore/TeamMessage/
+   * TeamConcurrency) are hidden from the main agent's tool list by the tool
+   * policy. Only tool visibility is gated — model binding, item_models,
+   * model_overrides, role/duty profile fields work regardless.
+   */
+  teamMode: z.boolean().optional(),
+  /**
    * Per-profile model override: `[subagent.model_overrides]` on disk
    * (`coder = "local/qwen3.6-35b-a3b"`). Binds newly spawned subagents of the
    * named profile to the given `[models.<id>]` id, taking precedence over the
@@ -116,6 +124,20 @@ export function resolveSubagentTimeoutMs(config: IConfigService): number {
     config.get<SubagentConfig | undefined>(SUBAGENT_SECTION)?.timeoutMs ??
     DEFAULT_SUBAGENT_TIMEOUT_MS
   );
+}
+
+/** Tool names gated by team mode (see `SubagentConfigSchema.teamMode`). */
+export const TEAM_TOOL_NAMES: readonly string[] = [
+  'TeamHire',
+  'TeamFire',
+  'TeamScore',
+  'TeamMessage',
+  'TeamConcurrency',
+];
+
+/** Resolve the team-mode switch (`[subagent] team_mode`, default off). */
+export function resolveTeamMode(config: IConfigService): boolean {
+  return config.get<SubagentConfig | undefined>(SUBAGENT_SECTION)?.teamMode ?? false;
 }
 
 export type SubagentModelChoice = AgentModelPreference;

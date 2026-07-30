@@ -21,6 +21,9 @@ import type { ToolSource } from '#/tool/toolContract';
 
 import { isToolActiveComposed, type ToolActivationPolicy } from './evaluate';
 import { IAgentToolPolicyService } from './toolPolicy';
+import { resolveTeamMode, TEAM_TOOL_NAMES } from '#/session/subagent/configSection';
+
+const TEAM_TOOL_NAME_SET: ReadonlySet<string> = new Set(TEAM_TOOL_NAMES);
 
 export class AgentToolPolicyService extends Disposable implements IAgentToolPolicyService {
   declare readonly _serviceBrand: undefined;
@@ -46,6 +49,13 @@ export class AgentToolPolicyService extends Disposable implements IAgentToolPoli
   }
 
   isToolActive(name: string, source: ToolSource = 'builtin'): boolean {
+    // Team-mode gate: the five Team* management tools stay hidden (from both
+    // the LLM-visible list and direct calls) while `[subagent] team_mode` is
+    // off. Read per call so a runtime `/team on|off` config write takes
+    // effect on the next request.
+    if (TEAM_TOOL_NAME_SET.has(name) && !resolveTeamMode(this.config)) {
+      return false;
+    }
     const profile = this.profile.data();
     return this.isToolActiveForProfile(
       {

@@ -26,6 +26,11 @@ const SWARM_ARG_COMPLETIONS: readonly ArgCompletionSpec[] = [
   { value: 'off', description: 'Turn swarm mode off' },
 ];
 
+const TEAM_ARG_COMPLETIONS: readonly ArgCompletionSpec[] = [
+  { value: 'on', description: 'Turn team mode on' },
+  { value: 'off', description: 'Turn team mode off' },
+];
+
 const ADD_DIR_ARG_COMPLETIONS: readonly ArgCompletionSpec[] = [
   { value: 'list', description: 'Show configured additional workspace directories' },
 ];
@@ -47,6 +52,11 @@ export function goalArgumentCompletions(argumentPrefix: string): AutocompleteIte
 /** Argument autocompletion for the `/swarm` command (subcommands). */
 export function swarmArgumentCompletions(argumentPrefix: string): AutocompleteItem[] | null {
   return completeLeadingArg(SWARM_ARG_COMPLETIONS, argumentPrefix);
+}
+
+/** Argument autocompletion for the `/team` command (subcommands). */
+export function teamArgumentCompletions(argumentPrefix: string): AutocompleteItem[] | null {
+  return completeLeadingArg(TEAM_ARG_COMPLETIONS, argumentPrefix);
 }
 
 /** Argument autocompletion for the `/add-dir` command. */
@@ -175,6 +185,15 @@ export const BUILTIN_SLASH_COMMANDS = [
     priority: 100,
     argumentHint: '[on|off] | <task>',
     completeArgs: swarmArgumentCompletions,
+    availability: 'idle-only',
+  },
+  {
+    name: 'team',
+    aliases: [],
+    description: 'Open the team panel or toggle team mode',
+    priority: 100,
+    argumentHint: '[on|off]',
+    completeArgs: teamArgumentCompletions,
     availability: 'idle-only',
   },
   {

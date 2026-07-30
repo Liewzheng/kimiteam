@@ -54,6 +54,7 @@ import {
   handleTitleCommand,
 } from './session';
 import { handleSwarmCommand } from './swarm';
+import { handleTeamCommand } from './team';
 import { handleUndoCommand } from './undo';
 import { handleWebCommand } from './web';
 
@@ -81,6 +82,7 @@ export {
   showSettingsSelector,
 } from './config';
 export { handleSwarmCommand } from './swarm';
+export { handleTeamCommand } from './team';
 export { handleFeedbackCommand, showMcpServers, showStatusReport, showUsage } from './info';
 export { handlePluginsCommand } from './plugins';
 export { handleReloadCommand, handleReloadTuiCommand } from './reload';
@@ -346,6 +348,9 @@ async function handleBuiltInSlashCommand(
       return;
     case 'swarm':
       await handleSwarmCommand(host, args);
+      return;
+    case 'team':
+      await handleTeamCommand(host, args);
       return;
     case 'compact':
       await handleCompactCommand(host, args);
