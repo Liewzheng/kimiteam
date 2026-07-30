@@ -98,9 +98,11 @@ You are a strict code reviewer. Read the diff, then report findings grouped by s
 | --- | --- | --- |
 | `name` | no | Unique identifier in kebab-case. Defaults to the file name without its extension (`review.md` → `review`); a file whose resolved name is missing or not kebab-case is skipped with a warning |
 | `description` | yes | What the agent does. Shown to the main Agent when it picks a sub-agent, so write it to guide delegation decisions |
+| `role` | no | Job title (displayed on terminal subagent cards); falls back to `description` when omitted |
+| `duty` | no | Whether the subagent runs without timeout. Set to `true` so this subagent task ignores `[subagent] timeout_ms`, suitable for long-running background roles like mail checkers; requires explicit `TaskStop` from the main Agent to "clock out" |
 | `whenToUse` | no | Extra hint describing when the agent should be used |
 | `override` | no | Whether this file may replace a same-name built-in Agent. Defaults to `false`; `--agent-file` is already explicit and does not require this field |
-| `model_preference` | no | Symbolic default used when `Agent` or `AgentSwarm` spawns this profile: `primary` selects the caller's main model, while `secondary` selects `[secondary_model] model`. An explicit tool-call `model` wins; without either setting, the configured secondary model remains the default. If no secondary model is configured, the subagent inherits the caller's model |
+| `model_preference` | no | Model preference for subagents spawned from this profile: specify any model id from `[models.*]` (for example `"kimi-code/kimi-for-coding"`), or use the symbolic values `primary` (the caller's main model) or `secondary` (the secondary model). Priority order: **explicit tool parameter > the profile's override in `[subagent.model_overrides]` > profile's `model_preference` > configured secondary model > inherited from caller** |
 | `tools` | no | Allowlist of tool names such as `Read` or `Bash`; MCP tools are matched with globs such as `mcp__github__*`. Accepts a YAML list or a comma-separated string (`tools: Read, Grep`). Omit to allow all tools; a lone `*` also allows all tools; an empty list (`tools: []`) disables all tools |
 | `disallowedTools` | no | Denylist with the same syntax and matching rules, applied after `tools` |
 | `subagents` | no | Allowlist of sub-agent names this agent may delegate to, with the same syntax as `tools` (YAML list or comma-separated string). Omit to allow every type; a lone `*` also allows all types |
@@ -111,7 +113,7 @@ The body is the agent's system prompt, and it is rendered as a template each tim
 
 Unknown fields are ignored, so newer files stay readable by older versions. Fields from other agent tools (such as Claude Code's `model` or OpenCode's `mode`) are ignored the same way, the comma-separated `tools` form keeps Claude Code-style agent files loadable, and a missing `name` falls back to the file name so OpenCode-style files load too — a minimal file with `description` and a body works across tools.
 
-`model_preference` applies only to newly spawned subagents when the secondary-model experiment is enabled — set `KIMI_CODE_EXPERIMENTAL_SECONDARY_MODEL=1`, or the master `KIMI_CODE_EXPERIMENTAL_FLAG=1`. It takes effect in every launch mode, including the interactive TUI. The field never names a concrete model alias, and resumed subagents keep their existing model. The selected preference is shown to the main agent alongside the profile description so it can still pass an explicit `model` when a task needs a different choice.
+The selected preference is shown to the main agent alongside the profile description, so it can still pass an explicit `model` when a task needs a different choice. To swap a member's model mid-conversation, configure `[subagent.model_overrides]` (a per-profile model id override) — see [Configuration Files](../configuration/config-files.md#subagent).
 
 A file with invalid content discovered in a directory is skipped with a warning and does not affect other files. A file passed explicitly via `--agent-file` must be valid — otherwise the CLI reports the error and exits.
 
@@ -174,6 +176,20 @@ ${skills}
 ${plugin_sections}
 ```
 
+## Team Management
+
+The main Agent has four built-in management tools that are **available to it alone**, used to autonomously build and orchestrate your AI team. Subagents calling these tools will be rejected — they are there to execute tasks, not manage people.
+
+- **`TeamHire`** (hire): Tell the main Agent you need "a mail checker" and it decides the name, role, prompt, and writes an agent file to `~/.kimi-code/agents/<name>.md` (user-level by default) or project-level `.kimi-code/agents/` (when scope is specified). If a same-name profile exists, the tool errors instead of silently overwriting. The new member is immediately dispatchable after writing, no restart needed.
+
+- **`TeamFire`** (fire): Delete the corresponding agent file by name; that member stops appearing in dispatch lists. Performance records are retained in persistent storage.
+
+- **`TeamScore`** (score): Score a subagent's work (0–100) with notes. The score is attributed to the model id actually used at scoring time, persisted to `$KIMI_CODE_HOME/agents/performance.json` — grouped by profile name, each entry carrying timestamp, score, note, and the running model id. When a member consistently scores low on a particular model, it signals a poor "member × model" pairing; the main Agent should switch models via `[subagent.model_overrides]` or recommend switching to another available id in your `[models]` list.
+
+- **`TeamMessage`** (deliver): Send a message to a running subagent mid-task. The default is a soft reminder inserted into its current turn; pass `interrupt: true` to cancel the current turn first (equivalent to pressing ESC twice) before injecting the new instruction. If the target agent does not exist, errors with a list of available agents; for already-terminated members, use `Agent resume` instead.
+
+"Clocking out" = stopping the running instance with `TaskStop`. Members marked `duty: true` require an explicit `TaskStop` from the main Agent — they will not auto-stop on timeout.
+
 ## Instruction Files
 
 Global Kimi-specific instructions can live at `$KIMI_CODE_HOME/AGENTS.md` (default: `~/.kimi-code/AGENTS.md`). When you relocate the data root with `KIMI_CODE_HOME`, this global instruction file moves with it. Generic cross-tool instructions can still live under `~/.agents/AGENTS.md` in the real OS home, and project-level instructions remain under the project tree, for example `.kimi-code/AGENTS.md` or `AGENTS.md`.
@@ -188,5 +204,6 @@ Session directories, wire files, and task records are all local debug materials 
 
 ## Next steps
 
+- [Build your team](../guides/team.md) — A user-facing guide on building and managing an AI coding team from scratch
 - [Hooks](./hooks.md) — Trigger local script notifications or interceptions at key points such as sub-agent completion
 - [Agent Skills](./skills.md) — Inject specialized knowledge and workflows into sub-agents

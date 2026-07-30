@@ -270,7 +270,15 @@ In print mode (`kimi -p "<prompt>"`), Kimi Code stays alive after the main agent
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `timeout_ms` | `integer` | `7200000` (2 hours) | Maximum wall-clock time (milliseconds) a single subagent (`Agent` / `AgentSwarm`) is allowed to run before it is settled as `timed_out`. `0` means no timeout — the subagent runs until it finishes or the model stops it. This is the background-task manager's per-task timeout for each subagent task, so it applies to both foreground and background subagents. In print mode (`kimi -p`) the default is `0` unless explicitly set. Note: any value above `2147483647` (about 24.8 days) is clamped to roughly 24.8 days by the runtime |
+| `model_overrides` | `table` | — | profile name → model id mapping, used to override `model_preference` per-member during conversation (lower priority than explicit tool parameter, higher than frontmatter `model_preference`). Example: see below |
 `timeout_ms` can be overridden by the `KIMI_SUBAGENT_TIMEOUT_MS` environment variable, which takes higher priority than `config.toml`.
+
+```toml
+# chat-level override: coder stops following secondary and uses kimi-for-coding instead
+[subagent.model_overrides]
+coder = "kimi-code/kimi-for-coding"
+reviewer = "kimi-code/k3"
+```
 
 ## `mcp`
 

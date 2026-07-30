@@ -89,13 +89,36 @@ Plan 模式是一种受约束的工作状态：进入后 `Write` 与 `Edit` 只�
 | `AskUserQuestion` | 自动放行 | 向用户提问以获取结构化输入 |
 | `Skill` | 自动放行 | 调用已注册的 inline Skill |
 
-**`Agent`** 将子任务委托给子 Agent 执行。必填参数：`prompt`（完整任务描述）和 `description`（3–5 个词的简短说明）。可选参数：`subagent_type`（默认 `coder`）、`resume`（恢复已有 Agent 的 ID，与 `subagent_type` 互斥）、`run_in_background`（默认 false）和 `model`（`"secondary"` 表示 `[secondary_model] model` 配置的次主力模型，`"primary"` 表示主模型；resume 时无效；次主力模型实验功能启用后可用）。显式 `model` 会覆盖所选 [Agent profile 的 `model_preference`](../customization/agents.md#agent-文件格式)；两者均未设置时，已配置的次主力模型为默认值，未配置时则继承调用方模型。Agent 任务默认 2 小时超时，可通过 `config.toml` 的 `[subagent] timeout_ms`（`0` = 无超时，或 `KIMI_SUBAGENT_TIMEOUT_MS` 环境变量）配置，且在 print 模式（`kimi -p`）下默认无超时。前台模式下父 Agent 等待子 Agent 完成再继续；后台模式立即返回任务 ID，完成时通过合成 User 消息自动回到主 Agent。多个前台 `Agent` 调用在同一步运行时，TUI 会合并展示，并为每个子 Agent 显示运行、等待、完成或失败状态以及已耗时长。子 Agent 体系细节见 [Agent 与子 Agent](../customization/agents.md)。
+**`Agent`** 将子任务委托给子 Agent 执行。必填参数：`prompt`（完整任务描述）和 `description`（3–5 个词的简短说明）。可选参数：`subagent_type`（默认 `coder`）、`resume`（恢复已有 Agent 的 ID，与 `subagent_type` 互斥）、`run_in_background`（默认 false）和 `model`（可填 `[models.*]` 下的任意模型 id、`"secondary"` 次主力模型或 `"primary"` 主模型；resume 时无效）。显式 `model` 会覆盖所选 [Agent profile 的 `model_preference`](../customization/agents.md#agent-文件格式)，以及 `[subagent.model_overrides]` 配置；两者均未设置时，已配置的次主力模型为默认值，未配置时则继承调用方模型。Agent 任务默认 2 小时超时，可通过 `config.toml` 的 `[subagent] timeout_ms`（`0` = 无超时，或 `KIMI_SUBAGENT_TIMEOUT_MS` 环境变量）配置，且在 print 模式（`kimi -p`）下默认无超时。前台模式下父 Agent 等待子 Agent 完成再继续；后台模式立即返回任务 ID，完成时通过合成 User 消息自动回到主 Agent。多个前台 `Agent` 调用在同一步运行时，TUI 会合并展示，并为每个子 Agent 显示运行、等待、完成或失败状态以及已耗时长。子 Agent 体系细节见 [Agent 与子 Agent](../customization/agents.md)。
 
-**`AgentSwarm`** 可以从共享的 `prompt_template` 和 `items` 数组启动子 Agent，也可以通过 `resume_agent_ids` 恢复已有子 Agent，或在一次调用中同时使用两者。模板必须包含 `{{item}}` 占位符；每个 item 会替换该占位符，并启动一个新的子 Agent。传入 `subagent_type` 可以指定整个 swarm 中所有新启动的子 Agent 使用的 profile；省略时默认使用 `coder`。传入 `model`（次主力模型实验功能启用后可用）可以让新启动的子 Agent 运行在 `[secondary_model] model` 配置的次主力模型（`"secondary"`）或主模型（`"primary"`）上。这项显式选择会覆盖所选 [Agent profile 的 `model_preference`](../customization/agents.md#agent-文件格式)；两者均未设置时，已配置的次主力模型为默认值，未配置时则继承调用方模型。恢复的子 Agent 保持其原有模型。不传 `resume_agent_ids` 时，本工具要求至少 2 个 item；传入 `resume_agent_ids` 时，可以恢复 1 个或多个已有子 Agent。本工具最多支持 128 个子 Agent，会等待全部子 Agent 完成，并返回聚合报告。在 TUI 中，前台 swarm 会在输入框上方显示实时 `Agent swarm` 进度面板。若一次模型响应调用 `AgentSwarm`，该调用必须是该响应中的唯一工具调用；如需运行多个 swarm，应先调用一个 `AgentSwarm` 并等待结果，再调用下一个，若单个模板可以覆盖这些工作，也可以合并为一个 swarm。在 `manual` 权限模式下，未处于 swarm mode 时调用 `AgentSwarm` 会触发审批，除非已有权限规则允许；swarm mode 已开启时，`AgentSwarm` 本身会自动放行。权限规则只能按工具名 `AgentSwarm` 匹配，不支持 `AgentSwarm(swarm)` 这类参数模式。默认情况下，本工具会逐步提升并发且不设上限（立即启动 5 个子 Agent，之后每 700 毫秒再启动 1 个）；将 `KIMI_CODE_AGENT_SWARM_MAX_CONCURRENCY` 设为正整数可限制该阶段同时运行的子 Agent 数量，不设置则表示不限制。若设置为非正整数的值，本次 AgentSwarm 调用会立即失败。
+**`AgentSwarm`** 可以从共享的 `prompt_template` 和 `items` 数组启动子 Agent，也可以通过 `resume_agent_ids` 恢复已有子 Agent，或在一次调用中同时使用两者。模板必须包含 `{{item}}` 占位符；每个 item 会替换该占位符，并启动一个新的子 Agent。传入 `subagent_type` 可以指定整个 swarm 中所有新启动的子 Agent 使用的 profile；省略时默认使用 `coder`。可选参数 `model`（可填 `[models.*]` 下的任意模型 id、`"secondary"` 或 `"primary"`）让新启动的子 Agent 运行在指定模型上；也可用 `item_models` 逐项指定：一个以 item 索引为 key 的表，每个值为该 item 对应的模型 id——**优先级高于 `model`**。此项显式选择会覆盖所选 [Agent profile 的 `model_preference`](../customization/agents.md#agent-文件格式)，以及 `[subagent.model_overrides]` 配置；三者均未设置时，已配置的次主力模型为默认值，未配置时则继承调用方模型。恢复的子 Agent 保持其原有模型。不传 `resume_agent_ids` 时，本工具要求至少 2 个 item；传入 `resume_agent_ids` 时，可以恢复 1 个或多个已有子 Agent。本工具最多支持 128 个子 Agent，会等待全部子 Agent 完成，并返回聚合报告。在 TUI 中，前台 swarm 会在输入框上方显示实时 `Agent swarm` 进度面板。若一次模型响应调用 `AgentSwarm`，该调用必须是该响应中的唯一工具调用；如需运行多个 swarm，应先调用一个 `AgentSwarm` 并等待结果，再调用下一个，若单个模板可以覆盖这些工作，也可以合并为一个 swarm。在 `manual` 权限模式下，未处于 swarm mode 时调用 `AgentSwarm` 会触发审批，除非已有权限规则允许；swarm mode 已开启时，`AgentSwarm` 本身会自动放行。权限规则只能按工具名 `AgentSwarm` 匹配，不支持 `AgentSwarm(swarm)` 这类参数模式。默认情况下，本工具会逐步提升并发且不设上限（立即启动 5 个子 Agent，之后每 700 毫秒再启动 1 个）；将 `KIMI_CODE_AGENT_SWARM_MAX_CONCURRENCY` 设为正整数可限制该阶段同时运行的子 Agent 数量，不设置则表示不限制。若设置为非正整数的值，本次 AgentSwarm 调用会立即失败。
 
 **`AskUserQuestion`** 以结构化多选题的形式向用户提问，适用于需要消歧或选择方案的场景。`questions` 参数接受 1–4 道题，每道题需提供 `question`（以 `?` 结尾）、`options`（2–4 个选项，每项含 `label` 和 `description`）以及可选的 `header`（最多 12 字符）和 `multi_select`（默认 false）。系统自动附加"其他"选项。`background` 为 true 时启动后台问题任务并立即返回任务 ID。宿主未实现交互式提问能力时返回失败提示，Agent 应改为在文本回复中直接提问。
 
 **`Skill`** 允许 Agent 主动调用已注册的 inline 类型 Skill。接受 `skill`（Skill 名称）和可选的 `args`（附加参数文本）。只有 `type = "inline"` 的 Skill 能通过此工具调用；`disableModelInvocation: true` 的 Skill 会被拒绝。嵌套调用深度上限 3 层。Skill 体系细节见 [Agent Skills](../customization/skills.md)。
+
+## 团队管理（仅主 Agent）
+
+以下四个工具仅由主 Agent 调用，子 Agent 使用会被拒绝。
+
+| 工具 | 默认审批 | 说明 |
+| --- | --- | --- |
+| `TeamHire` | 需审批 | 雇佣新成员：自主建档 agent profile 并写至用户级或项目级 agent 目录，同名已存在则报错 |
+| `TeamFire` | 需审批 | 解雇成员：删除对应 agent 文件，绩效数据保留 |
+| `TeamScore` | 需审批 | 评分：0-100 分 + 评语，归因到当时的运行模型 id |
+| `TeamMessage` | 需审批 | 递话：给运行中的子 Agent 发软提醒（插入当前轮次）或打断纠正（先取消再注入指令） |
+
+**`TeamHire`** 接受参数 `name`（kebab-case，作为文件名）、`role`（可选，职位）、`description`、`whenToUse`（可选）、`prompt`（系统提示词正文）、`model`（可选，填入 `[models.*]` 的模型 id 或 `"primary"` / `"secondary"`；省略时由 profile 的 `model_preference` 决定后续行为）、`tools` / `disallowedTools`（可选，与 agent 文件相同写法）、`subagents`（可选）、`duty`（可选布尔）、`scope`（可选 `"user"` 或 `"project"`，默认 `"user"`）。写入 `~/.kimi-code/agents/<name>.md` 或 `<cwd>/.kimi-code/agents/<name>.md`。同名已存在时报错（不静默覆盖），提示先解雇再雇佣；写入后由目录 watcher 自动 reload，立即可派遣。**主 Agent 在自主组队时应直接决定 name / role / description / prompt / model**，无需逐项请示用户。model 可用 id 列表见 `[models]` 配置节。
+
+**`TeamFire`** 接受参数 `name` 和可选 `scope`（默认同 Hire）。定位并删除对应 agent 文件，无法找到则报错并列出当前存在的所有 profile。performance.json 记录保留。watcher 自动 reload 后该成员不可再派遣。
+
+**`TeamScore`** 接受参数 `profile`（要评分的成员名）、`score`（0-100 整数）、`note`（评语）和可选 `model`（省略时由工具按该 profile 当前生效绑定回填，或用户传入当时的运行模型）。写入持久化存储并回显该 profile 更新后的摘要（含 byModel 分组结果）。评分的核心目的是评估**某一成员与某一模型的搭配是否胜任工作**；当某 profile 在当前模型下持续低分时，主 Agent 应通过 `[subagent.model_overrides]` 换模型或向用户建议从 `[models]` 列表中选取。
+
+**`TeamMessage`** 接受参数 `agent_id`（Agent/AgentSwarm 派工结果与 TaskOutput 元数据中返回的任务 ID）、`message`（要递送的信息）和可选 `interrupt`（默认 false）。两种递话模式：
+- **软提醒**（`interrupt: false`，默认）：将 message 以合成 user 消息插入运行中子 Agent 的当前轮次；目标空闲则起新 turn。
+- **打断纠正**（`interrupt: true`）：先取消子 Agent 当前轮的输出，再注入新指令——语义等同你在终端连按两次 ESC 打断后重新输入。
+
+一次性 fire-and-forget；子 Agent 的回应走既有任务结果/通知通道回流。目标 agent 不存在时列出当前可用 agent；已终了的成员提示改用 `Agent resume` 追加指令。
 
 ## 后台任务
 

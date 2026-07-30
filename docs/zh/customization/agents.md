@@ -98,9 +98,11 @@ disallowedTools:
 | --- | --- | --- |
 | `name` | 否 | kebab-case 唯一标识。缺省时取文件名（去掉扩展名，如 `review.md` → `review`）；解析后名字缺失或不是 kebab-case 的文件会被跳过并告警 |
 | `description` | 是 | Agent 的用途。主 Agent 挑选子 Agent 时会看到，请围绕委派决策来写 |
+| `role` | 否 | 职位（用于在终端子 Agent 卡片上显示该成员的身份），不填写时回退为 `description` |
+| `duty` | 否 | 是否免超时。设为 `true` 后该子 Agent 任务不受 `[subagent] timeout_ms` 限制，适合长期在后台运行的角色（如邮件收发文员）；下班需由主 Agent 用 `TaskStop` 主动停止运行中实例 |
 | `whenToUse` | 否 | 补充说明何时应使用该 Agent |
 | `override` | 否 | 是否允许覆盖同名内置 Agent，默认 `false`。`--agent-file` 属于显式启动意图，无需设置此字段 |
-| `model_preference` | 否 | `Agent` 或 `AgentSwarm` 启动该 profile 时的符号默认值：`primary` 选择调用方的主模型，`secondary` 选择 `[secondary_model] model`。工具调用显式传入的 `model` 优先；两者均未设置时，已配置的次主力模型仍为默认值。未配置次主力模型时，子 Agent 继承调用方模型 |
+| `model_preference` | 否 | 该 profile 子 Agent 的模型偏好：可指定 `[models.*]` 下的任意模型 id（如 `"kimi-code/kimi-for-coding"`），也可用符号 `primary`（调用方的主模型）或 `secondary`（次主力模型）。选择优先级为：**工具参数传值 > `[subagent.model_overrides]` 中该 profile 的覆盖 > profile 的 `model_preference` > 已配置的次主力模型 > 继承调用方模型** |
 | `tools` | 否 | 工具名允许列表，如 `Read`、`Bash`；MCP 工具用 glob 匹配，如 `mcp__github__*`。支持 YAML 列表或逗号分隔字符串（`tools: Read, Grep`）两种写法。缺省表示允许全部工具；单独的 `*` 同样表示允许全部工具；空列表（`tools: []`）表示禁用全部工具 |
 | `disallowedTools` | 否 | 禁止列表，写法与匹配规则相同，在 `tools` 之后应用 |
 | `subagents` | 否 | 允许委派的子 Agent 名称列表，写法与 `tools` 相同（YAML 列表或逗号分隔字符串）。缺省表示可委派所有类型；单独的 `*` 同样表示全部 |
@@ -111,7 +113,7 @@ disallowedTools:
 
 未知字段会被忽略，新版本写的文件在旧版本上仍可读取。其他 Agent 工具的字段（如 Claude Code 的 `model`、OpenCode 的 `mode`）同样会被忽略；加上 `tools` 的逗号分隔写法和 `name` 缺省回退到文件名，Claude Code 与 OpenCode 风格的 Agent 文件一般可直接加载 —— 只含 `description` 和正文的最小文件可跨工具通用。
 
-`model_preference` 仅在次主力模型实验功能启用时对新启动的子 Agent 生效——设置 `KIMI_CODE_EXPERIMENTAL_SECONDARY_MODEL=1`，或 master `KIMI_CODE_EXPERIMENTAL_FLAG=1`。它在包括交互式 TUI 在内的所有启动方式下生效。该字段不用于填写具体模型 alias，已恢复的子 Agent 也会保持原模型。主 Agent 会在 profile 描述中看到这项偏好，因此仍可在某项任务需要不同选择时显式传入 `model`。
+主 Agent 会在 profile 描述中看到 `model_preference`，某项任务需要不同选择时仍可显式传入 `model`。想在对话中随时给某个成员换模型，可配置 `[subagent.model_overrides]`（按 profile 覆盖模型 id）——详见[配置文件](../configuration/config-files.md#subagent)。
 
 目录中发现的非法文件会被跳过并告警，不影响其他文件。通过 `--agent-file` 显式传入的文件必须合法 —— 否则 CLI 会报错并退出。
 
@@ -174,6 +176,20 @@ ${skills}
 ${plugin_sections}
 ```
 
+## 团队管理
+
+主 Agent 拥有四个内置的**仅自己可用**的管理工具，用于自主组建和调度你的 AI 团队。子 Agent 调用这些工具会被拒绝——它们只负责执行任务，不管理人事。
+
+- **`TeamHire`**（雇佣）：告诉主 Agent 你需要"一个邮件收发的文员"，它会自主决定名字、职位、提示词并直接写一份 agent 文件到 `~/.kimi-code/agents/<name>.md`（默认用户级）或项目级 `.kimi-code/agents/`（需指定 scope）。同名已存在会报错；写入后立即可派遣，无需重启。
+
+- **`TeamFire`**（解雇）：根据名字删除对应的 agent 文件，该成员不再出现在派工列表中。绩效记录保留在持久化存储中。
+
+- **`TeamScore`**（评分）：给子 Agent 的本次工作打分（0-100）并附评语。评分归因到当时所用的模型 id，持久化在 `$KIMI_CODE_HOME/agents/performance.json`——结构按 profile 名分组、每条记录含轮次时间、分数、备注和实际运行的模型。当某个成员在当前模型下持续低分时，说明该"成员 × 模型"搭配不合适，主 Agent 应通过 `[subagent.model_overrides]` 自动换模型或建议你更换为列表中其他可用的 id。
+
+- **`TeamMessage`**（递话）：在对话中给运行中的子 Agent 递话。默认是软提醒，插入其当前轮次；设 `interrupt: true` 则先取消当前轮次（等价于你连按两次 ESC 打断）再注入新指令。目标 Agent 不存在时报错并列出当前可用者；已终了的成员改用 `Agent resume` 追加指令。
+
+"下班"= `TaskStop` 停止运行中实例。`duty: true` 的成员需主 Agent 主动派 `TaskStop` 才能下班——它们不会因为超时被自动中断。
+
 ## 指令文件
 
 全局 Kimi 专属指令可放在 `$KIMI_CODE_HOME/AGENTS.md`（默认：`~/.kimi-code/AGENTS.md`）。当你用 `KIMI_CODE_HOME` 移动数据根时，这份全局指令文件也会一起移动。跨工具通用指令仍可放在真实 OS home 下的 `~/.agents/AGENTS.md`，项目级指令仍放在项目目录中，例如 `.kimi-code/AGENTS.md` 或 `AGENTS.md`。
@@ -188,5 +204,6 @@ ${plugin_sections}
 
 ## 下一步
 
+- [组建你的团队](../guides/team.md) — 面向用户的团队使用指南，从零搭建一支 AI 编码小组
 - [Hooks](./hooks.md) — 在子 Agent 完成等关键节点触发本地脚本通知或拦截
 - [Agent Skills](./skills.md) — 给子 Agent 注入专业知识和工作流程

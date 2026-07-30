@@ -109,6 +109,7 @@ Prompt mode exits with code `0` when the goal completes, `3` when it blocks, and
 | `/plugins` | — | Open the interactive plugin manager | Yes |
 | `/version` | — | Display the Kimi Code CLI version number | Yes |
 | `/feedback` | — | Submit feedback with optional diagnostic logs and codebase context | Yes |
+| `/team` | — | Open the team overview panel: all members' roles, effective models, average scores / score counts; terminal subagent cards show "name · role · model · last score". See [Build your team](../guides/team.md) for details | Yes |
 
 ## Exit
 
@@ -162,4 +163,5 @@ For installing and authoring Skills, see [Agent Skills](../customization/skills.
 ## Next steps
 
 - [Keyboard Shortcuts](./keyboard.md) — Quick reference for TUI keyboard operations
+- [Build your team](../guides/team.md) — A user-facing guide on building and managing an AI coding team from scratch
 - [Built-in Tools](./tools.md) — Complete reference for tools the Agent can call

@@ -107,6 +107,7 @@ Prompt 模式在目标完成时以退出码 `0` 退出，在目标阻塞时以 `
 | `/plugins` | — | 打开交互式 plugin 管理器 | 是 |
 | `/version` | — | 显示 Kimi Code CLI 版本号 | 是 |
 | `/feedback` | — | 提交反馈，可附加诊断日志和代码库上下文 | 是 |
+| `/team` | — | 打开团队总览面板：全员职位、生效模型、平均分/评分次数；终端子 Agent 调用卡片会显示"名字 · 职位 · 模型 · 上次评分"。详见[组建你的团队](../guides/team.md) | 是 |
 
 ## 退出
 
@@ -160,4 +161,5 @@ Skill 的安装与编写详见 [Agent Skills](../customization/skills.md)。
 ## 下一步
 
 - [键盘快捷键](./keyboard.md) — TUI 键盘操作速查
+- [组建你的团队](../guides/team.md) — 从零搭建 AI 编码小组的面向用户指南
 - [内置工具](./tools.md) — Agent 可调用的工具完整参考
