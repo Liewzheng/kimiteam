@@ -1,0 +1,56 @@
+name: kimiteam build
+
+on:
+  push:
+    branches:
+      - feat/subagent-team
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build packages
+        run: pnpm run build:packages
+
+      - name: Build Kimi Code CJS bundle
+        run: pnpm -C apps/kimi-code run build:native:js
+
+      - name: Compute sha256
+        run: |
+          sha256sum apps/kimi-code/dist-native/intermediates/main.cjs \
+            | tee apps/kimi-code/dist-native/intermediates/main-team.cjs.sha256
+
+      - name: Ensure kimiteam-dev release exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create kimiteam-dev \
+            --title "kimiteam-dev" \
+            --notes "Rolling dev build of kimiteam (main-team.cjs). Updated on every push to feat/subagent-team." \
+            --latest=false \
+            --prerelease 2>/dev/null || true
+
+      - name: Upload bundle asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload kimiteam-dev \
+            apps/kimi-code/dist-native/intermediates/main.cjs#main-team.cjs \
+            apps/kimi-code/dist-native/intermediates/main-team.cjs.sha256 \
+            --clobber
