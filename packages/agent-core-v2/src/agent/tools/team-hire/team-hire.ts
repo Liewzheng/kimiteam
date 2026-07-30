@@ -64,7 +64,9 @@ export const TeamHireInputSchema: z.ZodType<TeamHireInput> = z.object({
     .string()
     .min(1)
     .optional()
-    .describe('When to use this agent (context / trigger description).'),
+    .describe(
+      'When to use this agent (context / trigger description). Written as frontmatter `whenToUse`.',
+    ),
   prompt: z
     .string()
     .min(1, 'prompt is required')
@@ -85,7 +87,9 @@ export const TeamHireInputSchema: z.ZodType<TeamHireInput> = z.object({
     .array(z.string())
     .min(1)
     .optional()
-    .describe('Excluded tool names — rendered as a YAML list in the agent file.'),
+    .describe(
+      'Excluded tool names — rendered as a YAML list in the agent file. Written as frontmatter `disallowedTools`.',
+    ),
   subagents: z
     .array(z.string())
     .min(1)

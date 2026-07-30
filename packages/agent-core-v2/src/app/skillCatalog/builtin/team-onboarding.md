@@ -99,6 +99,8 @@ c) 全编制 8 人以上
 | b) 性价比均衡 | 只读/整理岗填 `${localModelId}`，干活/创作岗填 `secondary`（由 `[secondary_model]` 指向便宜在线模型）。推荐。若无本地模型，全填 `secondary` |
 | c) 质量优先 | 核心岗 `primary`，辅助岗 `secondary` |
 
+> ⚠️ **重要**：`model_preference` 必须填写 `config.toml` 的 `[models]` 节中实际存在的模型 id（如 `local/gemma4-26b`），**严禁**把占位符 `${localModelId}` 原样写入。例如：若 `[models]` 中有 `local/gemma4-26b`，则 `model` 填 `local/gemma4-26b`；若无本地模型则全部回退 `secondary`。
+
 #### Q4 截断团队人数
 
 - a) 精简 → 最多选 4 人
@@ -116,7 +118,9 @@ c) 全编制 8 人以上
    - `description` — 一句话介绍（中文）
    - `when_to_use` — 何时派给此成员（中文）
    - `prompt` — 系统提示词（中文，具体说明职责、工作方式、输出规范）
-   - `tools` — 该成员可用的工具列表（根据角色合理分配）
+   - `tools` — 该成员可用的工具列表。格式为字符串数组，如 `["Read", "Grep", "Glob", "Bash"]`。参考配法：
+     - 只读/整理岗：`["Read", "Grep", "Glob"]`
+     - 读写/执行岗：`["Read", "Grep", "Glob", "Bash", "Write", "Edit"]`
 4. **人设要求**：所有成员保持 **中性专业人设**，禁止照搬或模仿任何现成团队（如 KB、Kimi、Claude 等产品）的人格设定。使用客观、职业化的描述。
 
 #### prompt 编写指南
@@ -126,6 +130,46 @@ c) 全编制 8 人以上
 - 指定输出规范：格式、详细程度、引用要求
 - 说明协作方式：何时需要请示主 agent、何时可以独立决策
 - 如有工具限制，需说明工具使用规则
+
+#### profile 示例
+
+以下以创建「前端工程师」为例，展示 TeamHire 各参数的填写方式和产出的 `.md` 文件结构。
+
+**TeamHire 入参示例：**
+
+- `scope: user`
+- `name: frontend-engineer`
+- `role`: 前端工程师
+- `description`: 专注前端开发，负责界面实现与交互优化
+- `when_to_use`: 需要开发或修改用户界面、前端组件或交互逻辑时
+- `model`: `local/gemma4-26b`（仅示例——参见 Q3 注意事项）
+- `tools`: `["Read", "Grep", "Glob", "Bash"]`
+- `prompt`: 见下方示范正文
+
+**生成的 frontend-engineer.md：**
+
+```
+---
+name: frontend-engineer
+description: '专注前端开发，负责界面实现与交互优化'
+whenToUse: '需要开发或修改用户界面、前端组件或交互逻辑时'
+role: '前端工程师'
+model_preference: 'local/gemma4-26b'
+tools:
+  - 'Read'
+  - 'Grep'
+  - 'Glob'
+  - 'Bash'
+---
+
+你是一名前端工程师，属于用户组建的初始团队。你的核心职责是根据需求实现用户界面，包括组件开发、交互逻辑编写和样式适配。
+
+工作流程：接收主 agent 分发的界面任务 → 分析需求和技术约束 → 编码实现 → 自我检查后提交。
+
+协作方式：技术方案可独立决策；涉及架构变更或外部对接时，须先向主 agent 说明方案并获批准。所有产出附带可操作的验证说明。
+```
+
+**键名映射**：TeamHire 入参与落盘 frontmatter 的键名不同——`when_to_use` → `whenToUse`、`model` → `model_preference`、`disallowed_tools` → `disallowedTools`。`tools` 等数组字段落盘为 YAML 缩进列表（每项前有 `-` 前缀），所有字符串值以单引号包裹。填写入参时使用输入侧的键名即可，服务端自动完成转换。
 
 ### 第五步：收尾
 
