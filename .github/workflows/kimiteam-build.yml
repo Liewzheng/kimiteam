@@ -46,11 +46,19 @@ jobs:
             --latest=false \
             --prerelease 2>/dev/null || true
 
+      - name: Stage assets for upload
+        run: |
+          mkdir -p dist-kimiteam
+          cp apps/kimi-code/dist-native/intermediates/main.cjs \
+             dist-kimiteam/main-team.cjs
+          cp apps/kimi-code/dist-native/intermediates/main-team.cjs.sha256 \
+             dist-kimiteam/
+
       - name: Upload bundle asset
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release upload kimiteam-dev \
-            apps/kimi-code/dist-native/intermediates/main.cjs#main-team.cjs \
-            apps/kimi-code/dist-native/intermediates/main-team.cjs.sha256 \
+            dist-kimiteam/main-team.cjs \
+            dist-kimiteam/main-team.cjs.sha256 \
             --clobber
