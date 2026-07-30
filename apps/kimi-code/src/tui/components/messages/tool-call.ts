@@ -36,6 +36,7 @@ import { ShellExecutionComponent } from './shell-execution';
 import { countNonEmptyLines, pickChip } from './tool-renderers/chip';
 import { buildGoalToolHeader } from './tool-renderers/goal';
 import { isGenericToolResult, pickResultRenderer } from './tool-renderers/registry';
+import { formatBusinessCardSuffix } from './subagent-card-meta';
 
 const MAX_ARG_LENGTH = 60;
 const MAX_SUB_TOOL_CALLS_SHOWN = 4;
@@ -1805,7 +1806,10 @@ export class ToolCallComponent extends Container {
           ? 0
           : usageTotal(this.subagentUsage);
     if (tokens > 0) parts.push(formatTokens(tokens));
-    return ` · ${parts.join(' · ')}`;
+    let base = ` · ${parts.join(' · ')}`;
+    const cardSuffix = formatBusinessCardSuffix(this.subagentAgentName);
+    if (cardSuffix.length > 0) base += cardSuffix;
+    return base;
   }
 
   private getSubagentElapsedSeconds(): number | undefined {

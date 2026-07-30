@@ -7,7 +7,7 @@
  * dispatch are tested here.
  */
 
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { handleTeamCommand } from '#/tui/commands/index';
 import type { SlashCommandHost } from '#/tui/commands/dispatch';
@@ -18,6 +18,25 @@ import {
   formatDuration,
   aggregateMemberRows,
 } from '#/tui/commands/team';
+
+import { formatBusinessCardSuffixFromMap } from '#/tui/components/messages/subagent-card-meta';
+import type { CardMeta } from '#/tui/components/messages/subagent-card-meta';
+
+// Hoisted mock factories — used by cache-wrapper tests below; defined here so
+// vi.mock can capture references before module resolution.
+const { mockReadAgentProfiles, mockReadPerformanceData } = vi.hoisted(() => ({
+  mockReadAgentProfiles: vi.fn<(dataDir: string, cwd: string) => unknown[]>(),
+  mockReadPerformanceData: vi.fn<(dataDir: string) => unknown | null>(),
+}));
+
+vi.mock('#/tui/commands/team', async (importOriginal) => {
+  const mod = await importOriginal<Record<string, unknown>>();
+  return {
+    ...mod,
+    readAgentProfiles: mockReadAgentProfiles,
+    readPerformanceData: mockReadPerformanceData,
+  };
+});
 
 // ---------------------------------------------------------------------------
 // makeHost — minimal mock for command-handling tests
@@ -388,5 +407,180 @@ describe('handleTeamCommand', () => {
 
     panel.handleInput('q');
     expect(host.restoreEditor).toHaveBeenCalled();
+  });
+});
+
+// ===========================================================================
+// Pure function: formatBusinessCardSuffixFromMap
+// ===========================================================================
+
+describe('formatBusinessCardSuffixFromMap', () => {
+  const aliceMeta: CardMeta = { role: 'Senior Developer', avgScore: 85.3, scoreCount: 7 };
+  const bobMeta: CardMeta = { role: 'QA Engineer', avgScore: 92, scoreCount: 3 };
+  const noScoreMeta: CardMeta = { role: 'Reviewer', avgScore: undefined, scoreCount: 0 };
+  const noRoleMeta: CardMeta = { role: undefined, avgScore: 78, scoreCount: 5 };
+
+  const map = new Map<string, CardMeta>([
+    ['Alice', aliceMeta],
+    ['Bob', bobMeta],
+    ['NoScore', noScoreMeta],
+    ['NoRole', noRoleMeta],
+  ]);
+
+  it('returns role + avg when both are present', () => {
+    expect(formatBusinessCardSuffixFromMap('Alice', map)).toBe(
+      ' · Senior Developer · avg 85/100 (7)',
+    );
+  });
+
+  it('returns only role when avgScore is absent', () => {
+    expect(formatBusinessCardSuffixFromMap('NoScore', map)).toBe(' · Reviewer');
+  });
+
+  it('returns only avg when role is absent', () => {
+    expect(formatBusinessCardSuffixFromMap('NoRole', map)).toBe(' · avg 78/100 (5)');
+  });
+
+  it('returns empty string for unknown agent name', () => {
+    expect(formatBusinessCardSuffixFromMap('Unknown', map)).toBe('');
+  });
+
+  it('returns empty string for undefined agent name', () => {
+    expect(formatBusinessCardSuffixFromMap(undefined, map)).toBe('');
+  });
+
+  it('returns empty string for empty agent name', () => {
+    expect(formatBusinessCardSuffixFromMap('', map)).toBe('');
+  });
+
+  it('returns empty string for agent in map but with no data fields', () => {
+    const emptyMeta: CardMeta = { role: undefined, avgScore: undefined, scoreCount: 0 };
+    const emptyMap = new Map([['Empty', emptyMeta]]);
+    expect(formatBusinessCardSuffixFromMap('Empty', emptyMap)).toBe('');
+  });
+
+  it('rounds avgScore to nearest integer', () => {
+    expect(formatBusinessCardSuffixFromMap('Bob', map)).toBe(
+      ' · QA Engineer · avg 92/100 (3)',
+    );
+  });
+
+  it('returns empty string from empty map', () => {
+    expect(formatBusinessCardSuffixFromMap('Alice', new Map())).toBe('');
+  });
+
+  it('omits role when it is an empty string', () => {
+    const meta: CardMeta = { role: '', avgScore: 90, scoreCount: 2 };
+    const m = new Map([['Agent', meta]]);
+    expect(formatBusinessCardSuffixFromMap('Agent', m)).toBe(' · avg 90/100 (2)');
+  });
+
+  it('omits avgScore when it is NaN', () => {
+    const meta: CardMeta = { role: 'Tester', avgScore: NaN, scoreCount: 3 };
+    const m = new Map([['Agent', meta]]);
+    expect(formatBusinessCardSuffixFromMap('Agent', m)).toBe(' · Tester');
+  });
+
+  it('omits avgScore when it is Infinity', () => {
+    const meta: CardMeta = { role: 'Tester', avgScore: Infinity, scoreCount: 3 };
+    const m = new Map([['Agent', meta]]);
+    expect(formatBusinessCardSuffixFromMap('Agent', m)).toBe(' · Tester');
+  });
+
+  it('omits avgScore when it is negative', () => {
+    const meta: CardMeta = { role: 'Tester', avgScore: -12.3, scoreCount: 3 };
+    const m = new Map([['Agent', meta]]);
+    expect(formatBusinessCardSuffixFromMap('Agent', m)).toBe(' · Tester');
+  });
+});
+
+// ===========================================================================
+// Cache wrapper: formatBusinessCardSuffix (lazy 60s TTL, silent degradation)
+// ===========================================================================
+//
+// These tests mock readAgentProfiles / readPerformanceData via vi.mock (above)
+// and use vi.resetModules + dynamic import to get a clean module state per test.
+// Date.now is also mocked to control the TTL window.
+
+describe('formatBusinessCardSuffix cache behaviour', () => {
+  const fakeProfile = { name: 'Alice', description: 'Senior developer', role: 'Senior' };
+  const fakePerfData = {
+    Alice: { entries: [{ profileName: 'Alice', ts: 'x', score: 9 }] },
+  };
+
+  beforeEach(() => {
+    vi.resetModules();
+    mockReadAgentProfiles.mockReset();
+    mockReadPerformanceData.mockReset();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // (a) TTL window内两次调用 → 底层读取函数只调一次
+  it('reads agents only once within the 60s TTL window', async () => {
+    mockReadAgentProfiles.mockReturnValue([fakeProfile]);
+    mockReadPerformanceData.mockReturnValue(fakePerfData);
+
+    const { formatBusinessCardSuffix: suffix } = await import(
+      '#/tui/components/messages/subagent-card-meta'
+    );
+
+    const first = suffix('Alice');
+    const second = suffix('Alice');
+
+    expect(first).toBe(' · Senior · avg 9/100 (1)');
+    expect(second).toBe(' · Senior · avg 9/100 (1)');
+    expect(mockReadAgentProfiles).toHaveBeenCalledTimes(1);
+    expect(mockReadPerformanceData).toHaveBeenCalledTimes(1);
+  });
+
+  // (b) 推进超过 60s → 重新读取
+  it('re-reads after the 60s TTL expires', async () => {
+    mockReadAgentProfiles.mockReturnValue([fakeProfile]);
+    mockReadPerformanceData.mockReturnValue(fakePerfData);
+
+    const { formatBusinessCardSuffix: suffix } = await import(
+      '#/tui/components/messages/subagent-card-meta'
+    );
+
+    suffix('Alice');
+
+    // Advance clock past the 60s TTL
+    vi.advanceTimersByTime(61_000);
+    // But Date.now is still the fake time; the module holds the original
+    // Date.now though — we need to advance the system clock that
+    // formatBusinessCardSuffix sees.
+    // vi.advanceTimersByTime only advances fake timers; for Date.now we use
+    // vi.setSystemTime.
+    vi.setSystemTime(Date.now() + 61_000);
+    await vi.advanceTimersByTimeAsync(0);
+
+    suffix('Alice');
+
+    expect(mockReadAgentProfiles).toHaveBeenCalledTimes(2);
+    expect(mockReadPerformanceData).toHaveBeenCalledTimes(2);
+  });
+
+  // (c) 读取异常 → 返回 '' 且 TTL 内不重试
+  it('silently degrades on read error and does not retry within TTL', async () => {
+    mockReadAgentProfiles.mockImplementation(() => {
+      throw new Error('disk failure');
+    });
+
+    const { formatBusinessCardSuffix: suffix } = await import(
+      '#/tui/components/messages/subagent-card-meta'
+    );
+
+    const first = suffix('Alice');
+    expect(first).toBe('');
+
+    // Same TTL window — no re-read
+    const second = suffix('Alice');
+    expect(second).toBe('');
+
+    expect(mockReadAgentProfiles).toHaveBeenCalledTimes(1);
   });
 });
