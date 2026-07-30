@@ -11,7 +11,7 @@ import { LifecycleScope, ScopeActivation, registerScopedService } from '#/_base/
 import { ILogService } from '#/_base/log/log';
 import { IAtomicDocumentStore } from '#/persistence/interface/atomicDocumentStore';
 
-import type { PerformanceEntry, PerformanceRaw } from './agentPerformance';
+import type { PerformanceEntry, PerformanceRaw, PerformanceShift } from './agentPerformance';
 import { IAgentPerformanceService } from './agentPerformance';
 import type { PerformanceSummary, ProfilePerformanceEntry } from './agentPerformance';
 
@@ -57,13 +57,35 @@ export class AgentPerformanceServiceImpl implements IAgentPerformanceService {
     await this.store.set<PerformanceRaw>(STORAGE_SCOPE, STORAGE_KEY, raw);
   }
 
+  async recordShift(profileName: string, shift: PerformanceShift): Promise<void> {
+    const run = this._queue.then(() => this._recordShift(profileName, shift));
+    this._queue = run.catch(() => {});
+    return run;
+  }
+
+  private async _recordShift(profileName: string, shift: PerformanceShift): Promise<void> {
+    const raw = (await this._readOrCreate()) as PerformanceRaw;
+    if (!raw[profileName]) {
+      raw[profileName] = { entries: [], shifts: [shift] };
+    } else {
+      if (!raw[profileName].shifts) {
+        raw[profileName].shifts = [];
+      }
+      raw[profileName].shifts!.push({ ...shift });
+      while (raw[profileName].shifts!.length > MAX_ENTRIES_PER_PROFILE) {
+        raw[profileName].shifts!.shift();
+      }
+    }
+    await this.store.set<PerformanceRaw>(STORAGE_SCOPE, STORAGE_KEY, raw);
+  }
+
   async summary(profileName: string): Promise<PerformanceSummary> {
     const raw = (await this._readOrCreate()) as PerformanceRaw;
-    const entries = raw[profileName]?.entries;
-    if (!entries || entries.length === 0) {
+    const bucket = raw[profileName];
+    if (bucket === undefined) {
       return { count: 0 };
     }
-    return this._computeSummary(entries);
+    return this._computeSummary(bucket.entries, bucket.shifts);
   }
 
   async list(): Promise<ProfilePerformanceEntry[]> {
@@ -98,11 +120,51 @@ export class AgentPerformanceServiceImpl implements IAgentPerformanceService {
     return safeRaw;
   }
 
-  private _computeSummary(entries: PerformanceEntry[]): PerformanceSummary {
+  private _computeSummary(entries: PerformanceEntry[], shifts?: PerformanceShift[]): PerformanceSummary {
+    // Shift-derived aggregates are computed even without any scores — a member
+    // can have worked shifts before receiving its first score.
+    let avgDurationMs: number | undefined;
+    if (shifts && shifts.length > 0) {
+      const total = shifts.reduce((a, b) => a + b.durationMs, 0);
+      avgDurationMs = Number((total / shifts.length).toFixed(1));
+    }
+
+    // byModel aggregation — merge entries with model + shifts with model.
+    // `average` is only present when the model actually has scored entries.
+    let byModel: Record<string, { count: number; average?: number }> | undefined;
+    const modelMap = new Map<string, { scoreSum: number; scoreCount: number; shiftCount: number }>();
+    for (const e of entries) {
+      if (e.model) {
+        let m = modelMap.get(e.model);
+        if (!m) { m = { scoreSum: 0, scoreCount: 0, shiftCount: 0 }; modelMap.set(e.model, m); }
+        m.scoreSum += e.score;
+        m.scoreCount += 1;
+      }
+    }
+    if (shifts) {
+      for (const s of shifts) {
+        if (s.model) {
+          let m = modelMap.get(s.model);
+          if (!m) { m = { scoreSum: 0, scoreCount: 0, shiftCount: 0 }; modelMap.set(s.model, m); }
+          m.shiftCount += 1;
+        }
+      }
+    }
+    if (modelMap.size > 0) {
+      byModel = {};
+      for (const [model, data] of modelMap) {
+        byModel[model] = {
+          count: data.scoreCount + data.shiftCount,
+          average: data.scoreCount > 0 ? Number((data.scoreSum / data.scoreCount).toFixed(1)) : undefined,
+        };
+      }
+    }
+
     const scores = entries.map((e) => e.score);
-    if (scores.length === 0) return { count: 0 };
+    if (scores.length === 0) return { count: 0, avgDurationMs, byModel };
     const avg = Number((scores.reduce((a, b) => a + b, 0) / scores.length).toFixed(1));
-    return { last: scores[scores.length - 1], average: avg, count: scores.length };
+
+    return { last: scores[scores.length - 1], average: avg, count: scores.length, avgDurationMs, byModel };
   }
 }
 
@@ -116,5 +178,8 @@ registerScopedService(
 );
 
 // Re-exports for consumers/tests that prefer a single entry point.
-export type { PerformanceEntry, PerformanceRaw, PerformanceSummary, ProfilePerformanceEntry, IAgentPerformanceService } from './agentPerformance';
+export type {
+  PerformanceEntry, PerformanceRaw, PerformanceShift, PerformanceSummary,
+  ProfilePerformanceEntry, IAgentPerformanceService,
+} from './agentPerformance';
 

@@ -16,6 +16,7 @@ export const TeamScoreToolInputSchema = z.object({
   score: z.number().int().min(0).max(100).describe('Performance score, 0–100 integer'),
   note: z.string().trim().min(1).describe('One-line comment explaining the score'),
   agent_id: z.string().optional().describe('Optional subagent instance ID this score is for'),
+  model: z.string().optional().describe('The model id the member was using when scored; omit and the caller should backfill with the current binding'),
 });
 
 export type TeamScoreToolInput = z.infer<typeof TeamScoreToolInputSchema>;

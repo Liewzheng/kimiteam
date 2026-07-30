@@ -13,13 +13,26 @@ export interface PerformanceEntry {
   readonly ts: string;            // ISO-8601 timestamp
   readonly score: number;         // 0-100 integer
   readonly note: string;
+  readonly model?: string;        // model id the member was using when scored
+  readonly agentId?: string;
+  readonly sessionId?: string;
+}
+
+/** A shift (toured work period) record attached to a profile bucket. */
+export interface PerformanceShift {
+  readonly startedAt: string;
+  readonly endedAt: string;
+  readonly durationMs: number;
+  readonly workSummary: string;
+  readonly model?: string;
+  readonly concurrency?: number;
   readonly agentId?: string;
   readonly sessionId?: string;
 }
 
 /** Raw document shape stored in the atomic-document. */
 export interface PerformanceRaw {
-  [profileName: string]: { entries: PerformanceEntry[] };
+  [profileName: string]: { entries: PerformanceEntry[]; shifts?: PerformanceShift[] };
 }
 
 /** Computed summary for one profile (the public API). */
@@ -27,6 +40,8 @@ export interface PerformanceSummary {
   readonly last?: number;
   readonly average?: number;
   readonly count: number;
+  readonly avgDurationMs?: number;
+  readonly byModel?: Record<string, { count: number; average?: number }>;
 }
 
 /** Output of `list()` — full array with profile name. */
@@ -40,6 +55,8 @@ export interface IAgentPerformanceService {
 
   /** Upsert a score entry (FIFO trim at 50). */
   record(entry: PerformanceEntry): Promise<void>;
+  /** Record a shift (FIFO trim at 50). */
+  recordShift(profileName: string, shift: PerformanceShift): Promise<void>;
   /** Read-only summary for one profile. */
   summary(profileName: string): Promise<PerformanceSummary>;
   /** Every stored profile's summary. */

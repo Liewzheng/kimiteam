@@ -66,6 +66,7 @@ export class TeamScoreTool implements ITeamScoreTool {
       ts: new Date().toISOString(),
       score: args.score,
       note: args.note,
+      model: args.model,
       agentId: args.agent_id,
     });
 
