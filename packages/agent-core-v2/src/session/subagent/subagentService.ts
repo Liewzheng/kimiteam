@@ -33,6 +33,7 @@ import {
   ISessionSubagentService,
   type RunAgentOptions,
 } from './subagent';
+import { ISubagentPoolService } from '../subagentPool/subagentPool';
 import { runAgentTurn } from './runAgentTurn';
 
 export class SessionSubagentService extends Disposable implements ISessionSubagentService {
@@ -50,18 +51,31 @@ export class SessionSubagentService extends Disposable implements ISessionSubage
   constructor(
     @IAgentLifecycleService private readonly agentLifecycle: IAgentLifecycleService,
     @ISessionAgentProfileCatalog private readonly catalog: ISessionAgentProfileCatalog,
+    @ISubagentPoolService private readonly pool: ISubagentPoolService,
   ) {
     super();
   }
 
-  run(agentId: string, request: AgentRunRequest, opts: RunAgentOptions): Promise<AgentRunHandle> {
+  async run(agentId: string, request: AgentRunRequest, opts: RunAgentOptions): Promise<AgentRunHandle> {
     const handle = this.agentLifecycle.get(agentId);
     if (handle === undefined) throw new Error(`Agent "${agentId}" does not exist`);
-    return runAgentTurn(handle, request, {
-      summaryPolicy: opts.summaryPolicy ?? this.summaryPolicyFor(handle),
-      signal: opts.signal,
-      onReady: opts.onReady,
-    });
+    // Session-wide concurrency pool: wait for a slot before starting the turn,
+    // release it when the run settles (or the start itself fails).
+    const slot = await this.pool.acquire(opts.signal);
+    let run: AgentRunHandle;
+    try {
+      run = await runAgentTurn(handle, request, {
+        summaryPolicy: opts.summaryPolicy ?? this.summaryPolicyFor(handle),
+        signal: opts.signal,
+        onReady: opts.onReady,
+      });
+    } catch (error) {
+      slot.dispose();
+      throw error;
+    }
+    const release = () => slot.dispose();
+    run.completion.then(release, release);
+    return run;
   }
 
   notifyAgentTaskStopped(context: AgentTaskStopHookContext): void {

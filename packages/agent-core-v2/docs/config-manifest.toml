@@ -351,6 +351,7 @@ merge_all_available_skills = true
 
 [subagent]
 timeout_ms = 7200000
+# max_concurrency: integer
 # model_overrides: record<string, string>
 
 # ##########################################################################

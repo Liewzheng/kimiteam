@@ -322,3 +322,255 @@ describe('Team* main-agent gate', () => {
     expect(TeamFireInputSchema.safeParse({ name: 'code-reviewer' }).success).toBe(true);
   });
 });
+
+
+// ---------------------------------------------------------------------------
+// TeamConcurrency — pool state inspection, runtime override, evaluation.
+// ---------------------------------------------------------------------------
+
+import { TeamConcurrencyTool } from '#/agent/tools/team-concurrency/teamConcurrencyTool';
+import { TeamConcurrencyInputSchema } from '#/agent/tools/team-concurrency/team-concurrency';
+import type {
+  ISubagentPoolService,
+  SubagentPoolLimitSource,
+  SubagentPoolState,
+} from '#/session/subagentPool/subagentPool';
+import type { IDisposable } from '#/_base/di/lifecycle';
+import type { ProfilePerformanceEntry } from '#/app/agentPerformance/agentPerformance';
+import { MODELS_SECTION, PROVIDERS_SECTION } from '#/app/kosongConfig/configSection';
+
+class NoopDisposable implements IDisposable {
+  dispose(): void { /* noop */ }
+}
+
+class PoolStub implements ISubagentPoolService {
+  readonly _serviceBrand: undefined;
+  private _limit: number | undefined = undefined;
+  private _source: SubagentPoolLimitSource = 'none';
+  active = 0;
+  queued = 0;
+
+  async acquire(_signal: AbortSignal): Promise<IDisposable> {
+    return new NoopDisposable();
+  }
+
+  setRuntimeLimit(value?: number): void {
+    this._limit = value;
+    this._source = value !== undefined ? 'runtime' : 'none';
+  }
+
+  state(): SubagentPoolState {
+    return { limit: this._limit, limitSource: this._source, active: this.active, queued: this.queued };
+  }
+}
+
+class ConfigStub {
+  readonly _serviceBrand: undefined;
+  private readonly data: Record<string, unknown>;
+
+  constructor(models: Record<string, unknown>, providers: Record<string, unknown>) {
+    this.data = {
+      [MODELS_SECTION]: models,
+      [PROVIDERS_SECTION]: providers,
+    };
+  }
+
+  get<T = unknown>(domain: string): T {
+    return this.data[domain] as T;
+  }
+}
+
+class PerfStub {
+  readonly _serviceBrand: undefined;
+  private readonly profiles: ProfilePerformanceEntry[];
+
+  constructor(profiles: ProfilePerformanceEntry[]) {
+    this.profiles = profiles;
+  }
+
+  async list(): Promise<ProfilePerformanceEntry[]> {
+    return this.profiles;
+  }
+
+  async record(): Promise<void> { /* noop */ }
+  async recordShift(): Promise<void> { /* noop */ }
+  async summary(): Promise<ProfilePerformanceEntry['summary']> {
+    return { count: 0 };
+  }
+}
+
+function makeTool(
+  tmpDir: string,
+  callerId: string,
+  agents: Record<string, unknown>,
+  pool: ISubagentPoolService,
+  perf?: PerfStub,
+  config?: ConfigStub,
+): TeamConcurrencyTool {
+  const stubs = gateStubs(tmpDir, callerId, agents);
+  return new TeamConcurrencyTool(
+    stubs.sessionMeta as never,
+    stubs.scopeContext as never,
+    pool,
+    (perf ?? new PerfStub([])) as never,
+    (config ??
+      new ConfigStub(
+        { 'local/qwen': { providerId: 'local-provider' }, 'gpt-4': {} },
+        { 'local-provider': { baseUrl: 'http://localhost:8080/v1' } },
+      )) as never,
+    gateLogStub() as never,
+  );
+}
+
+describe('TeamConcurrency', () => {
+  let tmpDir: string;
+  beforeEach(() => { tmpDir = mkTempDir(); });
+  afterEach(() => { cleanup(tmpDir); });
+
+  it('rejects a subagent caller', async () => {
+    const pool = new PoolStub();
+    const tool = makeTool(tmpDir, 'agent-0', { 'agent-0': { type: 'sub' } }, pool);
+    const result = await runResolution(
+      await tool.resolveExecution({ action: 'get' }),
+    );
+    expect(result.isError).toBe(true);
+    expect(String(result.output)).toContain('only available to the main agent');
+  });
+
+  it('get returns limit, source, active, queued', async () => {
+    const pool = new PoolStub();
+    pool.active = 2;
+    pool.queued = 1;
+    pool.setRuntimeLimit(5);
+    const tool = makeTool(tmpDir, 'main', { main: {} }, pool);
+    const result = await runResolution(
+      await tool.resolveExecution({ action: 'get' }),
+    );
+    expect(result.isError).toBeUndefined();
+    const out = String(result.output);
+    expect(out).toContain('5');
+    expect(out).toContain('Runtime override');
+    expect(out).toContain('Active:  2');
+    expect(out).toContain('Queued:  1');
+  });
+
+  it('get shows unlimited when no limit is set', async () => {
+    const pool = new PoolStub();
+    const tool = makeTool(tmpDir, 'main', { main: {} }, pool);
+    const result = await runResolution(
+      await tool.resolveExecution({ action: 'get' }),
+    );
+    expect(result.isError).toBeUndefined();
+    expect(String(result.output)).toContain('unlimited');
+  });
+
+  it('set rejects missing value', async () => {
+    const pool = new PoolStub();
+    const tool = makeTool(tmpDir, 'main', { main: {} }, pool);
+    const result = await runResolution(
+      await tool.resolveExecution({ action: 'set' }),
+    );
+    expect(result.isError).toBe(true);
+    expect(String(result.output)).toContain('value');
+  });
+
+  it('set applies the limit and reflects in subsequent get', async () => {
+    const pool = new PoolStub();
+    const tool = makeTool(tmpDir, 'main', { main: {} }, pool);
+    const result = await runResolution(
+      await tool.resolveExecution({ action: 'set', value: 3 }),
+    );
+    expect(result.isError).toBeUndefined();
+    expect(String(result.output)).toContain('3');
+
+    // Verify via get
+    const state = pool.state();
+    expect(state.limit).toBe(3);
+    expect(state.limitSource).toBe('runtime');
+  });
+
+  it('evaluate contains machine, model topology, history, and advice sections', async () => {
+    const pool = new PoolStub();
+    const perf = new PerfStub([
+      {
+        profileName: 'coder',
+        summary: {
+          count: 5,
+          average: 78.4,
+          avgDurationMs: 12345,
+          byModel: { 'local/qwen': { count: 3, average: 82 }, 'gpt-4': { count: 2, average: 73 } },
+        },
+      },
+    ]);
+    const config = new ConfigStub(
+      {
+        'local/qwen': { providerId: 'local-provider' },
+        'gpt-4': {},
+      },
+      {
+        'local-provider': { baseUrl: 'http://localhost:8080/v1' },
+      },
+    );
+    const tool = makeTool(tmpDir, 'main', { main: {} }, pool, perf, config);
+    const result = await runResolution(
+      await tool.resolveExecution({ action: 'evaluate' }),
+    );
+    expect(result.isError).toBeUndefined();
+    const out = String(result.output);
+
+    // Machine snapshot section
+    expect(out).toContain('Machine snapshot');
+    expect(out).toContain('CPUs');
+    expect(out).toContain('Total RAM');
+    expect(out).toContain('Free RAM');
+    expect(out).toContain('Load avg');
+
+    // Model topology section
+    expect(out).toContain('Model topology');
+    expect(out).toContain('Local (loopback)');
+    expect(out).toContain('local/qwen');
+    // gpt-4 has no baseUrl → classified as unknown
+    expect(out).toContain('Unknown (no baseUrl)');
+    expect(out).toContain('gpt-4');
+
+    // Performance evidence
+    expect(out).toContain('Historical performance');
+    expect(out).toContain('coder');
+    expect(out).toContain('avg duration');
+    expect(out).toContain('by model');
+
+    // Advice section
+    expect(out).toContain('Concurrency advice');
+    expect(out).toContain('set');
+    expect(out).toContain('Final decision');
+  });
+
+  it('evaluate works with empty model config and no performance history', async () => {
+    const pool = new PoolStub();
+    const config = new ConfigStub({}, {});
+    const perf = new PerfStub([]);
+    const tool = makeTool(tmpDir, 'main', { main: {} }, pool, perf, config);
+    const result = await runResolution(
+      await tool.resolveExecution({ action: 'evaluate' }),
+    );
+    expect(result.isError).toBeUndefined();
+    const out = String(result.output);
+    expect(out).toContain('Machine snapshot');
+    expect(out).toContain('Model topology');
+    expect(out).toContain('(none)');
+    expect(out).toContain('No performance history');
+    expect(out).toContain('Concurrency advice');
+  });
+
+  it('validates input schema constraints', () => {
+    // Valid: get, set with value, evaluate
+    expect(TeamConcurrencyInputSchema.safeParse({ action: 'get' }).success).toBe(true);
+    expect(TeamConcurrencyInputSchema.safeParse({ action: 'set', value: 5 }).success).toBe(true);
+    expect(TeamConcurrencyInputSchema.safeParse({ action: 'evaluate' }).success).toBe(true);
+
+    // Invalid: bad action, value < 1
+    expect(TeamConcurrencyInputSchema.safeParse({ action: 'reset' }).success).toBe(false);
+    expect(TeamConcurrencyInputSchema.safeParse({ action: 'set', value: 0 }).success).toBe(false);
+    expect(TeamConcurrencyInputSchema.safeParse({ action: 'set', value: -1 }).success).toBe(false);
+  });
+});

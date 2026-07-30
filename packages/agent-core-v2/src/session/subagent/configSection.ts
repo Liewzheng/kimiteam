@@ -60,6 +60,14 @@ export const SUBAGENT_SECTION = 'subagent';
 export const SubagentConfigSchema = z.object({
   timeoutMs: z.number().int().min(0).optional(),
   /**
+   * Session-wide cap on concurrently running subagents (`[subagent]
+   * max_concurrency` on disk). Enforced by the subagent pool for every
+   * dispatch path (Agent, AgentSwarm, resume, retry). The
+   * `KIMI_CODE_AGENT_SWARM_MAX_CONCURRENCY` env var and the runtime override
+   * set via the `TeamConcurrency` tool both take precedence over this value.
+   */
+  maxConcurrency: z.number().int().min(1).optional(),
+  /**
    * Per-profile model override: `[subagent.model_overrides]` on disk
    * (`coder = "local/qwen3.6-35b-a3b"`). Binds newly spawned subagents of the
    * named profile to the given `[models.<id>]` id, taking precedence over the

@@ -30,6 +30,8 @@ import { ISessionMcpService } from '#/session/mcp/sessionMcp';
 import { SessionMcpService } from '#/session/mcp/sessionMcpService';
 import { ISessionSubagentService } from '#/session/subagent/subagent';
 import { SessionSubagentService } from '#/session/subagent/subagentService';
+import { ISubagentPoolService } from '#/session/subagentPool/subagentPool';
+import { SubagentPoolService } from '#/session/subagentPool/subagentPoolService';
 import '#/agent/mcp/mcpService';
 import '#/wire/wireService';
 import { IAgentTaskService } from '#/agent/task/task';
@@ -788,12 +790,13 @@ describe('AgentLifecycleService', () => {
     });
   });
 
-  it('run throws when the agent does not exist', () => {
+  it('run throws when the agent does not exist', async () => {
+    ix.set(ISubagentPoolService, new SyncDescriptor(SubagentPoolService));
     ix.set(ISessionSubagentService, new SyncDescriptor(SessionSubagentService));
     const svc = ix.get(ISessionSubagentService);
-    expect(() =>
+    await expect(
       svc.run('missing', { kind: 'prompt', prompt: 'hi' }, { signal: new AbortController().signal }),
-    ).toThrow('Agent "missing" does not exist');
+    ).rejects.toThrow('Agent "missing" does not exist');
   });
 
   it('fires onDidCreate on create and onDidDispose on remove', async () => {
