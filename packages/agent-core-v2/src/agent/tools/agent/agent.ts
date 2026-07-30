@@ -54,7 +54,7 @@ export const SubagentToolInputSchema = z.preprocess(
       .boolean()
       .optional()
       .describe(
-        'If true, return immediately without waiting for completion. Prefer false unless the task can run independently and there is a clear benefit to not waiting.',
+        'If true, return immediately without waiting for completion; if false, wait for the result. When omitted, defaults to true under team mode (background-first dispatch), otherwise false.',
       ),
     model: z
       .string()

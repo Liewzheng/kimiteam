@@ -84,6 +84,7 @@ import {
   formatSubagentTimeoutDescription,
   resolveSubagentBinding,
   resolveSubagentTimeoutMs,
+  resolveTeamMode,
   wrapSubagentModelError,
 } from '#/session/subagent/configSection';
 import { SECONDARY_MODEL_FLAG_ID } from '#/session/subagent/flag';
@@ -102,6 +103,7 @@ import { SubagentTask, type SubagentHandle } from './subagent-task';
 
 import AGENT_BACKGROUND_DISABLED_DESCRIPTION from './agent-background-disabled.md?raw';
 import AGENT_BACKGROUND_DESCRIPTION from './agent-background-enabled.md?raw';
+import AGENT_BACKGROUND_TEAM_DESCRIPTION from './agent-background-team.md?raw';
 import AGENT_DESCRIPTION_BASE from './agent.md?raw';
 
 export class SubagentTool implements ISubagentTool {
@@ -137,9 +139,23 @@ export class SubagentTool implements ISubagentTool {
       this.toolPolicy.isToolActive('TaskStop');
   }
 
+  /**
+   * Resolve the effective `run_in_background` value for a tool call.
+   *
+   * An explicit value (`true` or `false`) is used as-is. When omitted (`undefined`),
+   * team mode + background capability makes it default to `true` (background-first
+   * dispatch); otherwise `false` (foreground).
+   */
+  private resolveRunInBackground(args: SubagentToolInput): boolean {
+    return args.run_in_background ?? (resolveTeamMode(this.config) && this.canRunInBackground());
+  }
+
   get description(): string {
+    const teamMode = resolveTeamMode(this.config);
     const backgroundDescription = this.canRunInBackground()
-      ? AGENT_BACKGROUND_DESCRIPTION
+      ? teamMode
+        ? AGENT_BACKGROUND_TEAM_DESCRIPTION
+        : AGENT_BACKGROUND_DESCRIPTION
       : AGENT_BACKGROUND_DISABLED_DESCRIPTION;
     let description = `${AGENT_DESCRIPTION_BASE}\n\n${backgroundDescription}`;
     const allowlist = subagentAllowlistFor(this.catalog, this.profile.data());
@@ -198,7 +214,8 @@ export class SubagentTool implements ISubagentTool {
       resumeAgentId !== undefined && resumeAgentId.length > 0
         ? this.resumeProfileName(resumeAgentId) ?? RESUMED_LABEL
         : requestedProfileName ?? DEFAULT_PROFILE_NAME;
-    const prefix = args.run_in_background === true ? 'Launching background' : 'Launching';
+    const resolvedBg = this.resolveRunInBackground(args);
+    const prefix = resolvedBg ? 'Launching background' : 'Launching';
     return {
       description: `${prefix} ${profileNameForDisplay} agent: ${args.description}`,
       accesses: ToolAccesses.none(),
@@ -206,7 +223,7 @@ export class SubagentTool implements ISubagentTool {
         kind: 'agent_call',
         agent_name: profileNameForDisplay,
         prompt: args.prompt,
-        background: args.run_in_background,
+        background: resolvedBg,
       },
       approvalRule: this.name,
       matchesRule: (ruleArgs) => matchesGlobRuleSubject(ruleArgs, profileNameForDisplay),
@@ -316,7 +333,7 @@ export class SubagentTool implements ISubagentTool {
       });
     }
 
-    const runInBackground = args.run_in_background === true;
+    const runInBackground = this.resolveRunInBackground(args);
     emitAgentRunSpawned(requester, agentId, {
       profileName,
       parentToolCallId: toolCallId,
@@ -366,7 +383,7 @@ export class SubagentTool implements ISubagentTool {
   ): Promise<ExecutableToolResult> {
     try {
       signal.throwIfAborted();
-      const runInBackground = args.run_in_background === true;
+      const runInBackground = this.resolveRunInBackground(args);
       const requestedProfileName = args.subagent_type?.length ? args.subagent_type : undefined;
       const resumeAgentId = args.resume?.trim();
       const isResume = resumeAgentId !== undefined && resumeAgentId.length > 0;
