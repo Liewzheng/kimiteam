@@ -108,6 +108,7 @@ import { SubagentTask, type SubagentHandle } from './subagent-task';
 import AGENT_BACKGROUND_DISABLED_DESCRIPTION from './agent-background-disabled.md?raw';
 import AGENT_BACKGROUND_DESCRIPTION from './agent-background-enabled.md?raw';
 import AGENT_BACKGROUND_TEAM_DESCRIPTION from './agent-background-team.md?raw';
+import AGENT_TEAM_LEAD_DOCTRINE from './team-lead-doctrine.md?raw';
 import AGENT_DESCRIPTION_BASE from './agent.md?raw';
 
 export class SubagentTool implements ISubagentTool {
@@ -172,6 +173,9 @@ export class SubagentTool implements ISubagentTool {
         : AGENT_BACKGROUND_DESCRIPTION
       : AGENT_BACKGROUND_DISABLED_DESCRIPTION;
     let description = `${AGENT_DESCRIPTION_BASE}\n\n${backgroundDescription}`;
+    if (teamMode) {
+      description += `\n\n${AGENT_TEAM_LEAD_DOCTRINE}`;
+    }
     const allowlist = subagentAllowlistFor(this.catalog, this.profile.data());
     const profiles =
       allowlist === undefined

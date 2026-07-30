@@ -17,7 +17,11 @@ import { isSubagentMeta } from '#/session/agentLifecycle/subagentMetadata';
 import { ITeamScoreTool, TeamScoreToolInputSchema, SUBAGENT_NOT_ALLOWED, type TeamScoreToolInput } from './team-score';
 
 const TOOL_DESCRIPTION =
-  'Give a subagent member a performance score (0-100) with a one-line comment. Score history is used for dispatch decisions when the main agent needs to pick which subagent is most capable.';
+  'Give a subagent member a performance score (0-100) with a one-line comment. Score history is used for dispatch decisions when the main agent needs to pick which subagent is most capable. ' +
+  'Consistently low scores indicate the current model is not suitable for this member. ' +
+  'To switch within the same cost tier (offline↔offline, online↔online), you may autonomously update [subagent.model_overrides] or adjust dispatch parameters. ' +
+  'An offline→online upgrade incurs new costs and requires AskUserQuestion to the user first (attach the member\'s score history and time-on-task evidence). ' +
+  'The [subagent] allow_cost_upgrade = true config key indicates the user has pre-authorized such upgrades.';
 
 export class TeamScoreTool implements ITeamScoreTool {
   declare readonly _serviceBrand: undefined;

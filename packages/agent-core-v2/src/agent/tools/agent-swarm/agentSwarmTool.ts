@@ -45,6 +45,7 @@ import {
   buildSubagentModelDescriptions,
   resolveSubagentBinding,
   resolveSubagentTimeoutMs,
+  resolveTeamMode,
   type SubagentSpawnBinding,
 } from '#/session/subagent/configSection';
 import {
@@ -55,6 +56,7 @@ import {
   type AgentSwarmToolInput,
 } from './agent-swarm';
 import AGENT_SWARM_DESCRIPTION from './agent-swarm.md?raw';
+import AGENT_TEAM_LEAD_DOCTRINE from '../agent/team-lead-doctrine.md?raw';
 
 const DEFAULT_SUBAGENT_TYPE = 'coder';
 
@@ -104,14 +106,19 @@ export class AgentSwarmTool implements IAgentSwarmTool {
   }
 
   get description(): string {
+    const teamMode = resolveTeamMode(this.config);
     const modelLines = buildSubagentModelDescriptions(
       this.config,
       this.flags,
       this.profile.data().modelAlias,
     );
-    return modelLines === undefined
+    let description = modelLines === undefined
       ? AGENT_SWARM_DESCRIPTION
       : `${AGENT_SWARM_DESCRIPTION}\n\n${modelLines}`;
+    if (teamMode) {
+      description += `\n\n${AGENT_TEAM_LEAD_DOCTRINE}`;
+    }
+    return description;
   }
 
   resolveExecution(args: AgentSwarmToolInput): ToolExecution {

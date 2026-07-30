@@ -895,6 +895,24 @@ describe('Agent tool description', () => {
     const desc = agentDescription();
     expect(desc).toContain('avg score 85');
   });
+
+  it('injects team-lead doctrine when team mode is on', () => {
+    ctx = createTestAgent({
+      initialConfig: { subagent: { teamMode: true } },
+    });
+
+    const description = agentDescription();
+    expect(description).toContain('You are the tech-lead, not an individual contributor');
+    expect(description).toContain('Delegate execution');
+  });
+
+  it('omits team-lead doctrine when team mode is off', () => {
+    ctx = createTestAgent();
+
+    const description = agentDescription();
+    expect(description).not.toContain('You are the tech-lead, not an individual contributor');
+    expect(description).not.toContain('Delegate execution');
+  });
 });
 
 describe('Agent tool execution contract', () => {
@@ -2259,6 +2277,51 @@ describe('AgentSwarm tool description', () => {
     expect(description).toContain('Available models (pass via model):');
     expect(description).toContain('- secondary: provider/secondary (default)');
     expect(description).toContain('- primary: mock-model');
+  });
+
+  it('injects team-lead doctrine when team mode is on', () => {
+    ctx = createTestAgent({
+      initialConfig: { subagent: { teamMode: true } },
+    });
+
+    const description = agentSwarmDescription();
+    expect(description).toContain('You are the tech-lead, not an individual contributor');
+    expect(description).toContain('Delegate execution');
+  });
+
+  it('omits team-lead doctrine when team mode is off', () => {
+    ctx = createTestAgent();
+
+    const description = agentSwarmDescription();
+    expect(description).not.toContain('You are the tech-lead, not an individual contributor');
+    expect(description).not.toContain('Delegate execution');
+  });
+});
+
+describe('TeamScore tool description', () => {
+  let ctx: TestAgentContext;
+
+  afterEach(async () => {
+    await ctx.dispose();
+  });
+
+  function teamScoreDescription(): string {
+    const tool = ctx.toolsData().find((entry) => entry.name === 'TeamScore');
+    expect(tool).toBeDefined();
+    return tool!.description;
+  }
+
+  it('contains the model-switch guidance for consistently low scores', () => {
+    ctx = createTestAgent();
+
+    const description = teamScoreDescription();
+    expect(description).toContain('Give a subagent member a performance score');
+    expect(description).toContain('Consistently low scores');
+    expect(description).toContain('offline↔offline');
+    expect(description).toContain('online↔online');
+    expect(description).toContain('[subagent.model_overrides]');
+    expect(description).toContain('AskUserQuestion');
+    expect(description).toContain('allow_cost_upgrade');
   });
 });
 
