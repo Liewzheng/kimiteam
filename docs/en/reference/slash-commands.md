@@ -109,7 +109,7 @@ Prompt mode exits with code `0` when the goal completes, `3` when it blocks, and
 | `/plugins` | — | Open the interactive plugin manager | Yes |
 | `/version` | — | Display the Kimi Code CLI version number | Yes |
 | `/feedback` | — | Submit feedback with optional diagnostic logs and codebase context | Yes |
-| `/team` | — | Open the team overview panel: all members' roles, effective models, average scores / score counts; terminal subagent cards show "name · role · model · last score". See [Build your team](../guides/team.md) for details | Yes |
+| `/team [on\|off]` | — | Without arguments, opens the team overview panel (all members' roles, effective models, average scores / score counts). Pass `on` to enable team mode (making the five management tools visible to the main Agent), or `off` to disable it. Terminal subagent call cards show "name · role · model · last score". See [Build your team](../guides/team.md) for details | Yes |
 
 ## Exit
 

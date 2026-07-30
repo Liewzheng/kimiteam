@@ -178,15 +178,17 @@ ${plugin_sections}
 
 ## Team Management
 
-The main Agent has four built-in management tools that are **available to it alone**, used to autonomously build and orchestrate your AI team. Subagents calling these tools will be rejected — they are there to execute tasks, not manage people.
+The main Agent has five built-in management tools that are **available to it alone**, used to autonomously build and orchestrate your AI team. Subagents calling these tools will be rejected — they are there to execute tasks, not manage people. These five tools are only visible to the main Agent when team mode (`team_mode: true`) is enabled.
 
 - **`TeamHire`** (hire): Tell the main Agent you need "a mail checker" and it decides the name, role, prompt, and writes an agent file to `~/.kimi-code/agents/<name>.md` (user-level by default) or project-level `.kimi-code/agents/` (when scope is specified). If a same-name profile exists, the tool errors instead of silently overwriting. The new member is immediately dispatchable after writing, no restart needed.
 
 - **`TeamFire`** (fire): Delete the corresponding agent file by name; that member stops appearing in dispatch lists. Performance records are retained in persistent storage.
 
-- **`TeamScore`** (score): Score a subagent's work (0–100) with notes. The score is attributed to the model id actually used at scoring time, persisted to `$KIMI_CODE_HOME/agents/performance.json` — grouped by profile name, each entry carrying timestamp, score, note, and the running model id. When a member consistently scores low on a particular model, it signals a poor "member × model" pairing; the main Agent should switch models via `[subagent.model_overrides]` or recommend switching to another available id in your `[models]` list.
+- **`TeamScore`** (score): Score a subagent's work (0–100) with notes. The score is attributed to the model id actually used at scoring time, persisted to `$KIMI_CODE_HOME/agents/performance.json` — grouped by profile name, each entry carrying timestamp, score, note, and the running model id. Shift entries (duration, work summary, model, concurrency) are also recorded automatically to the same file on each subagent completion, helping with scheduling estimates. When a member consistently scores low on a particular model, it signals a poor "member × model" pairing; the main Agent should switch models via `[subagent.model_overrides]` or recommend switching to another available id in your `[models]` list.
 
 - **`TeamMessage`** (deliver): Send a message to a running subagent mid-task. The default is a soft reminder inserted into its current turn; pass `interrupt: true` to cancel the current turn first (equivalent to pressing ESC twice) before injecting the new instruction. If the target agent does not exist, errors with a list of available agents; for already-terminated members, use `Agent resume` instead.
+
+- **`TeamConcurrency`** (concurrency management): View and set the session-level subagent concurrency cap. The runtime setting takes higher priority than `[subagent] max_concurrency` in `config.toml`, but lower than the `KIMI_CODE_AGENT_SWARM_MAX_CONCURRENCY` environment variable.
 
 "Clocking out" = stopping the running instance with `TaskStop`. Members marked `duty: true` require an explicit `TaskStop` from the main Agent — they will not auto-stop on timeout.
 

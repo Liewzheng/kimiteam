@@ -270,6 +270,8 @@ max_output_size = 8192
 | 字段 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | `timeout_ms` | `integer` | `7200000`（2 小时） | 单个子代理（`Agent` / `AgentSwarm`）允许运行的最长时间（毫秒）。超时后子代理以 `timed_out` 收尾。`0` 表示无超时——子代理一直运行到自行结束或被模型手动停止。该值是后台任务管理器对每个子代理任务的 per-task timeout，因此对前台与后台子代理同时生效。在 print 模式（`kimi -p`）下未显式设置时默认为 `0`。注意：超过 `2147483647`（约 24.8 天）的值会被运行时钳到约 24.8 天 |
+| `team_mode` | `boolean` | `false` | 团队模式总开关。关闭时五个管理工具（`TeamHire`、`TeamFire`、`TeamScore`、`TeamMessage`、`TeamConcurrency`）对主 Agent 隐藏。`/team on\|off` 可在终端中切换（写入本字段，下一请求生效）。只门控工具可见性，不影响模型绑定、role、duty 等 |
+| `max_concurrency` | `integer` | 不限制 | session 级子 Agent 并发上限。优先级：环境变量 `KIMI_CODE_AGENT_SWARM_MAX_CONCURRENCY` > 运行时 `TeamConcurrency` 设置 > 本字段。值为 ≥1 的整数 |
 | `model_overrides` | `table` | — | profile 名 → 模型 id 的映射，用于在聊天中按成员覆盖 `model_preference`（优先级低于工具参数传入的具体值，高于 frontmatter `model_preference`）。示例：见下方 |
 
 `timeout_ms` 可被环境变量 `KIMI_SUBAGENT_TIMEOUT_MS` 覆盖，优先级高于配置文件。

@@ -40,17 +40,23 @@ max_context_size = 262144
 
 派出去之后你怎么管？
 
+- **后台默认**：团队模式下，主 Agent 派工默认后台运行——`Agent` 工具的 `run_in_background` 省略即视为 `true`。派工立即返回 task_id，完成结果以系统消息自动送达，主 Agent 不阻塞，随时可与用户沟通。只有显式要求前台等待，才会同步阻塞。
 - **看进度**：用已有 `/tasks`（即 `TaskList`）和 `TaskOutput`，查后台任务的输出与状态。
 - **递话指正**：发现跑偏了？主 Agent 可以用 `TeamMessage` 直接给运行中的子 Agent 递话——默认软提醒插入当前轮次，设 `interrupt: true` 则先取消再注入新指令（效果等同你在终端连按两次 ESC）。
+- **调整并发**：用 `TeamConcurrency` 查看和动态调整 session 并发上限——机器空闲时跑 4 个、紧张时降下来。配合 `config.toml` 的 `[subagent] max_concurrency` 配置，灵活控制团队吞吐。
 - **下班**：用 `TaskStop` 停止运行中实例。`duty: true` 的成员需要主 Agent 主动派 `TaskStop` 才能停——它们自己不会超时自动中断。
 
 ## 绩效：完工评分
 
 任务完成了？主 Agent 会用当前平均分 + 所用模型提醒你打分。你也可以随时用 `TeamScore` 手动评分（0-100 加评语）。
 
-每条评分记录归因到当时所用的模型 id，持久化在 `$KIMI_CODE_HOME/agents/performance.json`——按 profile 名分组、每条包含时间戳、分数、备注和运行模型。当某个成员在当前模型下持续低分时，说明这个"成员 × 模型"搭配不合适，主 Agent 应通过 `[subagent.model_overrides]` 自动换模型或建议你从 `[models]` 列表中换一个试试。
+每条评分记录归因到当时所用的模型 id，持久化在 `$KIMI_CODE_HOME/agents/performance.json`——按 profile 名分组、每条包含时间戳、分数、备注和运行模型。团队模式下，每次子 Agent 任务完成还会自动记录一条工时（时长、工作内容梗概、模型、并发度），与评分一样存在 `performance.json` 中（各 FIFO 50 条），方便你预估排期。开启团队模式后，`Agent` 工具的成员列表里会直接显示每人的平均分。
+
+当某个成员在当前模型下持续低分时，说明这个"成员 × 模型"搭配不合适，主 Agent 应通过 `[subagent.model_overrides]` 自动换模型或建议你从 `[models]` 列表中换一个试试。
 
 ## /team：一目了然
+
+团队模式默认关闭。用 `/team on` 开启后，五个管理工具（`TeamHire`、`TeamFire`、`TeamScore`、`TeamMessage`、`TeamConcurrency`）才对主 Agent 可见。`/team off` 可随时关闭。
 
 在终端输入 `/team`，打开团队总览面板——全员职位、生效模型、平均分和评分次数一览无余。每个子 Agent 的调用卡片也会显示"名字 · 职位 · 模型 · 上次评分"。
 

@@ -178,15 +178,17 @@ ${plugin_sections}
 
 ## 团队管理
 
-主 Agent 拥有四个内置的**仅自己可用**的管理工具，用于自主组建和调度你的 AI 团队。子 Agent 调用这些工具会被拒绝——它们只负责执行任务，不管理人事。
+主 Agent 拥有五个内置的**仅自己可用**的管理工具，用于自主组建和调度你的 AI 团队。子 Agent 调用这些工具会被拒绝——它们只负责执行任务，不管理人事。这五个工具仅在团队模式（`team_mode: true`）开启时才对主 Agent 可见。
 
 - **`TeamHire`**（雇佣）：告诉主 Agent 你需要"一个邮件收发的文员"，它会自主决定名字、职位、提示词并直接写一份 agent 文件到 `~/.kimi-code/agents/<name>.md`（默认用户级）或项目级 `.kimi-code/agents/`（需指定 scope）。同名已存在会报错；写入后立即可派遣，无需重启。
 
 - **`TeamFire`**（解雇）：根据名字删除对应的 agent 文件，该成员不再出现在派工列表中。绩效记录保留在持久化存储中。
 
-- **`TeamScore`**（评分）：给子 Agent 的本次工作打分（0-100）并附评语。评分归因到当时所用的模型 id，持久化在 `$KIMI_CODE_HOME/agents/performance.json`——结构按 profile 名分组、每条记录含轮次时间、分数、备注和实际运行的模型。当某个成员在当前模型下持续低分时，说明该"成员 × 模型"搭配不合适，主 Agent 应通过 `[subagent.model_overrides]` 自动换模型或建议你更换为列表中其他可用的 id。
+- **`TeamScore`**（评分）：给子 Agent 的本次工作打分（0-100）并附评语。评分归因到当时所用的模型 id，持久化在 `$KIMI_CODE_HOME/agents/performance.json`——结构按 profile 名分组、每条记录含轮次时间、分数、备注和实际运行的模型。工时记录由系统自动写入同一文件（每次子 Agent 任务完成记录一条：时长、工作内容梗概、模型、并发度，FIFO 50 条），方便预估排期。当某个成员在当前模型下持续低分时，说明该"成员 × 模型"搭配不合适，主 Agent 应通过 `[subagent.model_overrides]` 自动换模型或建议你更换为列表中其他可用的 id。
 
 - **`TeamMessage`**（递话）：在对话中给运行中的子 Agent 递话。默认是软提醒，插入其当前轮次；设 `interrupt: true` 则先取消当前轮次（等价于你连按两次 ESC 打断）再注入新指令。目标 Agent 不存在时报错并列出当前可用者；已终了的成员改用 `Agent resume` 追加指令。
+
+- **`TeamConcurrency`**（并发管理）：查看和设置 session 级子 Agent 并发上限。运行时设置优先级高于 `config.toml` 的 `[subagent] max_concurrency`，但低于环境变量 `KIMI_CODE_AGENT_SWARM_MAX_CONCURRENCY`。
 
 "下班"= `TaskStop` 停止运行中实例。`duty: true` 的成员需主 Agent 主动派 `TaskStop` 才能下班——它们不会因为超时被自动中断。
 

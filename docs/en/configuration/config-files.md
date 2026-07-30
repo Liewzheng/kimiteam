@@ -270,7 +270,10 @@ In print mode (`kimi -p "<prompt>"`), Kimi Code stays alive after the main agent
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `timeout_ms` | `integer` | `7200000` (2 hours) | Maximum wall-clock time (milliseconds) a single subagent (`Agent` / `AgentSwarm`) is allowed to run before it is settled as `timed_out`. `0` means no timeout — the subagent runs until it finishes or the model stops it. This is the background-task manager's per-task timeout for each subagent task, so it applies to both foreground and background subagents. In print mode (`kimi -p`) the default is `0` unless explicitly set. Note: any value above `2147483647` (about 24.8 days) is clamped to roughly 24.8 days by the runtime |
+| `team_mode` | `boolean` | `false` | Team mode master switch. When off, the five management tools (`TeamHire`, `TeamFire`, `TeamScore`, `TeamMessage`, `TeamConcurrency`) are hidden from the main Agent. `/team on\|off` toggles it from the terminal (writes to this field, takes effect on the next request). Only gates tool visibility — model bindings, role, duty, etc. are unaffected |
+| `max_concurrency` | `integer` | Unlimited | Session-level subagent concurrency cap. Priority: `KIMI_CODE_AGENT_SWARM_MAX_CONCURRENCY` env var > runtime `TeamConcurrency` setting > this field. Must be ≥ 1 when set |
 | `model_overrides` | `table` | — | profile name → model id mapping, used to override `model_preference` per-member during conversation (lower priority than explicit tool parameter, higher than frontmatter `model_preference`). Example: see below |
+
 `timeout_ms` can be overridden by the `KIMI_SUBAGENT_TIMEOUT_MS` environment variable, which takes higher priority than `config.toml`.
 
 ```toml
