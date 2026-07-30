@@ -93,6 +93,8 @@ export interface TeamMemberRow {
   readonly name: string;
   readonly role: string;
   readonly model: string;
+  /** True when model comes from the latest shift's `model` field (last-used). */
+  readonly modelFromLastUse?: boolean;
   readonly avgScore: number | null;
   readonly scoreCount: number;
   readonly avgDurationMs: number | null;
@@ -185,6 +187,11 @@ export function aggregateMemberRows(
    * When omitted, falls back to `profile.modelPreference ?? '—'`.
    */
   resolvedModels?: Readonly<Record<string, string>>,
+  /**
+   * Last-used model ID per profile name (from the latest shift's `model` field).
+   * Takes priority over `resolvedModels`.
+   */
+  lastUsedModels?: Readonly<Record<string, string>>,
 ): TeamMemberRow[] {
   return profiles.map((profile) => {
     const profileData = perf?.[profile.name];
@@ -203,10 +210,16 @@ export function aggregateMemberRows(
         ? shifts.reduce((sum, s) => sum + s.durationMs, 0) / shiftCount
         : null;
 
+    // Last-used model from the latest shift wins, then resolvedModels, then profile default
+    const lastUsed = lastUsedModels?.[profile.name];
+    const resolved = resolvedModels?.[profile.name] ?? profile.modelPreference ?? '—';
+    const model = lastUsed ?? resolved;
+
     return {
       name: profile.name,
       role: profile.role ?? '—',
-      model: resolvedModels?.[profile.name] ?? profile.modelPreference ?? '—',
+      model,
+      modelFromLastUse: lastUsed !== undefined ? true : undefined,
       avgScore,
       scoreCount,
       avgDurationMs,
@@ -430,10 +443,11 @@ export class TeamPanelComponent extends Container implements Focusable {
     }
 
     // Table header
+    const hasDimmedModel = this.opts.members.some((m) => !m.modelFromLastUse);
     const colDefs = [
       { label: 'Name', width: 18 },
       { label: 'Role', width: 16 },
-      { label: 'Model', width: 20 },
+      { label: hasDimmedModel ? 'Model*' : 'Model', width: 20 },
       { label: 'Score', width: 7 },
       { label: '#', width: 4 },
       { label: 'Duration', width: 10 },
@@ -458,7 +472,11 @@ export class TeamPanelComponent extends Container implements Focusable {
       // width so it never pushes subsequent columns out of alignment.
       const roleDisplay = truncateToWidth(member.role, 16, '…');
       const nameDisplay = truncateToWidth(member.name, 18, '…');
-      const modelDisplay = truncateToWidth(member.model, 20, '…');
+      const modelText = truncateToWidth(member.model, 20, '…');
+      // Last-used model is shown directly; resolution-fallback gets a dim style
+      const modelDisplay = member.modelFromLastUse
+        ? modelText
+        : dim(modelText);
       const cells = [
         padToVisibleWidth(nameDisplay, 18),
         padToVisibleWidth(roleDisplay, 16),
@@ -521,7 +539,8 @@ async function showTeamPanel(host: SlashCommandHost): Promise<void> {
     const profiles = readAgentProfiles(dataDir, cwd);
     const perf = readPerformanceData(dataDir);
 
-    // Resolve effective model for each profile
+    // Resolve effective model for each profile.
+    // `fullConfig.secondaryModel` is available on both v1 and v2 engines now.
     const resolvedModels: Record<string, string> = {};
     for (const p of profiles) {
       resolvedModels[p.name] = resolveModelForProfile(
@@ -531,7 +550,21 @@ async function showTeamPanel(host: SlashCommandHost): Promise<void> {
       );
     }
 
-    members = aggregateMemberRows(profiles, perf, resolvedModels);
+    // Compute last-used model for each profile from the latest shift
+    const lastUsedModels: Record<string, string> = {};
+    if (perf !== null) {
+      for (const [profileName, data] of Object.entries(perf)) {
+        const shifts = data?.shifts;
+        if (shifts !== undefined && shifts.length > 0 && typeof shifts[shifts.length - 1]?.model === 'string') {
+          const model = (shifts[shifts.length - 1] as { model?: string }).model;
+          if (model !== undefined && model.length > 0) {
+            lastUsedModels[profileName] = model;
+          }
+        }
+      }
+    }
+
+    members = aggregateMemberRows(profiles, perf, resolvedModels, lastUsedModels);
   } catch (error) {
     loadError = `Could not load team data: ${formatErrorMessage(error)}`;
   }

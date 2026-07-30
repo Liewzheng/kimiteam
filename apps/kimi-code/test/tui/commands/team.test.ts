@@ -314,6 +314,16 @@ describe('resolveModelForProfile', () => {
     };
     expect(resolveModelForProfile('lead', 'secondary', ovConfig)).toBe('claude-sonnet');
   });
+
+  it('resolves "secondary" shortcut when config has secondaryModel (v1 and v2)', () => {
+    // secondaryModel is now available on both v1 and v2 getConfig() results
+    expect(resolveModelForProfile('agent-x', 'secondary', config)).toBe('deepseek/deepseek-v4-flash');
+  });
+
+  it('falls back to raw "secondary" when secondaryModel is absent from config', () => {
+    const noSecondary = { ...config, secondaryModel: undefined };
+    expect(resolveModelForProfile('agent-x', 'secondary', noSecondary)).toBe('secondary');
+  });
 });
 // ===========================================================================
 
@@ -419,6 +429,44 @@ describe('aggregateMemberRows', () => {
     const rows = aggregateMemberRows(profiles, null, {});
     const charlie = rows.find((r) => r.name === 'Charlie');
     expect(charlie!.model).toBe('—');
+  });
+
+  // --- lastUsedModels parameter ---
+
+  it('lastUsedModels takes priority over resolvedModels', () => {
+    const lastUsed = { Alice: 'claude-sonnet-4' };
+    const resolved = { Alice: 'gpt-4o' };
+    const rows = aggregateMemberRows(profiles, null, resolved, lastUsed);
+    expect(rows.find((r) => r.name === 'Alice')!.model).toBe('claude-sonnet-4');
+    expect(rows.find((r) => r.name === 'Alice')!.modelFromLastUse).toBe(true);
+  });
+
+  it('lastUsedModels takes priority over profile modelPreference', () => {
+    const lastUsed = { Bob: 'o3-mini' };
+    const rows = aggregateMemberRows(profiles, null, undefined, lastUsed);
+    expect(rows.find((r) => r.name === 'Bob')!.model).toBe('o3-mini');
+    expect(rows.find((r) => r.name === 'Bob')!.modelFromLastUse).toBe(true);
+  });
+
+  it('falls back to resolvedModels when no lastUsed entry exists', () => {
+    const resolved = { Alice: 'gpt-4o' };
+    const rows = aggregateMemberRows(profiles, null, resolved, {});
+    expect(rows.find((r) => r.name === 'Alice')!.model).toBe('gpt-4o');
+    expect(rows.find((r) => r.name === 'Alice')!.modelFromLastUse).toBeUndefined();
+  });
+
+  it('falls back to modelPreference when neither lastUsed nor resolved exist', () => {
+    const rows = aggregateMemberRows(profiles, null, {}, {});
+    expect(rows.find((r) => r.name === 'Alice')!.model).toBe('gpt-4');
+    expect(rows.find((r) => r.name === 'Alice')!.modelFromLastUse).toBeUndefined();
+  });
+
+  it('sets modelFromLastUse only when lastUsed entry is present', () => {
+    const lastUsed = { Alice: 'claude-sonnet-4' };
+    const resolved = { Alice: 'gpt-4o', Bob: 'o3-mini' };
+    const rows = aggregateMemberRows(profiles, null, resolved, lastUsed);
+    expect(rows.find((r) => r.name === 'Alice')!.modelFromLastUse).toBe(true);
+    expect(rows.find((r) => r.name === 'Bob')!.modelFromLastUse).toBeUndefined();
   });
 });
 

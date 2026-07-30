@@ -99,11 +99,31 @@ const V2_INJECTED_SECTION_DEFAULTS: Record<string, unknown> = {
   loopControl: {},
   background: {},
   mcp: {},
+  secondaryModel: {},
   defaultPlanMode: false,
   mergeAllAvailableSkills: true,
   extraSkillDirs: [],
   subagent: { timeoutMs: 7_200_000 },
 };
+
+/**
+ * Skill names registered only in agent-core-v2 (team features); v1 has no
+ * equivalent concept, so these are excluded from the parity assertion.
+ */
+const V2_ONLY_SKILL_NAMES = new Set(['team-onboarding']);
+
+/**
+ * Tool names registered only in agent-core-v2 (team features); v1 has no
+ * equivalent Team tools, so these are excluded from parity assertion.
+ * Sources: agent-core-v2/src/agent/tools/team-{concurrency,fire,hire,message,score}/
+ */
+const V2_ONLY_TOOL_NAMES = new Set([
+  'TeamConcurrency',
+  'TeamFire',
+  'TeamHire',
+  'TeamMessage',
+  'TeamScore',
+]);
 
 function deepEqual(a: unknown, b: unknown): boolean {
   if (a === b) return true;
@@ -428,6 +448,7 @@ function projectResumedAgent(agent: ResumedAgentState, home: HomePair): unknown 
     const tools = projected['tools'] as readonly Record<string, unknown>[];
     projected['tools'] = tools
       .filter((tool) => tool['name'] !== 'select_tools')
+      .filter((tool) => !V2_ONLY_TOOL_NAMES.has(tool['name'] as string))
       .map((tool) => ({ name: tool['name'], active: tool['active'], source: tool['source'] }))
       .toSorted((a, b) => String(a.name).localeCompare(String(b.name)));
   }
@@ -674,7 +695,9 @@ describe('v1↔v2 return-value parity', () => {
         v1.listWorkspaceSkills(workDir),
         v2.listWorkspaceSkills(workDir),
       ]);
-      expect(normalize(v2Skills, 'name')).toEqual(normalize(v1Skills, 'name'));
+      expect(normalize(v2Skills.filter((s) => !V2_ONLY_SKILL_NAMES.has(s.name)), 'name')).toEqual(
+        normalize(v1Skills, 'name'),
+      );
     } finally {
       await closeAll(v1, v2);
     }
@@ -4482,7 +4505,9 @@ describe('v1↔v2 residual surface parity', () => {
         pair.v2.listSkills({ sessionId: 'session_parity_skills' }),
       ]);
       const project = KNOWN_DIFFS.listSkills;
-      expect(normalize(project(v2Skills, pair.v2Home), 'name')).toEqual(
+      expect(
+        normalize(project(v2Skills.filter((s) => !V2_ONLY_SKILL_NAMES.has(s.name)), pair.v2Home), 'name'),
+      ).toEqual(
         normalize(project(v1Skills, pair.v1Home), 'name'),
       );
       // Non-vacuous: both fixture skills are present on both engines.
