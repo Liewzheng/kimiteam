@@ -471,10 +471,10 @@ describe('SubAgentEventHandler accumulation', () => {
       state: {
         appState: { subAgentUsage: undefined, availableModels: {} },
         ui: { requestRender: vi.fn() },
-        transcriptContainer: { children: [] },
+        transcriptContainer: { children: [], addChild: vi.fn() },
       },
       streamingUI: {
-        getToolComponent: vi.fn(() => toolCall),
+        getToolComponent: vi.fn<(id: string) => typeof toolCall | undefined>(() => toolCall),
         getActiveToolCall: vi.fn(() => undefined),
         onToolCallStart: vi.fn(),
       },
