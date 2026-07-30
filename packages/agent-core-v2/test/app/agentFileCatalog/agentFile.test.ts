@@ -73,12 +73,27 @@ describe('parseAgentFileText', () => {
     expect(def.modelPreference).toBe('primary');
   });
 
-  it('rejects an unsupported model preference', () => {
+  it('accepts an explicit [models] id as model preference', () => {
+    const def = parse(
+      '---\nname: solo\ndescription: d\nmodel_preference: provider/model\n---\n\nbody\n',
+    );
+
+    expect(def.modelPreference).toBe('provider/model');
+  });
+
+  it('rejects a non-string model preference', () => {
     expect(() =>
-      parse(
-        '---\nname: solo\ndescription: d\nmodel_preference: provider/model\n---\n\nbody\n',
-      ),
+      parse('---\nname: solo\ndescription: d\nmodel_preference: 42\n---\n\nbody\n'),
     ).toThrow(/"model_preference"/);
+  });
+
+  it('parses role and duty frontmatter', () => {
+    const def = parse(
+      '---\nname: solo\ndescription: d\nrole: 后端工程师·数据层\nduty: true\n---\n\nbody\n',
+    );
+
+    expect(def.role).toBe('后端工程师·数据层');
+    expect(def.duty).toBe(true);
   });
 
   it('rejects missing frontmatter', () => {

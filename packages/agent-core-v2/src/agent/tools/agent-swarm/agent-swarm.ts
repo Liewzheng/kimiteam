@@ -54,10 +54,16 @@ export const AgentSwarmToolInputSchema = z
         'Map of existing subagent agent_id to the prompt used to resume that subagent. These resumed subagents are launched before new item-based subagents.',
       ),
     model: z
-      .enum(['secondary', 'primary'])
+      .string()
       .optional()
       .describe(
-        'Which model to run the item-spawned subagents on: "secondary" = the configured secondary model; "primary" = the main model you are running on (for hard, quality-sensitive tasks). This explicit choice overrides the selected agent type\'s model_preference; without either, secondary is the default when configured. Only effective when a secondary model is configured; otherwise subagents inherit your model. Resumed subagents always keep their own model.',
+        'Which model to run the item-spawned subagents on: "secondary" = the configured secondary model; "primary" = the main model you are running on (for hard, quality-sensitive tasks); or any explicit [models] id from config.toml (e.g. "local/gemma4-26b") listed under "Available models" in this tool description. This explicit choice overrides the selected agent type\'s model_preference and any [subagent.model_overrides] entry; without either, secondary is the default when configured. Only effective when a secondary model is configured; otherwise subagents inherit your model. Resumed subagents always keep their own model.',
+      ),
+    item_models: z
+      .record(z.string().trim().min(1), z.string().trim().min(1))
+      .optional()
+      .describe(
+        'Map of item string to the model for that item-spawned subagent ("primary" / "secondary" / any [models] id). Every key must exactly match one of the items. Items not listed here use the model parameter / agent type preference / defaults.',
       ),
   })
   .strict();

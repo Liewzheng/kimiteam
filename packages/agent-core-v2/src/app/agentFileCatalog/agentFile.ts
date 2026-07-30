@@ -92,6 +92,8 @@ export function parseAgentFileText(options: ParseAgentFileOptions): AgentFileDef
   const subagents =
     rawSubagents?.length === 1 && rawSubagents[0] === '*' ? undefined : rawSubagents;
   const modelPreference = parseModelPreference(frontmatter['model_preference'], options.path);
+  const role = nonEmptyString(frontmatter['role']);
+  const duty = parseBoolean(frontmatter['duty'], 'duty', options.path);
 
   const prompt = parsed.body.trim();
   if (prompt.length === 0) {
@@ -107,6 +109,8 @@ export function parseAgentFileText(options: ParseAgentFileOptions): AgentFileDef
     disallowedTools,
     subagents,
     modelPreference,
+    role,
+    duty,
     prompt,
     path: options.path,
     source: options.source,
@@ -118,9 +122,12 @@ function parseModelPreference(
   filePath: string,
 ): AgentFileDefinition['modelPreference'] {
   if (value === undefined || value === null) return undefined;
-  if (value === 'primary' || value === 'secondary') return value;
+  // Accepts the symbolic "primary"/"secondary" shortcuts or any explicit
+  // `[models.<id>]` id; the id's validity is checked against the model
+  // catalog when a subagent is spawned, not at parse time.
+  if (typeof value === 'string' && value.trim().length > 0) return value;
   throw new AgentFileParseError(
-    `Frontmatter field "model_preference" in ${filePath} must be "primary" or "secondary"`,
+    `Frontmatter field "model_preference" in ${filePath} must be "primary", "secondary", or a [models] id from config.toml`,
   );
 }
 

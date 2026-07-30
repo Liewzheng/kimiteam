@@ -25,6 +25,10 @@ export interface AgentFileDefinition {
   readonly disallowedTools?: readonly string[];
   readonly subagents?: readonly string[];
   readonly modelPreference?: AgentModelPreference;
+  /** Short job title shown in tool listings and the TUI subagent card. */
+  readonly role?: string;
+  /** On-duty member: its subagent runs are exempt from the subagent timeout. */
+  readonly duty?: boolean;
   readonly prompt: string;
   readonly path: string;
   readonly source: AgentFileSource;

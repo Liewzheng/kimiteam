@@ -36,6 +36,7 @@ import { Error2, ErrorCodes, isError2 } from '#/errors';
 import type { AgentModelPreference } from '#/app/agentProfileCatalog/agentProfileCatalog';
 import type { IFlagService } from '#/app/flag/flag';
 import {
+  MODELS_SECTION,
   SECONDARY_MODEL_ENV,
   SECONDARY_MODEL_SECTION,
 } from '#/app/kosongConfig/configSection';
@@ -58,6 +59,15 @@ export const SUBAGENT_SECTION = 'subagent';
 
 export const SubagentConfigSchema = z.object({
   timeoutMs: z.number().int().min(0).optional(),
+  /**
+   * Per-profile model override: `[subagent.model_overrides]` on disk
+   * (`coder = "local/qwen3.6-35b-a3b"`). Binds newly spawned subagents of the
+   * named profile to the given `[models.<id>]` id, taking precedence over the
+   * profile's `model_preference` and the secondary-model default. An explicit
+   * per-call `model` argument still wins; validity is checked against the
+   * model catalog at spawn time.
+   */
+  modelOverrides: z.record(z.string(), z.string()).optional(),
 });
 
 export type SubagentConfig = z.infer<typeof SubagentConfigSchema>;
@@ -110,12 +120,53 @@ export function resolveSecondaryModel(
   return config.get<SecondaryModelConfig | undefined>(SECONDARY_MODEL_SECTION);
 }
 
+/**
+ * Provenance of a resolved subagent model binding, used by
+ * `wrapSubagentModelError` to point the error message at the right knob.
+ */
+export type SubagentBindingSource =
+  | 'model-param'
+  | 'item-models'
+  | 'model-override'
+  | 'model-preference'
+  | 'secondary'
+  | 'caller';
+
+/** The resolved per-spawn model binding, threaded through swarm tasks. */
+export interface SubagentSpawnBinding {
+  readonly model: string;
+  readonly thinking?: string;
+  readonly source?: SubagentBindingSource;
+}
+
 export function resolveSubagentBinding(
   config: IConfigService,
   flags: IFlagService,
   own: { modelAlias: string; thinkingLevel: string },
   requested?: SubagentModelChoice,
-): { model: string; thinking?: string } {
+  profileName?: string,
+  /** Where `requested` came from; only used for precedence and error provenance. */
+  requestedSource: 'model-param' | 'item-models' | 'model-preference' = 'model-param',
+): { model: string; thinking?: string; source: SubagentBindingSource } {
+  // Precedence: an explicit per-call choice (model parameter / item_models) >
+  // `[subagent.model_overrides]` > the profile's model_preference > the
+  // secondary default > inherit the caller. A choice that arrived via the
+  // profile's model_preference therefore never suppresses the override.
+  const fromTool = requested !== undefined && requestedSource !== 'model-preference';
+  // 1) Per-profile override from `[subagent.model_overrides]`.
+  const override =
+    fromTool || profileName === undefined
+      ? undefined
+      : config.get<SubagentConfig | undefined>(SUBAGENT_SECTION)?.modelOverrides?.[profileName];
+  if (override !== undefined) {
+    return { model: override, source: 'model-override' };
+  }
+  // 2) An explicit `[models.<id>]` id (anything but the symbolic shortcuts)
+  //    binds directly; validity is checked against the catalog at spawn.
+  if (requested !== undefined && requested !== 'primary' && requested !== 'secondary') {
+    return { model: requested, source: requestedSource };
+  }
+  // 3) Secondary default (unless 'primary' was requested), then inherit.
   const secondary = resolveSecondaryModel(config, flags);
   if (requested !== 'primary' && secondary?.model !== undefined) {
     return {
@@ -124,9 +175,15 @@ export function resolveSubagentBinding(
           ? secondary.model
           : SECONDARY_DERIVED_MODEL_ID,
       thinking: secondary.defaultEffort,
+      source: 'secondary',
     };
   }
-  return { model: own.modelAlias, thinking: own.thinkingLevel };
+  return { model: own.modelAlias, thinking: own.thinkingLevel, source: 'caller' };
+}
+
+/** Every configured `[models.<id>]` id, sorted; the explicit-id choices. */
+export function listCatalogModelIds(config: IConfigService): readonly string[] {
+  return Object.keys(config.get<Record<string, unknown> | undefined>(MODELS_SECTION) ?? {}).sort();
 }
 
 export function buildSubagentModelDescriptions(
@@ -134,23 +191,56 @@ export function buildSubagentModelDescriptions(
   flags: IFlagService,
   callerModelAlias: string | undefined,
 ): string | undefined {
+  if (callerModelAlias === undefined) return undefined;
+  const lines: string[] = [];
   const secondaryModel = resolveSecondaryModel(config, flags)?.model;
-  if (secondaryModel === undefined || callerModelAlias === undefined) return undefined;
-  return [
-    'Available models (pass via model):',
-    `- secondary: ${secondaryModel} (default) — the configured secondary model; prefer it for routine subagent tasks`,
-    `- primary: ${callerModelAlias} — the main model you are running on; use it for hard, quality-sensitive subagent tasks`,
-  ].join('\n');
+  if (secondaryModel !== undefined) {
+    lines.push(
+      `- secondary: ${secondaryModel} (default) — the configured secondary model; prefer it for routine subagent tasks`,
+      `- primary: ${callerModelAlias} — the main model you are running on; use it for hard, quality-sensitive subagent tasks`,
+    );
+  }
+  const catalogIds = listCatalogModelIds(config);
+  if (catalogIds.length > 0) {
+    lines.push(`- or any [models] id from config.toml:\n  ${catalogIds.join(', ')}`);
+  }
+  if (lines.length === 0) return undefined;
+  return ['Available models (pass via model):', ...lines].join('\n');
 }
 
 export function wrapSubagentModelError(
   error: unknown,
   boundModel: string,
   callerModelAlias: string | undefined,
+  source: SubagentBindingSource = 'secondary',
+  config?: IConfigService,
 ): unknown {
   if (boundModel === callerModelAlias) return error;
   if (!isError2(error) || error.code !== ErrorCodes.CONFIG_INVALID) return error;
   if (error.details?.['model'] !== boundModel) return error;
+  if (source !== 'secondary') {
+    const origin =
+      source === 'model-override'
+        ? 'comes from [subagent.model_overrides] in config.toml'
+        : source === 'model-preference'
+          ? "comes from the agent type's model_preference"
+          : source === 'item-models'
+            ? 'comes from the item_models parameter'
+            : 'comes from the model parameter';
+    const available =
+      config === undefined
+        ? ''
+        : ` Available [models] ids: ${listCatalogModelIds(config).join(', ')}.`;
+    return new Error2(
+      error.code,
+      `${error.message} (subagent model "${boundModel}" ${origin} — check that it names a valid [models] entry.${available})`,
+      {
+        cause: error,
+        name: error.name,
+        details: { ...error.details, subagentModel: boundModel, subagentModelSource: source },
+      },
+    );
+  }
   const displayModel =
     boundModel === SECONDARY_DERIVED_MODEL_ID
       ? `the derived entry "${SECONDARY_DERIVED_MODEL_ID}"`

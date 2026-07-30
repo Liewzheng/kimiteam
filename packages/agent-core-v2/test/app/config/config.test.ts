@@ -1432,10 +1432,12 @@ describe('subagent config section', () => {
     expect(resolveSubagentBinding(noModel.config, secondaryModelFlags(), own)).toEqual({
       model: 'provider/main',
       thinking: 'medium',
+      source: 'caller',
     });
     expect(resolveSubagentBinding(noModel.config, secondaryModelFlags(), own, 'secondary')).toEqual({
       model: 'provider/main',
       thinking: 'medium',
+      source: 'caller',
     });
     noModel.disposables.dispose();
 
@@ -1445,10 +1447,12 @@ describe('subagent config section', () => {
     expect(resolveSubagentBinding(withModel.config, secondaryModelFlags(), own)).toEqual({
       model: 'provider/secondary',
       thinking: undefined,
+      source: 'secondary',
     });
     expect(resolveSubagentBinding(withModel.config, secondaryModelFlags(), own, 'primary')).toEqual({
       model: 'provider/main',
       thinking: 'medium',
+      source: 'caller',
     });
     withModel.disposables.dispose();
 
@@ -1461,11 +1465,13 @@ describe('subagent config section', () => {
     expect(resolveSubagentBinding(withEffort.config, secondaryModelFlags(), own)).toEqual({
       model: SECONDARY_DERIVED_MODEL_ID,
       thinking: 'low',
+      source: 'secondary',
     });
     // default_effort only applies together with the secondary model.
     expect(resolveSubagentBinding(withEffort.config, secondaryModelFlags(), own, 'primary')).toEqual({
       model: 'provider/main',
       thinking: 'medium',
+      source: 'caller',
     });
     withEffort.disposables.dispose();
 
@@ -1476,6 +1482,7 @@ describe('subagent config section', () => {
     expect(resolveSubagentBinding(withFactPatch.config, secondaryModelFlags(), own)).toEqual({
       model: SECONDARY_DERIVED_MODEL_ID,
       thinking: undefined,
+      source: 'secondary',
     });
     withFactPatch.disposables.dispose();
   });
@@ -1490,6 +1497,83 @@ describe('subagent config section', () => {
     expect(resolveSubagentBinding(config, secondaryModelFlags(false), own)).toEqual({
       model: 'provider/main',
       thinking: 'medium',
+      source: 'caller',
+    });
+
+    disposables.dispose();
+  });
+
+  it('binds an explicit [models] id directly, ahead of overrides and the secondary default', async () => {
+    const own = { modelAlias: 'provider/main', thinkingLevel: 'medium' };
+    const { config, disposables } = await createConfig(
+      {},
+      '[secondary_model]\nmodel = "provider/secondary"\n\n[subagent.model_overrides]\ncoder = "provider/override"\n',
+    );
+
+    // Tool-sourced explicit id wins over both the override and the secondary default.
+    expect(
+      resolveSubagentBinding(config, secondaryModelFlags(), own, 'provider/explicit', 'coder'),
+    ).toEqual({ model: 'provider/explicit', source: 'model-param' });
+    // A preference-sourced explicit id binds directly when no override targets the profile.
+    expect(
+      resolveSubagentBinding(
+        config,
+        secondaryModelFlags(),
+        own,
+        'provider/explicit',
+        'explore',
+        'model-preference',
+      ),
+    ).toEqual({ model: 'provider/explicit', source: 'model-preference' });
+    // …but loses to an override on the same profile (override > model_preference).
+    expect(
+      resolveSubagentBinding(
+        config,
+        secondaryModelFlags(),
+        own,
+        'provider/explicit',
+        'coder',
+        'model-preference',
+      ),
+    ).toEqual({ model: 'provider/override', source: 'model-override' });
+
+    disposables.dispose();
+  });
+
+  it('applies [subagent.model_overrides] per profile, behind tool-sourced requests', async () => {
+    const own = { modelAlias: 'provider/main', thinkingLevel: 'medium' };
+    const { config, disposables } = await createConfig(
+      {},
+      '[secondary_model]\nmodel = "provider/secondary"\n\n[subagent.model_overrides]\ncoder = "provider/override"\n',
+    );
+
+    // Override beats the profile preference and the secondary default…
+    expect(resolveSubagentBinding(config, secondaryModelFlags(), own, undefined, 'coder')).toEqual({
+      model: 'provider/override',
+      source: 'model-override',
+    });
+    expect(
+      resolveSubagentBinding(config, secondaryModelFlags(), own, 'secondary', 'coder', 'model-preference'),
+    ).toEqual({
+      model: 'provider/override',
+      source: 'model-override',
+    });
+    // …but any tool-sourced choice suppresses it…
+    expect(resolveSubagentBinding(config, secondaryModelFlags(), own, 'primary', 'coder')).toEqual({
+      model: 'provider/main',
+      thinking: 'medium',
+      source: 'caller',
+    });
+    expect(resolveSubagentBinding(config, secondaryModelFlags(), own, 'secondary', 'coder')).toEqual({
+      model: 'provider/secondary',
+      thinking: undefined,
+      source: 'secondary',
+    });
+    // …and other profiles are unaffected.
+    expect(resolveSubagentBinding(config, secondaryModelFlags(), own, undefined, 'explore')).toEqual({
+      model: 'provider/secondary',
+      thinking: undefined,
+      source: 'secondary',
     });
 
     disposables.dispose();

@@ -38,7 +38,12 @@ import type { ISessionProcessRunner } from '#/session/process/processRunner';
 
 export const DEFAULT_AGENT_PROFILE_NAME = 'agent';
 
-export type AgentModelPreference = 'primary' | 'secondary';
+/**
+ * Model selection for a spawned subagent: the symbolic `'primary'` /
+ * `'secondary'` shortcuts, or any explicit `[models.<id>]` id from the config
+ * catalog (validated against `IModelCatalog` at spawn time).
+ */
+export type AgentModelPreference = 'primary' | 'secondary' | (string & {});
 
 export interface AgentProfilePromptPrefixContext {
   readonly cwd: string;
@@ -78,6 +83,10 @@ export interface AgentProfile {
   readonly disallowedTools?: readonly string[];
   readonly subagents?: readonly string[];
   readonly modelPreference?: AgentModelPreference;
+  /** Short job title shown in tool listings and the TUI subagent card. */
+  readonly role?: string;
+  /** On-duty member: its subagent runs are exempt from the subagent timeout. */
+  readonly duty?: boolean;
   systemPrompt(context: AgentProfileContext): string;
   readonly promptPrefix?: (ctx: AgentProfilePromptPrefixContext) => Promise<string>;
   readonly summaryPolicy?: AgentProfileSummaryPolicy;

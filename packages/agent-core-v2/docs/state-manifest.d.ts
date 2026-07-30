@@ -187,7 +187,9 @@ export interface SessionStateSnapshot {
         readonly tools?: readonly string[];
         readonly disallowedTools?: readonly string[];
         readonly subagents?: readonly string[];
-        readonly modelPreference?: 'primary' | 'secondary';
+        readonly modelPreference?: 'primary' | 'secondary' | (string & {});
+        readonly role?: string;
+        readonly duty?: boolean;
         systemPrompt: (context: /* AgentProfileContext — packages/agent-core-v2/src/app/agentProfileCatalog/agentProfileCatalog.ts */ {
           readonly cwd?: string;
           readonly cwdListing?: string;
@@ -254,7 +256,9 @@ export interface SessionStateSnapshot {
     readonly tools?: readonly string[];
     readonly disallowedTools?: readonly string[];
     readonly subagents?: readonly string[];
-    readonly modelPreference?: 'primary' | 'secondary';
+    readonly modelPreference?: 'primary' | 'secondary' | (string & {});
+    readonly role?: string;
+    readonly duty?: boolean;
     systemPrompt: (context: /* AgentProfileContext — packages/agent-core-v2/src/app/agentProfileCatalog/agentProfileCatalog.ts */ {
       readonly cwd?: string;
       readonly cwdListing?: string;
@@ -1025,7 +1029,7 @@ export interface AgentStateSnapshot {
       };
       readonly maxOutputSize: number | undefined;
       readonly alwaysThinking: boolean | undefined;
-      readonly thinkingLevel: /* ThinkingEffort — packages/agent-core-v2/src/kosong/contract/provider.ts */ 'off' | 'on' | (string & {});
+      readonly thinkingLevel: /* ThinkingEffort — packages/agent-core-v2/src/kosong/contract/provider.ts */ (string & {}) | 'off' | 'on';
       readonly reservedContextSize: number | undefined;
       readonly compactionTriggerRatio: number | undefined;
     };
@@ -1035,7 +1039,7 @@ export interface AgentStateSnapshot {
         readonly temperature?: number;
         readonly topP?: number;
       };
-      readonly thinkingEffort?: 'off' | 'on' | (string & {});
+      readonly thinkingEffort?: (string & {}) | 'off' | 'on';
       readonly thinkingKeep?: string;
       readonly maxCompletionTokens?: number;
       readonly usedContextTokens?: number;

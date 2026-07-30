@@ -10,7 +10,8 @@
  * `disallowedTools` passes through as the denylist evaluated by
  * `IAgentToolPolicyService`; `subagents` passes through as the delegation
  * allowlist enforced by the `Agent` / `AgentSwarm` tools; `model_preference`
- * becomes the symbolic default those tools use when spawning the profile.
+ * becomes the model preference (the symbolic "primary"/"secondary" shortcuts
+ * or an explicit `[models]` id) those tools use when spawning the profile.
  */
 
 import type {
@@ -37,6 +38,8 @@ export function agentProfileFromFile(
     disallowedTools: definition.disallowedTools,
     subagents: definition.subagents,
     modelPreference: definition.modelPreference,
+    role: definition.role,
+    duty: definition.duty,
     systemPrompt: (context) =>
       renderPromptTemplate(definition.prompt, context, { skillActive }, basePrompt),
   };

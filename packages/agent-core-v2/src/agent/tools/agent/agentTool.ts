@@ -220,6 +220,24 @@ export class SubagentTool implements ISubagentTool {
     return target.accessor.get(IAgentProfileService).data().profileName;
   }
 
+  /**
+   * Whether the target profile is an on-duty member (`duty: true` in its
+   * agent file): its subagent runs are exempt from the subagent timeout and
+   * must be stopped explicitly (TaskStop) when they go off duty.
+   */
+  private async isDutyProfile(
+    requestedProfileName: string | undefined,
+    resumeAgentId: string | undefined,
+  ): Promise<boolean> {
+    await this.catalog.ready;
+    const profileName =
+      resumeAgentId !== undefined && resumeAgentId.length > 0
+        ? this.resumeProfileName(resumeAgentId)
+        : (requestedProfileName ?? DEFAULT_PROFILE_NAME);
+    if (profileName === undefined) return false;
+    return this.catalog.get(profileName)?.duty === true;
+  }
+
   private async launch(
     args: SubagentToolInput,
     toolCallId: string,
@@ -267,6 +285,8 @@ export class SubagentTool implements ISubagentTool {
         this.flags,
         { modelAlias: own.modelAlias, thinkingLevel: own.thinkingLevel },
         args.model ?? profile.modelPreference,
+        profile.name,
+        args.model !== undefined ? 'model-param' : 'model-preference',
       );
       let created: IAgentScopeHandle;
       try {
@@ -281,7 +301,7 @@ export class SubagentTool implements ISubagentTool {
           labels: subagentLabels(this.callerAgentId),
         });
       } catch (error) {
-        throw wrapSubagentModelError(error, binding.model, own.modelAlias);
+        throw wrapSubagentModelError(error, binding.model, own.modelAlias, binding.source, this.config);
       }
       created.accessor.get(IAgentPermissionModeService).setMode(this.permissionMode.mode);
       created.accessor
@@ -359,7 +379,9 @@ export class SubagentTool implements ISubagentTool {
       if (runInBackground && !allowBackground) {
         return { output: BACKGROUND_AGENT_UNAVAILABLE, isError: true };
       }
-      const timeoutMs = resolveSubagentTimeoutMs(this.config);
+      const timeoutMs = (await this.isDutyProfile(requestedProfileName, resumeAgentId))
+        ? undefined
+        : resolveSubagentTimeoutMs(this.config);
 
       const controller = new AbortController();
       const abortBeforeRegister = (): void => {
@@ -438,7 +460,7 @@ export class SubagentTool implements ISubagentTool {
   private async formatForegroundResult(
     taskId: string,
     handle: SubagentHandle,
-    timeoutMs: number,
+    timeoutMs: number | undefined,
   ): Promise<ExecutableToolResult> {
     const info = this.tasks.getTask(taskId);
     if (info?.status === 'completed') {
@@ -447,9 +469,10 @@ export class SubagentTool implements ISubagentTool {
       };
     }
     const timedOut = info?.status === 'timed_out';
-    const message = timedOut
-      ? `Agent timed out after ${formatSubagentTimeoutDescription(timeoutMs)}.`
-      : formatSubagentStoppedMessage(info?.stopReason);
+    const message =
+      timedOut && timeoutMs !== undefined
+        ? `Agent timed out after ${formatSubagentTimeoutDescription(timeoutMs)}.`
+        : formatSubagentStoppedMessage(info?.stopReason);
     return {
       output: formatForegroundAgentFailure(handle, message, timedOut),
       isError: true,
@@ -475,7 +498,12 @@ function buildProfileDescriptions(
       const details = [profile.description, profile.whenToUse].filter(
         (part): part is string => part !== undefined && part.length > 0,
       );
-      const header = details.length === 0 ? `- ${profile.name}` : `- ${profile.name}: ${details.join(' ')}`;
+      const roleSuffix = profile.role === undefined ? '' : ` — ${profile.role}`;
+      const dutySuffix = profile.duty === true ? ' [duty: no timeout; stop via TaskStop]' : '';
+      const header =
+        details.length === 0
+          ? `- ${profile.name}${roleSuffix}${dutySuffix}`
+          : `- ${profile.name}${roleSuffix}${dutySuffix}: ${details.join(' ')}`;
       const headerLines =
         !showModelPreferences || profile.modelPreference === undefined
           ? header

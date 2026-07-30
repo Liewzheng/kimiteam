@@ -379,8 +379,8 @@ describe('AgentSwarmTool', () => {
     ).toBe(
       'Subagent type used for every new subagent spawned from items; defaults to coder when omitted. Resumed subagents always keep their original type, so passing subagent_type together with resume_agent_ids is allowed — it only affects the item-based spawns.',
     );
-    expect(Object.keys(tool.parameters['properties'] as Record<string, unknown>).at(-1)).toBe(
-      'model',
+    expect(Object.keys(tool.parameters['properties'] as Record<string, unknown>)).toEqual(
+      expect.arrayContaining(['model', 'item_models']),
     );
 
     const result = await executeTool(tool, context(input));
@@ -818,8 +818,8 @@ describe('AgentSwarmTool', () => {
     expect(host.swarmService.run).toHaveBeenCalledWith(
       expect.objectContaining({
         tasks: [
-          expect.objectContaining({ binding: { model: SECONDARY_DERIVED_MODEL_ID, thinking: 'low' } }),
-          expect.objectContaining({ binding: { model: SECONDARY_DERIVED_MODEL_ID, thinking: 'low' } }),
+          expect.objectContaining({ binding: { model: SECONDARY_DERIVED_MODEL_ID, thinking: 'low', source: 'secondary' } }),
+          expect.objectContaining({ binding: { model: SECONDARY_DERIVED_MODEL_ID, thinking: 'low', source: 'secondary' } }),
         ],
       }),
     );
@@ -848,8 +848,8 @@ describe('AgentSwarmTool', () => {
     expect(host.swarmService.run).toHaveBeenCalledWith(
       expect.objectContaining({
         tasks: [
-          expect.objectContaining({ binding: { model: 'main-model', thinking: 'high' } }),
-          expect.objectContaining({ binding: { model: 'main-model', thinking: 'high' } }),
+          expect.objectContaining({ binding: { model: 'main-model', thinking: 'high', source: 'caller' } }),
+          expect.objectContaining({ binding: { model: 'main-model', thinking: 'high', source: 'caller' } }),
         ],
       }),
     );

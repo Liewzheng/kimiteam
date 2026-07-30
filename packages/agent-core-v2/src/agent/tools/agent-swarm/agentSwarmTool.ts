@@ -45,6 +45,7 @@ import {
   buildSubagentModelDescriptions,
   resolveSubagentBinding,
   resolveSubagentTimeoutMs,
+  type SubagentSpawnBinding,
 } from '#/session/subagent/configSection';
 import {
   AgentSwarmToolInputSchema,
@@ -152,7 +153,9 @@ export class AgentSwarmTool implements IAgentSwarmTool {
     toolCallId: string,
   ): Promise<string> {
     const profileName = normalizeOptionalString(args.subagent_type) ?? DEFAULT_SUBAGENT_TYPE;
-    let binding: { model: string; thinking?: string } | undefined;
+    let spawnDuty = false;
+    let resolveBindingFor: (item: string) => SubagentSpawnBinding | undefined =
+      () => undefined;
     if ((args.items?.length ?? 0) > 0) {
       await this.catalog.ready;
       const own = this.profile.data();
@@ -164,13 +167,33 @@ export class AgentSwarmTool implements IAgentSwarmTool {
       if (targetProfile === undefined) {
         throw new Error(`Unknown agent type: "${profileName}"`);
       }
-      if (own.modelAlias !== undefined) {
-        binding = resolveSubagentBinding(
-          this.config,
-          this.flags,
-          { modelAlias: own.modelAlias, thinkingLevel: own.thinkingLevel },
-          args.model ?? targetProfile.modelPreference,
-        );
+      // On-duty members (`duty: true`) are exempt from the subagent timeout;
+      // they go off duty via an explicit TaskStop.
+      spawnDuty = targetProfile.duty === true;
+      const itemModels = args.item_models ?? {};
+      for (const key of Object.keys(itemModels)) {
+        if (!args.items!.includes(key)) {
+          throw new Error(`item_models key "${key}" does not match any item.`);
+        }
+      }
+      const callerModelAlias = own.modelAlias;
+      if (callerModelAlias !== undefined) {
+        resolveBindingFor = (item) => {
+          const perItem = itemModels[item];
+          const binding = resolveSubagentBinding(
+            this.config,
+            this.flags,
+            { modelAlias: callerModelAlias, thinkingLevel: own.thinkingLevel },
+            perItem ?? args.model ?? targetProfile.modelPreference,
+            targetProfile.name,
+            perItem !== undefined
+              ? 'item-models'
+              : args.model !== undefined
+                ? 'model-param'
+                : 'model-preference',
+          );
+          return binding;
+        };
       }
     }
     const timeoutMs = resolveSubagentTimeoutMs(this.config);
@@ -189,19 +212,20 @@ export class AgentSwarmTool implements IAgentSwarmTool {
         runInBackground: false,
         swarmItem: spec.item,
         signal,
-        timeout: timeoutMs,
       };
       if (spec.kind === 'resume') {
         return {
           ...common,
           kind: 'resume' as const,
           resumeAgentId: spec.agentId,
+          timeout: timeoutMs,
         };
       }
       return {
         ...common,
         kind: 'spawn' as const,
-        binding,
+        binding: resolveBindingFor(spec.item),
+        timeout: spawnDuty ? undefined : timeoutMs,
       };
     });
     const results = await this.swarmService.run({

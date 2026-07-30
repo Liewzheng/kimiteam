@@ -43,6 +43,12 @@ export type ToolInputDisplay =
       agent_name: string;
       prompt: string;
       background?: boolean | undefined;
+      /** Job title from the profile's agent file (`role` frontmatter). */
+      role?: string | undefined;
+      /** The model id the subagent is bound to. */
+      model?: string | undefined;
+      /** Latest performance score (0-100) recorded for this profile, if any. */
+      lastScore?: number | undefined;
     }
   | {
       kind: 'skill_call';
