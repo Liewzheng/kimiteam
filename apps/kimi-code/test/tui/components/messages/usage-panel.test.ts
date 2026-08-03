@@ -1,11 +1,12 @@
 import { visibleWidth } from '@moonshot-ai/pi-tui';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { buildSubAgentUsageSection, buildUsageReportLines, UsagePanelComponent } from '#/tui/components/messages/usage-panel';
+import { buildSubAgentUsageSection, buildUsageReportLines, normalizeSubAgentUsageModelKeys, UsagePanelComponent } from '#/tui/components/messages/usage-panel';
 import { AgentSwarmProgressComponent } from '#/tui/components/messages/agent-swarm-progress';
 import { SubAgentEventHandler } from '#/tui/controllers/subagent-event-handler';
 import { MAIN_AGENT_ID } from '#/tui/constant/kimi-tui';
 import { currentTheme, darkColors, lightColors } from '#/tui/theme';
+import type { SubAgentUsage } from '#/tui/types';
 
 afterEach(() => {
   currentTheme.setPalette(darkColors);
@@ -441,6 +442,111 @@ describe('buildSubAgentUsageSection', () => {
     // Only the model row, no member sub-rows for zero usage
     expect(lines).toHaveLength(1);
     expect(lines[0]).toContain('gpt-4o');
+  });
+
+  it('shows the real secondary model id for the derived __secondary__ bucket', () => {
+    const usage: SubAgentUsage = {
+      runs: 2,
+      byModel: {
+        __secondary__: { inputOther: 1500, output: 300, inputCacheRead: 500, inputCacheCreation: 100 },
+      },
+      byMember: {
+        'agent-alpha': { __secondary__: { inputOther: 900, output: 180, inputCacheRead: 300, inputCacheCreation: 60 } },
+        'agent-beta': { __secondary__: { inputOther: 600, output: 120, inputCacheRead: 200, inputCacheCreation: 40 } },
+      },
+    };
+
+    const lines = buildSubAgentUsageSection(normalizeSubAgentUsageModelKeys(usage, 'k2'), noop, noop);
+
+    // One real-id model row + two member sub-rows; the alias never surfaces.
+    expect(lines).toHaveLength(3);
+    expect(lines[0]).toContain('k2');
+    expect(lines[0]).not.toContain('__secondary__');
+    expect(lines[1]).toContain('agent-alpha');
+    expect(lines[2]).toContain('agent-beta');
+  });
+});
+
+describe('normalizeSubAgentUsageModelKeys', () => {
+  const row = (
+    inputOther: number,
+    output = 0,
+    inputCacheRead = 0,
+    inputCacheCreation = 0,
+  ): { inputOther: number; output: number; inputCacheRead: number; inputCacheCreation: number } => ({
+    inputOther,
+    output,
+    inputCacheRead,
+    inputCacheCreation,
+  });
+
+  it('maps the derived __secondary__ buckets to the real secondary model id', () => {
+    const usage: SubAgentUsage = {
+      runs: 2,
+      byModel: { __secondary__: row(1500, 300, 500, 100) },
+      byMember: {
+        'agent-alpha': { __secondary__: row(900, 180, 300, 60) },
+        'agent-beta': { __secondary__: row(600, 120, 200, 40) },
+      },
+    };
+
+    const normalized = normalizeSubAgentUsageModelKeys(usage, 'k2');
+
+    expect(normalized).toEqual({
+      runs: 2,
+      byModel: { k2: row(1500, 300, 500, 100) },
+      byMember: {
+        'agent-alpha': { k2: row(900, 180, 300, 60) },
+        'agent-beta': { k2: row(600, 120, 200, 40) },
+      },
+    });
+  });
+
+  it('merges two derived-secondary agents into one real model bucket', () => {
+    const usage: SubAgentUsage = {
+      runs: 3,
+      byModel: {
+        __secondary__: row(1000, 200, 400, 100),
+        k2: row(500, 100, 200, 50),
+      },
+      byMember: {
+        'agent-alpha': { __secondary__: row(600, 120, 240, 60) },
+        'agent-beta': { k2: row(500, 100, 200, 50) },
+      },
+    };
+
+    const normalized = normalizeSubAgentUsageModelKeys(usage, 'k2');
+
+    // Derived + literal real-id usage collide into a single k2 bucket.
+    expect(normalized?.byModel).toEqual({ k2: row(1500, 300, 600, 150) });
+    expect(normalized?.byMember['agent-alpha']).toEqual({ k2: row(600, 120, 240, 60) });
+    expect(normalized?.byMember['agent-beta']).toEqual({ k2: row(500, 100, 200, 50) });
+  });
+
+  it('keeps the original keys when the real secondary id is unavailable', () => {
+    const usage: SubAgentUsage = {
+      runs: 1,
+      byModel: { __secondary__: row(100, 20, 30, 10) },
+      byMember: { 'agent-alpha': { __secondary__: row(100, 20, 30, 10) } },
+    };
+
+    for (const id of [undefined, '', '__secondary__']) {
+      expect(normalizeSubAgentUsageModelKeys(usage, id)).toBe(usage);
+    }
+  });
+
+  it('returns undefined for undefined usage', () => {
+    expect(normalizeSubAgentUsageModelKeys(undefined, 'k2')).toBeUndefined();
+  });
+
+  it('leaves non-secondary buckets untouched', () => {
+    const usage: SubAgentUsage = {
+      runs: 1,
+      byModel: { 'gpt-4o': row(1000, 200, 500, 100) },
+      byMember: { 'agent-alpha': { 'gpt-4o': row(1000, 200, 500, 100) } },
+    };
+
+    expect(normalizeSubAgentUsageModelKeys(usage, 'k2')).toBe(usage);
   });
 });
 

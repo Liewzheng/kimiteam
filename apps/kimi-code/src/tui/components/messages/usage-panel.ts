@@ -24,6 +24,13 @@ const LEFT_MARGIN = 2;
 const SIDE_PADDING = 1;
 const BOX_OVERHEAD = LEFT_MARGIN + 2 + 2 * SIDE_PADDING;
 
+/**
+ * Engine-internal derived alias for a subagent bound to the `[secondary_model]`
+ * recipe — a runtime artifact, never a user-visible model id. The usage panel
+ * resolves it to the real id (`secondaryModel.model`) before rendering.
+ */
+const SECONDARY_DERIVED_MODEL_ALIAS = '__secondary__';
+
 type Colorize = (text: string) => string;
 
 export interface ManagedUsageWindow {
@@ -136,6 +143,73 @@ function buildSessionUsageSection(
     );
   }
   return lines;
+}
+
+/**
+ * Normalize the derived secondary alias in subagent usage buckets before the
+ * panel renders. The engine records every subagent bound to the
+ * `[secondary_model]` recipe under the synthesized `__secondary__` alias; this
+ * resolves that alias to the real id the recipe points at
+ * (`secondaryModel.model`), merging any bucket that would collide so all
+ * derived-secondary agents aggregate into the real model row. Member
+ * breakdowns stay keyed by member name and are untouched. When the real id is
+ * unavailable, the original keys are kept verbatim.
+ */
+export function normalizeSubAgentUsageModelKeys(
+  usage: SubAgentUsage | undefined,
+  secondaryModelId: string | undefined,
+): SubAgentUsage | undefined {
+  if (
+    usage === undefined ||
+    secondaryModelId === undefined ||
+    secondaryModelId.length === 0 ||
+    secondaryModelId === SECONDARY_DERIVED_MODEL_ALIAS
+  ) {
+    return usage;
+  }
+  if (!hasDerivedSecondaryKey(usage)) return usage;
+  return {
+    byModel: normalizeModelBucket(usage.byModel, secondaryModelId),
+    byMember: Object.fromEntries(
+      Object.entries(usage.byMember).map(([memberName, bucket]) => [
+        memberName,
+        normalizeModelBucket(bucket, secondaryModelId),
+      ]),
+    ),
+    runs: usage.runs,
+  };
+}
+
+function hasDerivedSecondaryKey(usage: SubAgentUsage): boolean {
+  if (SECONDARY_DERIVED_MODEL_ALIAS in usage.byModel) return true;
+  for (const bucket of Object.values(usage.byMember)) {
+    if (SECONDARY_DERIVED_MODEL_ALIAS in bucket) return true;
+  }
+  return false;
+}
+
+/** Remap a model→usage bucket, merging entries that collide on the real id. */
+function normalizeModelBucket(
+  bucket: Record<string, TokenUsage>,
+  secondaryModelId: string,
+): Record<string, TokenUsage> {
+  if (!(SECONDARY_DERIVED_MODEL_ALIAS in bucket)) return bucket;
+  const out: Record<string, TokenUsage> = {};
+  for (const [model, row] of Object.entries(bucket)) {
+    const key = model === SECONDARY_DERIVED_MODEL_ALIAS ? secondaryModelId : model;
+    const merged = out[key];
+    out[key] = merged === undefined ? { ...row } : addTokenUsage(merged, row);
+  }
+  return out;
+}
+
+function addTokenUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
+  return {
+    inputOther: usageNumber(a.inputOther) + usageNumber(b.inputOther),
+    output: usageNumber(a.output) + usageNumber(b.output),
+    inputCacheRead: usageNumber(a.inputCacheRead) + usageNumber(b.inputCacheRead),
+    inputCacheCreation: usageNumber(a.inputCacheCreation) + usageNumber(b.inputCacheCreation),
+  };
 }
 
 export function buildSubAgentUsageSection(

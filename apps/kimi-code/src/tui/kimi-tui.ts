@@ -791,6 +791,7 @@ export class KimiTUI {
             id: startup.sessionFlag,
             additionalDirs: createSessionOptions.additionalDirs,
             replayTurnLimit: REPLAY_TURN_LIMIT,
+            includeSubagents: true,
           });
           shouldReplayHistory = true;
         } else {
@@ -801,6 +802,7 @@ export class KimiTUI {
               id: target.id,
               additionalDirs: createSessionOptions.additionalDirs,
               replayTurnLimit: REPLAY_TURN_LIMIT,
+              includeSubagents: true,
             });
             shouldReplayHistory = true;
           } else {
@@ -1751,6 +1753,7 @@ export class KimiTUI {
       session = await this.harness.resumeSession({
         id: targetSessionId,
         replayTurnLimit: REPLAY_TURN_LIMIT,
+        includeSubagents: true,
       });
     } catch (error) {
       const msg = formatErrorMessage(error);

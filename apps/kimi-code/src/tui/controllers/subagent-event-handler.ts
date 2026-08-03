@@ -690,6 +690,22 @@ export class SubAgentEventHandler {
     this.host.state.ui.requestRender();
   }
 
+  /**
+   * Seed the per-agent last-seen snapshot from a resumed subagent's cumulative
+   * byModel. Session replay restores usage straight into the accumulator, so a
+   * later live `agent.status.updated` for the same agent must only add the
+   * delta beyond the restored usage — without a seeded baseline the full
+   * byModel would be treated as new and double-counted. Mirrors the
+   * shallow-copy snapshot semantics of `accumulateSubAgentUsage`.
+   */
+  seedLastUsageByAgent(agentId: string, byModel: Record<string, TokenUsage>): void {
+    const snapshot: Record<string, TokenUsage> = {};
+    for (const [model, usage] of Object.entries(byModel)) {
+      snapshot[model] = { ...usage };
+    }
+    this.lastUsageByAgent.set(agentId, snapshot);
+  }
+
   /** Diff `currentByModel` against the last snapshot for agentId, accumulate deltas.
    *  Stores a shallow copy of the incoming byModel as the new snapshot so that
    *  even if the source object is later mutated the next delta stays correct. */

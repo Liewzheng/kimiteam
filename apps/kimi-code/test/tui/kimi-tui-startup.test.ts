@@ -311,6 +311,7 @@ describe('KimiTUI startup', () => {
     expect(harness.resumeSession).toHaveBeenCalledWith({
       id: 'ses-latest',
       replayTurnLimit: REPLAY_TURN_LIMIT,
+      includeSubagents: true,
     });
     expect(harness.createSession).not.toHaveBeenCalled();
     expect(driver.state.startupState).toBe('ready');
@@ -1539,6 +1540,7 @@ describe('KimiTUI startup', () => {
     expect(harness.resumeSession).toHaveBeenCalledWith({
       id: 'ses-latest',
       replayTurnLimit: REPLAY_TURN_LIMIT,
+      includeSubagents: true,
     });
     expect(harness.createSession).not.toHaveBeenCalled();
     expect(driver.state.startupState).toBe('ready');
@@ -1559,6 +1561,7 @@ describe('KimiTUI startup', () => {
     expect(harness.resumeSession).toHaveBeenCalledWith({
       id: 'ses-target',
       replayTurnLimit: REPLAY_TURN_LIMIT,
+      includeSubagents: true,
     });
     expect(driver.state.startupState).toBe('ready');
     expect(driver.state.appState.sessionId).toBe('');
@@ -1816,6 +1819,7 @@ describe('KimiTUI startup', () => {
     expect(harness.resumeSession).toHaveBeenCalledWith({
       id: 'ses-target',
       replayTurnLimit: REPLAY_TURN_LIMIT,
+      includeSubagents: true,
     });
     expect(driver.state.appState.sessionId).toBe('ses-target');
   });

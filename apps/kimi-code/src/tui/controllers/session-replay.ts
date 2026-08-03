@@ -6,6 +6,7 @@ import type {
   PromptOrigin,
   ResumedAgentState,
   Session,
+  TokenUsage,
   ToolCall,
 } from '@moonshot-ai/kimi-code-sdk';
 
@@ -13,6 +14,7 @@ import { ToolCallComponent } from '../components/messages/tool-call';
 import { ReplayTurnBoundaryComponent } from '../components/messages/user-message';
 import { currentTheme } from '../theme';
 import type { TodoItem } from '../components/chrome/todo-panel';
+import { MAIN_AGENT_ID } from '../constant/kimi-tui';
 import type {
   AppState,
   BackgroundAgentMetadata,
@@ -80,19 +82,33 @@ function unescapeBashXml(text: string): string {
     .replaceAll('&amp;', '&');
 }
 
+/** Sum a resumed subagent's token row into an existing bucket entry (copy on first add). */
+function addTokenUsage(a: TokenUsage | undefined, b: TokenUsage): TokenUsage {
+  return a === undefined
+    ? { ...b }
+    : {
+        inputOther: a.inputOther + b.inputOther,
+        output: a.output + b.output,
+        inputCacheRead: a.inputCacheRead + b.inputCacheRead,
+        inputCacheCreation: a.inputCacheCreation + b.inputCacheCreation,
+      };
+}
+
 export class SessionReplayRenderer {
   constructor(private readonly host: SessionReplayHost) {}
 
   async hydrateFromReplay(session: Session): Promise<boolean> {
     this.host.setAppState({ isReplaying: true });
     try {
-      const main = session.getResumeState()?.agents['main'];
+      const resumeState = session.getResumeState();
+      const main = resumeState?.agents['main'];
       if (main === undefined) {
         this.host.showError('Session history is unavailable for this session.');
         return false;
       }
 
       this.hydrateSnapshot(main);
+      this.hydrateSubAgentUsage(resumeState?.agents);
       this.renderRecords(main);
       this.applyTerminalBackgroundAgentStatuses(main);
       this.host.mergeAllTurnSteps();
@@ -114,6 +130,49 @@ export class SessionReplayRenderer {
     this.host.setAppState(appStateFromResumeAgent(agent));
     this.hydrateTodoPanel(agent);
     this.hydrateBackgroundState(agent);
+  }
+
+  /**
+   * Restore subagent token usage from the resumed session's agent snapshots
+   * (engine-side `includeSubagents` replay). Each resumed subagent's
+   * `usage.byModel` is cumulative, so it is merged straight into the
+   * accumulator (byModel + byMember keyed by profile name), `runs` is set to
+   * the number of subagents that contributed usage, and `lastUsageByAgent` is
+   * seeded per agent id so a later live `agent.status.updated` only adds the
+   * delta beyond the restored usage instead of double-counting. `main` is
+   * excluded; `__secondary__` model keys are kept verbatim — the display-side
+   * normalization applied at `/usage` assembly handles them for restored data
+   * exactly as it does for live data.
+   */
+  private hydrateSubAgentUsage(
+    agents: Readonly<Record<string, ResumedAgentState>> | undefined,
+  ): void {
+    const { subAgentEventHandler } = this.host.sessionEventHandler;
+    const { byModel, byMember } = subAgentEventHandler.subAgentUsage;
+    let runs = 0;
+    for (const [agentId, agent] of Object.entries(agents ?? {})) {
+      if (agentId === MAIN_AGENT_ID) continue;
+      const agentByModel = agent.usage?.byModel;
+      if (agentByModel === undefined) continue;
+      const entries = Object.entries(agentByModel);
+      if (entries.length === 0) continue;
+
+      const memberName = agent.config.profileName ?? 'unknown';
+      let memberBucket = byMember[memberName];
+      if (memberBucket === undefined) {
+        memberBucket = {};
+        byMember[memberName] = memberBucket;
+      }
+      for (const [model, usage] of entries) {
+        byModel[model] = addTokenUsage(byModel[model], usage);
+        memberBucket[model] = addTokenUsage(memberBucket[model], usage);
+      }
+      subAgentEventHandler.seedLastUsageByAgent(agentId, agentByModel);
+      runs += 1;
+    }
+    if (runs > 0) {
+      subAgentEventHandler.subAgentUsage.runs = runs;
+    }
   }
 
   private hydrateTodoPanel(agent: ResumedAgentState): void {

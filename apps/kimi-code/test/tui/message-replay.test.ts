@@ -180,6 +180,7 @@ function baseAgentState(
 function makeSession(
   replay: readonly AgentReplayRecord[],
   overrides: Partial<ResumedAgentState> = {},
+  subagents: Readonly<Record<string, ResumedAgentState>> = {},
 ): Session {
   const agent = baseAgentState(replay, overrides);
   return {
@@ -207,10 +208,45 @@ function makeSession(
     listSkills: vi.fn(async () => []),
     getResumeState: vi.fn(() => ({
       sessionMetadata: {},
-      agents: { main: agent },
+      agents: { main: agent, ...subagents },
     })),
     close: vi.fn(async () => {}),
   } as unknown as Session;
+}
+
+/** A persisted subagent snapshot as folded into the resume state by the engine. */
+function subagentState(
+  profileName: string,
+  usage: ResumedAgentState['usage'],
+): ResumedAgentState {
+  return {
+    type: 'sub',
+    config: {
+      cwd: '/tmp/proj-a',
+      modelAlias: 'k2',
+      provider: undefined,
+      modelCapabilities: {
+        image_in: false,
+        video_in: false,
+        audio_in: false,
+        thinking: false,
+        tool_use: true,
+        max_context_tokens: 100,
+      },
+      profileName,
+      thinkingEffort: 'off',
+      systemPrompt: '',
+    },
+    context: { history: [], tokenCount: 0 },
+    replay: [],
+    permission: { mode: 'manual', rules: [] },
+    plan: null,
+    swarmMode: false,
+    usage,
+    tools: [],
+    toolStore: {},
+    background: [],
+  };
 }
 
 function makeHarness(initialSession: Session) {
@@ -260,9 +296,10 @@ async function makeDriver(initialSession: Session): Promise<ReplayDriver> {
 async function replayIntoDriver(
   replay: readonly AgentReplayRecord[],
   overrides: Partial<ResumedAgentState> = {},
+  subagents: Readonly<Record<string, ResumedAgentState>> = {},
 ): Promise<ReplayDriver> {
   const initial = makeSession([]);
-  const resumed = makeSession(replay, overrides);
+  const resumed = makeSession(replay, overrides, subagents);
   const driver = await makeDriver(initial);
   await driver.switchToSession(resumed, 'Resumed session (ses-replay).');
   return driver;
@@ -1310,5 +1347,137 @@ describe('KimiTUI resume message replay', () => {
     const transcript = stripAnsi(driver.state.transcriptContainer.render(140).join('\n'));
     expect(transcript).not.toContain('final text 0');
     expect(transcript).toContain('final text 4');
+  });
+});
+
+describe('KimiTUI resume subagent usage restore', () => {
+  it('restores byModel, byMember (by profile name) and runs from resumed subagents', async () => {
+    const driver = await replayIntoDriver(
+      [],
+      {},
+      {
+        'agent-a': subagentState('coder', {
+          byModel: {
+            'k2': { inputOther: 100, output: 50, inputCacheRead: 10, inputCacheCreation: 5 },
+          },
+        }),
+        'agent-b': subagentState('reviewer', {
+          byModel: {
+            'k2': { inputOther: 40, output: 20, inputCacheRead: 0, inputCacheCreation: 0 },
+            'k1': { inputOther: 7, output: 3, inputCacheRead: 1, inputCacheCreation: 0 },
+          },
+        }),
+      },
+    );
+
+    const usage = driver.sessionEventHandler.subAgentEventHandler.subAgentUsage;
+    expect(usage.runs).toBe(2);
+    expect(usage.byModel).toEqual({
+      'k2': { inputOther: 140, output: 70, inputCacheRead: 10, inputCacheCreation: 5 },
+      'k1': { inputOther: 7, output: 3, inputCacheRead: 1, inputCacheCreation: 0 },
+    });
+    expect(usage.byMember).toEqual({
+      coder: {
+        'k2': { inputOther: 100, output: 50, inputCacheRead: 10, inputCacheCreation: 5 },
+      },
+      reviewer: {
+        'k2': { inputOther: 40, output: 20, inputCacheRead: 0, inputCacheCreation: 0 },
+        'k1': { inputOther: 7, output: 3, inputCacheRead: 1, inputCacheCreation: 0 },
+      },
+    });
+  });
+
+  it('only adds the delta when a resumed subagent reports the next status update', async () => {
+    const driver = await replayIntoDriver(
+      [],
+      {},
+      {
+        'agent-a': subagentState('coder', {
+          byModel: {
+            'k2': { inputOther: 100, output: 50, inputCacheRead: 10, inputCacheCreation: 5 },
+          },
+        }),
+      },
+    );
+
+    const handler = driver.sessionEventHandler.subAgentEventHandler;
+    expect(handler.subAgentUsage.byModel['k2']).toEqual({
+      inputOther: 100,
+      output: 50,
+      inputCacheRead: 10,
+      inputCacheCreation: 5,
+    });
+
+    // A resumed subagent keeps streaming live status updates. Route the next
+    // cumulative snapshot through the real event path: because the restore
+    // seeded lastUsageByAgent, only the 20/10/2/1 delta is accumulated.
+    handler.subagentInfo.set('agent-a', {
+      parentToolCallId: 'call-a',
+      name: 'coder',
+      runInBackground: true,
+    });
+    driver.sessionEventHandler.handleEvent(
+      {
+        type: 'agent.status.updated',
+        agentId: 'agent-a',
+        sessionId: 'ses-replay',
+        usage: {
+          byModel: {
+            'k2': { inputOther: 120, output: 60, inputCacheRead: 12, inputCacheCreation: 6 },
+          },
+        },
+      },
+      () => {},
+    );
+
+    expect(handler.subAgentUsage.byModel['k2']).toEqual({
+      inputOther: 120,
+      output: 60,
+      inputCacheRead: 12,
+      inputCacheCreation: 6,
+    });
+    expect(handler.subAgentUsage.byMember['coder']?.['k2']).toEqual({
+      inputOther: 120,
+      output: 60,
+      inputCacheRead: 12,
+      inputCacheCreation: 6,
+    });
+    expect(handler.subAgentUsage.runs).toBe(1);
+  });
+
+  it('excludes the main agent usage from the subagent restore', async () => {
+    const driver = await replayIntoDriver(
+      [],
+      {
+        usage: {
+          byModel: {
+            'k2': { inputOther: 999, output: 999, inputCacheRead: 999, inputCacheCreation: 999 },
+          },
+        },
+      },
+      {
+        'agent-a': subagentState('coder', {
+          byModel: {
+            'k2': { inputOther: 100, output: 50, inputCacheRead: 0, inputCacheCreation: 0 },
+          },
+        }),
+      },
+    );
+
+    const usage = driver.sessionEventHandler.subAgentEventHandler.subAgentUsage;
+    expect(usage.runs).toBe(1);
+    expect(usage.byModel).toEqual({
+      'k2': { inputOther: 100, output: 50, inputCacheRead: 0, inputCacheCreation: 0 },
+    });
+  });
+
+  it('leaves subagent usage untouched when the resumed session has no subagents', async () => {
+    const driver = await replayIntoDriver([]);
+
+    expect(driver.sessionEventHandler.subAgentEventHandler.subAgentUsage).toEqual({
+      byModel: {},
+      byMember: {},
+      runs: 0,
+    });
   });
 });

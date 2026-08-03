@@ -4,7 +4,12 @@ import type { McpServerInfo, SessionStatus, SessionUsage } from '@moonshot-ai/ki
 
 import { buildMcpStatusReportLines } from '../components/messages/mcp-status-panel';
 import { buildStatusReportLines } from '../components/messages/status-panel';
-import { buildUsageReportLines, UsagePanelComponent, type ManagedUsageReport } from '../components/messages/usage-panel';
+import {
+  buildUsageReportLines,
+  normalizeSubAgentUsageModelKeys,
+  UsagePanelComponent,
+  type ManagedUsageReport,
+} from '../components/messages/usage-panel';
 import {
   FEEDBACK_ISSUE_URL,
   FEEDBACK_STATUS_CANCELLED,
@@ -121,6 +126,11 @@ interface ManagedUsageResult {
 export async function showUsage(host: SlashCommandHost): Promise<void> {
   const sessionUsage = await loadSessionUsageReport(host);
   const managedUsage = await loadManagedUsageReport(host);
+  // Real id behind the `[secondary_model]` recipe (`secondaryModel.model`).
+  // The engine records derived-secondary subagents under the synthesized
+  // `__secondary__` alias; the panel resolves it to this id for display.
+  // When the id is unavailable the original alias is shown as-is.
+  const secondaryModelId = await loadSecondaryModelId(host);
   const reportArgs = {
     sessionUsage: sessionUsage.usage,
     sessionUsageError: sessionUsage.error,
@@ -129,9 +139,20 @@ export async function showUsage(host: SlashCommandHost): Promise<void> {
     maxContextTokens: host.state.appState.maxContextTokens,
     managedUsage: managedUsage?.usage,
     managedUsageError: managedUsage?.error,
-    subAgentUsage: host.state.appState.subAgentUsage,
   };
-  const panel = new UsagePanelComponent(() => buildUsageReportLines(reportArgs), 'primary');
+  const panel = new UsagePanelComponent(
+    () =>
+      buildUsageReportLines({
+        ...reportArgs,
+        // Normalize per build so the panel keeps reflecting the live
+        // accumulator (mutated by SubAgentEventHandler) on invalidate.
+        subAgentUsage: normalizeSubAgentUsageModelKeys(
+          host.state.appState.subAgentUsage,
+          secondaryModelId,
+        ),
+      }),
+    'primary',
+  );
   host.state.transcriptContainer.addChild(panel);
   host.state.ui.requestRender();
 }
@@ -189,6 +210,21 @@ async function loadSessionUsageReport(host: SlashCommandHost): Promise<SessionUs
     return { usage: await host.requireSession().getUsage() };
   } catch (error) {
     return { error: formatErrorMessage(error) };
+  }
+}
+
+/**
+ * Real model id behind the `[secondary_model]` recipe (`secondaryModel.model`),
+ * used to resolve the engine's synthesized `__secondary__` alias in the
+ * subagent usage section. Missing/blank value or a config read failure yields
+ * `undefined`, and the panel keeps the alias verbatim.
+ */
+async function loadSecondaryModelId(host: SlashCommandHost): Promise<string | undefined> {
+  try {
+    const model = (await host.harness.getConfig())?.secondaryModel?.model;
+    return typeof model === 'string' && model.length > 0 ? model : undefined;
+  } catch {
+    return undefined;
   }
 }
 
