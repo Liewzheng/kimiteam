@@ -58,7 +58,11 @@ function skillToolMethods() {
   } satisfies SkillToolMethods;
 }
 
-function skillToolAgent(skills: AgentSkillRegistry, methods: SkillToolMethods): Agent {
+function skillToolAgent(
+  skills: AgentSkillRegistry,
+  methods: SkillToolMethods,
+  activeProfile?: { readonly skills?: readonly string[] },
+): Agent {
   return {
     skills: {
       registry: skills,
@@ -68,6 +72,7 @@ function skillToolAgent(skills: AgentSkillRegistry, methods: SkillToolMethods): 
       appendSystemReminder: methods.recordSystemReminder,
       appendUserMessage: methods.recordUserMessage,
     },
+    ...(activeProfile === undefined ? {} : { activeProfile }),
   } as unknown as Agent;
 }
 
@@ -75,8 +80,9 @@ function skillTool(
   skills: AgentSkillRegistry,
   methods = skillToolMethods(),
   options?: ConstructorParameters<typeof SkillTool>[1],
+  activeProfile?: { readonly skills?: readonly string[] },
 ): SkillTool {
-  return new SkillTool(skillToolAgent(skills, methods), options);
+  return new SkillTool(skillToolAgent(skills, methods, activeProfile), options);
 }
 
 function execute(tool: SkillTool, args: { skill: string; args?: string }) {
@@ -293,6 +299,65 @@ describe('SkillTool execution', () => {
     expect(methods.recordUserMessage.mock.calls[0]?.[0][0]?.text).toContain(
       'trigger="nested-skill"',
     );
+  });
+});
+
+describe('SkillTool skills allowlist', () => {
+  it('allows a skill named in the profile skills allowlist', async () => {
+    const tool = skillTool(registry([skill('commit')]), undefined, undefined, {
+      skills: ['commit'],
+    });
+
+    const result = await execute(tool, { skill: 'commit' });
+
+    expect(result.isError).toBeUndefined();
+    expect(result.output).toContain('loaded inline');
+  });
+
+  it('rejects a skill outside the profile skills allowlist', async () => {
+    const tool = skillTool(registry([skill('commit')]), undefined, undefined, {
+      skills: ['other-skill'],
+    });
+
+    const result = await execute(tool, { skill: 'commit' });
+
+    expect(result).toMatchObject({
+      isError: true,
+      output: 'Skill "commit" is not in this profile\'s skills allowlist.',
+    });
+  });
+
+  it('allows every skill when the profile declares no skills allowlist', async () => {
+    const tool = skillTool(registry([skill('commit')]));
+
+    const result = await execute(tool, { skill: 'commit' });
+
+    expect(result.output).toContain('loaded inline');
+  });
+
+  it('allows every skill when the allowlist is unrestricted (*)', async () => {
+    const tool = skillTool(registry([skill('commit')]), undefined, undefined, {
+      skills: ['*'],
+    });
+
+    const result = await execute(tool, { skill: 'commit' });
+
+    expect(result.output).toContain('loaded inline');
+  });
+
+  it('applies the allowlist to nested skill invocations too', async () => {
+    const methods = skillToolMethods();
+    const tool = skillTool(registry([skill('commit')]), methods, { queryDepth: 1 }, {
+      skills: ['other-skill'],
+    });
+
+    const result = await execute(tool, { skill: 'commit' });
+
+    expect(result).toMatchObject({
+      isError: true,
+      output: 'Skill "commit" is not in this profile\'s skills allowlist.',
+    });
+    expect(methods.recordSkillActivation).not.toHaveBeenCalled();
   });
 });
 

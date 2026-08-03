@@ -126,6 +126,36 @@ describe('parseAgentFileText', () => {
     expect(definition.subagents).toBeUndefined();
   });
 
+  it('parses a skills allowlist as a list or a comma-separated string', () => {
+    const fromList = parse(
+      `---\ndescription: d\nskills:\n  - explore\n  - plan\n---\n\nbody\n`,
+    );
+    const fromString = parse(`---\ndescription: d\nskills: explore, plan\n---\n\nbody\n`);
+    expect(fromList.skills).toEqual(['explore', 'plan']);
+    expect(fromString.skills).toEqual(['explore', 'plan']);
+  });
+
+  it('treats a lone * skills field as unrestricted', () => {
+    const definition = parse(`---\ndescription: d\nskills: '*'\n---\n\nbody\n`);
+    expect(definition.skills).toBeUndefined();
+  });
+
+  it('parses an empty skills array as zero skills', () => {
+    const definition = parse(`---\ndescription: d\nskills: []\n---\n\nbody\n`);
+    expect(definition.skills).toEqual([]);
+  });
+
+  it('treats skills as a canonical key (no unknown-key warn)', () => {
+    const warnings: string[] = [];
+    parseAgentFileText({
+      path: '/agents/reviewer.md',
+      source: 'project',
+      text: `---\ndescription: d\nskills:\n  - explore\n---\n\nbody\n`,
+      warn: (message) => warnings.push(message),
+    });
+    expect(warnings).toHaveLength(0);
+  });
+
   it('parses disallowedTools, subagents, override and model_preference', () => {
     const definition = parse(
       agentFileText({
@@ -153,6 +183,64 @@ describe('parseAgentFileText', () => {
   it('ignores unknown frontmatter fields', () => {
     const definition = parse(agentFileText({ description: 'd', future_field: 'x' }));
     expect(definition.name).toBe('reviewer');
+  });
+
+  it('warns about a misspelled when_to_use key and still ignores the field', () => {
+    const warnings: string[] = [];
+    const definition = parseAgentFileText({
+      path: '/agents/reviewer.md',
+      source: 'project',
+      text: agentFileText({ description: 'd', when_to_use: 'reviews' }),
+      warn: (message) => warnings.push(message),
+    });
+
+    expect(definition.whenToUse).toBeUndefined();
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('when_to_use');
+    expect(warnings[0]).toContain('whenToUse');
+  });
+
+  it('lists every unknown key in one warn, with hints for common misspellings', () => {
+    const warnings: string[] = [];
+    parseAgentFileText({
+      path: '/agents/reviewer.md',
+      source: 'project',
+      text: agentFileText({
+        description: 'd',
+        when_to_use: 'reviews',
+        'when-to-use': 'reviews',
+        disallowed_tools: 'Bash',
+        mystery: 'x',
+      }),
+      warn: (message) => warnings.push(message),
+    });
+
+    expect(warnings).toHaveLength(1);
+    const message = warnings[0]!;
+    for (const key of ['when_to_use', 'when-to-use', 'disallowed_tools', 'mystery']) {
+      expect(message).toContain(key);
+    }
+    expect(message).toContain('"when_to_use" → use "whenToUse"');
+    expect(message).toContain('"disallowed_tools" → use "disallowedTools"');
+  });
+
+  it('emits no warn when every frontmatter key is canonical', () => {
+    const warnings: string[] = [];
+    const definition = parseAgentFileText({
+      path: '/agents/reviewer.md',
+      source: 'project',
+      text: agentFileText({
+        description: 'd',
+        whenToUse: 'reviews',
+        tools: ['Read'],
+        disallowedTools: ['Bash'],
+        model_preference: 'primary',
+      }),
+      warn: (message) => warnings.push(message),
+    });
+
+    expect(definition.whenToUse).toBe('reviews');
+    expect(warnings).toHaveLength(0);
   });
 });
 
@@ -245,6 +333,30 @@ describe('agentProfileFromFile', () => {
     );
     expect(restricted.tools).toEqual(defaultTools);
     expect(restricted.disallowedTools).toEqual(['Bash', 'mcp__github__*']);
+  });
+
+  it('passes the skills allowlist through to the profile', () => {
+    const declared = agentProfileFromFile(
+      parseAgentFileText({
+        path: '/agents/a.md',
+        source: 'project',
+        text: agentFileText({ description: 'd', skills: ['explore', 'plan'] }),
+      }),
+      defaultTools,
+      basePrompt,
+    );
+    expect(declared.skills).toEqual(['explore', 'plan']);
+
+    const undeclared = agentProfileFromFile(
+      parseAgentFileText({
+        path: '/agents/b.md',
+        source: 'project',
+        text: agentFileText({ description: 'd' }),
+      }),
+      defaultTools,
+      basePrompt,
+    );
+    expect(undeclared.skills).toBeUndefined();
   });
 });
 
@@ -509,6 +621,31 @@ describe('SessionAgentProfileCatalog', () => {
     const workerDelegatable = c.delegatableSubagents('worker');
     expect(Object.keys(workerDelegatable)).toContain('leader');
     expect(Object.keys(workerDelegatable)).toContain('coder');
+  });
+
+  it('preserves the skills allowlist across snapshot and restore', async () => {
+    const { workDir, brandHome, osHome } = await makeLayout();
+    await writeAgent(
+      join(workDir, '.kimi-code', 'agents'),
+      'skilled.md',
+      agentFileText({ description: 'Uses skills.', skills: ['explore', 'plan'] }),
+    );
+
+    const c = catalog({ workDir, brandHomeDir: brandHome, osHomeDir: osHome });
+    await c.ready;
+    expect(c.get('skilled')?.skills).toEqual(['explore', 'plan']);
+
+    const snapshot = c.snapshot();
+    expect(snapshot).toBeDefined();
+    const restoredLayout = await makeLayout();
+    const restored = catalog({
+      workDir: restoredLayout.workDir,
+      brandHomeDir: restoredLayout.brandHome,
+      osHomeDir: restoredLayout.osHome,
+    });
+    await restored.ready;
+    restored.restoreSnapshot(snapshot!);
+    expect(restored.get('skilled')?.skills).toEqual(['explore', 'plan']);
   });
 
   it('renders a file profile prompt through the builtin base prompt', async () => {

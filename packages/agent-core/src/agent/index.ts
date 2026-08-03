@@ -174,7 +174,7 @@ export class Agent {
   printDrainAgentTasksOnStop = false;
 
   private additionalDirs: readonly string[];
-  private activeProfile?: ResolvedAgentProfile;
+  private _activeProfile?: ResolvedAgentProfile;
   private brandHome?: string;
   private readonly emittedThinkingEffortWarnings = new Set<string>();
   private pluginSystemPrompts: readonly EnabledPluginSystemPrompt[];
@@ -462,8 +462,17 @@ export class Agent {
   }
 
   setActiveProfile(profile: ResolvedAgentProfile, brandHome?: string): void {
-    this.activeProfile = profile;
+    this._activeProfile = profile;
     this.brandHome = brandHome;
+  }
+
+  /**
+   * The currently bound profile. `undefined` until the session binds one.
+   * Tools reach it for per-profile gates (e.g. the `Skill` tool's `skills`
+   * allowlist) without reaching into profile resolution internals.
+   */
+  get activeProfile(): ResolvedAgentProfile | undefined {
+    return this._activeProfile;
   }
 
   /**
@@ -473,13 +482,13 @@ export class Agent {
    * at session bootstrap. Invalidates the prompt-cache prefix by design.
    */
   async refreshSystemPrompt(): Promise<void> {
-    if (this.activeProfile === undefined) return;
+    if (this._activeProfile === undefined) return;
     const context = this.systemPromptContextProvider === undefined
       ? await prepareSystemPromptContext(this.kaos, this.brandHome, {
           additionalDirs: this.additionalDirs,
         })
       : await this.systemPromptContextProvider();
-    this.updateSystemPromptFromProfile(this.activeProfile, context);
+    this.updateSystemPromptFromProfile(this._activeProfile, context);
   }
 
   private updateSystemPromptFromProfile(

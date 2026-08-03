@@ -33,9 +33,35 @@ export interface ParseAgentFileOptions {
   readonly path: string;
   readonly source: AgentFileSource;
   readonly text: string;
+  /**
+   * Optional reporter for non-fatal diagnostics (currently: unknown frontmatter
+   * fields that are silently ignored). Kept optional so pure-parse callers
+   * (e.g. CLI name probing) stay warn-free.
+   */
+  readonly warn?: (message: string) => void;
 }
 
 const AGENT_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/** Frontmatter keys this format understands; anything else is ignored. */
+const KNOWN_FRONTMATTER_FIELDS: ReadonlySet<string> = new Set([
+  'name',
+  'description',
+  'whenToUse',
+  'override',
+  'tools',
+  'disallowedTools',
+  'subagents',
+  'skills',
+  'model_preference',
+]);
+
+/** Common misspellings → the canonical key, so the warn can point at the fix. */
+const FRONTMATTER_FIELD_HINTS: Readonly<Record<string, string>> = {
+  when_to_use: 'whenToUse',
+  'when-to-use': 'whenToUse',
+  disallowed_tools: 'disallowedTools',
+};
 
 export function parseAgentFileText(options: ParseAgentFileOptions): AgentFileDefinition {
   let parsed;
@@ -94,11 +120,30 @@ export function parseAgentFileText(options: ParseAgentFileOptions): AgentFileDef
   const rawSubagents = parseStringList(frontmatter['subagents'], 'subagents', options.path);
   const subagents =
     rawSubagents?.length === 1 && rawSubagents[0] === '*' ? undefined : rawSubagents;
+  const rawSkills = parseStringList(frontmatter['skills'], 'skills', options.path);
+  const skills = rawSkills?.length === 1 && rawSkills[0] === '*' ? undefined : rawSkills;
   const modelPreference = parseModelPreference(frontmatter['model_preference'], options.path);
 
   const prompt = parsed.body.trim();
   if (prompt.length === 0) {
     throw new AgentFileParseError(`Missing prompt body in ${options.path}`);
+  }
+
+  // Surface unknown frontmatter fields: the file still parses (fields are
+  // ignored), but a misspelled canonical key silently no-ops today. One warn
+  // per file listing every unknown key, with rename hints for the frequent
+  // `when_to_use` / `when-to-use` / `disallowed_tools` mistakes.
+  const unknownKeys = Object.keys(frontmatter).filter(
+    (key) => !KNOWN_FRONTMATTER_FIELDS.has(key),
+  );
+  if (unknownKeys.length > 0) {
+    const hints = unknownKeys
+      .filter((key) => FRONTMATTER_FIELD_HINTS[key] !== undefined)
+      .map((key) => `"${key}" → use "${FRONTMATTER_FIELD_HINTS[key]}"`);
+    const hintText = hints.length > 0 ? ` (${hints.join('; ')})` : '';
+    options.warn?.(
+      `${options.path}: ignoring unknown frontmatter field(s): ${unknownKeys.join(', ')}${hintText}`,
+    );
   }
 
   return {
@@ -109,6 +154,7 @@ export function parseAgentFileText(options: ParseAgentFileOptions): AgentFileDef
     tools,
     disallowedTools,
     subagents,
+    skills,
     modelPreference,
     prompt,
     path: options.path,

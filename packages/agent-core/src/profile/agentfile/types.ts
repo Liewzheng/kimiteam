@@ -26,6 +26,8 @@ export interface AgentFileDefinition {
   readonly tools?: readonly string[];
   readonly disallowedTools?: readonly string[];
   readonly subagents?: readonly string[];
+  /** Skill-name allowlist (`undefined` = every skill active, lone `*` = unrestricted). */
+  readonly skills?: readonly string[];
   readonly modelPreference?: AgentModelPreference;
   readonly prompt: string;
   readonly path: string;
@@ -50,6 +52,7 @@ const AgentProfileSnapshotSchema = z.object({
   tools: z.array(z.string()),
   disallowedTools: z.array(z.string()).optional(),
   subagents: z.array(z.string()),
+  skills: z.array(z.string()).optional(),
   modelPreference: z.enum(['primary', 'secondary']).optional(),
   prompt: z.string(),
   source: z.enum(['plugin', 'project', 'user', 'extra', 'explicit']).optional(),

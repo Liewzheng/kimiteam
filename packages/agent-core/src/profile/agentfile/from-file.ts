@@ -17,7 +17,9 @@
  * `mcp__…` glob patterns both work, including partial server denies such as
  * `mcp__github__*` under an `mcp__*` allow. `subagents` stays an allowlist
  * of names on the definition; the catalog links it into the resolved record
- * after merging.
+ * after merging. `skills` passes through to the profile verbatim and is
+ * enforced by the `Skill` tool: an omitted allowlist (or a lone `*`) lets
+ * every skill through, a named allowlist restricts to those skills.
  *
  * Ported from the v2 engine (`packages/agent-core-v2/src/app/agentFileCatalog/agentProfileFromFile.ts`)
  * — keep the two in sync: template variables and profile-mapping semantics
@@ -125,6 +127,7 @@ export function agentProfileFromFile(
     tools: agentFileTools(definition, defaultTools),
     disallowedTools:
       definition.disallowedTools === undefined ? undefined : [...definition.disallowedTools],
+    skills: definition.skills,
     whenToUse: definition.whenToUse,
     modelPreference: definition.modelPreference,
   };

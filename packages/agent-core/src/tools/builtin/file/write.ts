@@ -122,8 +122,8 @@ export class WriteTool implements BuiltinTool<WriteInput> {
    * it is missing.
    *
    * If the parent (or any ancestor) does not exist, it is created
-   * recursively — mirroring Python's `Path.mkdir(parents=True,
-   * exist_ok=True)` — so the agent does not need a separate `mkdir` round
+   * recursively — mirroring Python's Path.mkdir(parents=True,
+   * exist_ok=True) — so the agent does not need a separate `mkdir` round
    * trip before writing into a fresh subfolder. An existing parent that is
    * not a directory is still a hard error. Any other `stat` failure
    * (permissions, an environment without `stat`) is treated as

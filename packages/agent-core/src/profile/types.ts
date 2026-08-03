@@ -71,4 +71,11 @@ export interface ResolvedAgentProfile {
   whenToUse?: string;
   subagents?: Record<string, ResolvedAgentProfile>;
   modelPreference?: AgentModelPreference;
+  /**
+   * Skill-name allowlist for the `Skill` tool. `undefined` (undeclared) or a
+   * lone `*` (unrestricted) lets every skill through; a named list restricts
+   * model-invoked skills to those names. Mirrors
+   * `ProfileData.skills` in the v2 engine.
+   */
+  skills?: readonly string[];
 }

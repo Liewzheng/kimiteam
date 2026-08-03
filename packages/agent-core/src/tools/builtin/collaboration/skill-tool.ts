@@ -120,6 +120,22 @@ export class SkillTool implements BuiltinTool<SkillToolInput> {
     if (skill === undefined) {
       return errorResult(`Skill "${args.skill}" not found in the current skill listing.`);
     }
+    // Profile `skills` allowlist gate: `undefined` (undeclared) or `*`
+    // (unrestricted) lets every skill through; a named allowlist restricts to
+    // those skills. Applies to root and nested (queryDepth > 0) invocations
+    // alike — both funnel through this single execution body. The tool itself
+    // is only reachable when the profile's tool list keeps `Skill` active, so
+    // no separate skillActive check is needed here.
+    const profileSkills = this.agent.activeProfile?.skills;
+    if (
+      profileSkills !== undefined &&
+      !profileSkills.includes('*') &&
+      !profileSkills.includes(args.skill)
+    ) {
+      return errorResult(
+        `Skill "${args.skill}" is not in this profile's skills allowlist.`,
+      );
+    }
     if (skill.metadata.disableModelInvocation === true) {
       // Keep the exact wording "can only be triggered by the user" so
       // contract audits and integration tests stay deterministic.

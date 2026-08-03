@@ -189,6 +189,7 @@ export class SessionAgentProfileCatalog {
         tools: profile.tools,
         disallowedTools: profile.disallowedTools,
         subagents: profile.subagents,
+        skills: profile.skills,
         modelPreference: profile.modelPreference,
         prompt: profile.prompt,
         path: `<session-agent-profile:${profile.name}>`,
@@ -276,7 +277,12 @@ export class SessionAgentProfileCatalog {
     for (const file of this.options.explicitFiles ?? []) {
       const path = resolveAgentPath(file, this.options.workDir, this.options.osHomeDir);
       const text = await fs.readFile(path, 'utf-8');
-      const definition = parseAgentFileText({ path, source: 'explicit', text });
+      const definition = parseAgentFileText({
+        path,
+        source: 'explicit',
+        text,
+        warn: (message) => warn?.(message),
+      });
       this.warnInactivePatterns(definition);
       explicitEntries.set(definition.name, this.entryFromDefinition(definition, effectiveDefault));
     }
@@ -405,6 +411,7 @@ export class SessionAgentProfileCatalog {
         disallowedTools:
           profile.disallowedTools === undefined ? undefined : [...profile.disallowedTools],
         subagents: Object.keys(profile.subagents ?? {}),
+        skills: profile.skills,
         modelPreference: profile.modelPreference,
         prompt: definition.prompt,
         source: definition.source,
