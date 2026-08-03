@@ -151,6 +151,25 @@ export function resolveSecondaryModel(
 }
 
 /**
+ * Resolve the model id to record on a team-mode shift for a bound subagent.
+ * A subagent bound to the synthesized derived entry
+ * (`SECONDARY_DERIVED_MODEL_ID`, i.e. a secondary recipe with patch fields)
+ * records the real model the `[secondary_model]` recipe points at (`.model`),
+ * not the reserved derived id; every other alias is recorded as-is. Falls
+ * back to the alias when the secondary config can no longer be resolved
+ * (e.g. the flag was flipped off mid-session), so the recorded id stays the
+ * bound id rather than becoming `undefined`.
+ */
+export function resolveRecordedModelId(
+  config: IConfigService,
+  flags: IFlagService,
+  modelAlias: string | undefined,
+): string | undefined {
+  if (modelAlias !== SECONDARY_DERIVED_MODEL_ID) return modelAlias;
+  return resolveSecondaryModel(config, flags)?.model ?? modelAlias;
+}
+
+/**
  * Provenance of a resolved subagent model binding, used by
  * `wrapSubagentModelError` to point the error message at the right knob.
  */

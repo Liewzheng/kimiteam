@@ -1604,6 +1604,214 @@ describe('Agent tool execution contract', () => {
     );
   });
 
+  it('reuses an idle owned subagent of the same profile instead of creating (team mode)', async () => {
+    const lifecycle = createAgentLifecycleStub({
+      runCompletion: async () => ({ summary: 'reused result' }),
+    });
+    const context = createAgentToolContext(
+      lifecycle,
+      sessionService(
+        ISessionMetadata,
+        sessionMetadataStub({ 'agent-parked': subagentMeta() }),
+      ),
+      { initialConfig: { subagent: { teamMode: true } } },
+    );
+    lifecycle.addHandle('agent-parked', 'explore');
+
+    const result = await executeAgentTool(context, {
+      prompt: 'Investigate',
+      description: 'Find cause',
+      subagent_type: 'explore',
+      run_in_background: false,
+    });
+
+    expect(lifecycle.create).not.toHaveBeenCalled();
+    expect(lifecycle.run).toHaveBeenCalledWith(
+      'agent-parked',
+      { kind: 'prompt', prompt: 'Investigate' },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    expect(result.output).toContain('agent_id: agent-parked');
+    expect(result.output).toContain('actual_subagent_type: explore');
+    expect(result.output).toContain('reused result');
+  });
+
+  it('picks the most recently allocated instance when several idle ones match (team mode)', async () => {
+    const lifecycle = createAgentLifecycleStub({
+      runCompletion: async () => ({ summary: 'reused result' }),
+    });
+    const context = createAgentToolContext(
+      lifecycle,
+      sessionService(
+        ISessionMetadata,
+        sessionMetadataStub({
+          'agent-1': subagentMeta(),
+          'agent-2': subagentMeta(),
+        }),
+      ),
+      { initialConfig: { subagent: { teamMode: true } } },
+    );
+    lifecycle.addHandle('agent-1', 'explore');
+    lifecycle.addHandle('agent-2', 'explore');
+
+    await executeAgentTool(context, {
+      prompt: 'Investigate',
+      description: 'Find cause',
+      subagent_type: 'explore',
+    });
+
+    expect(lifecycle.create).not.toHaveBeenCalled();
+    expect(lifecycle.run).toHaveBeenCalledWith(
+      'agent-2',
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it('does not reuse a running instance — creates a fresh one (team mode)', async () => {
+    const lifecycle = createAgentLifecycleStub({
+      createAgentIds: ['agent-child'],
+      runCompletion: async () => ({ summary: 'child result' }),
+    });
+    const context = createAgentToolContext(
+      lifecycle,
+      sessionService(
+        ISessionMetadata,
+        sessionMetadataStub({ 'agent-parked': subagentMeta() }),
+      ),
+      { initialConfig: { subagent: { teamMode: true } } },
+    );
+    lifecycle.addHandle(
+      'agent-parked',
+      'explore',
+      new Map([
+        [
+          IAgentLoopService,
+          {
+            _serviceBrand: undefined,
+            status: () => ({ state: 'running', activeTurnId: 1, pendingTurnIds: [], hasPendingRequests: true }),
+          },
+        ],
+      ]),
+    );
+
+    const result = await executeAgentTool(context, {
+      prompt: 'Investigate',
+      description: 'Find cause',
+      subagent_type: 'explore',
+    });
+
+    expect(lifecycle.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        binding: expect.objectContaining({ profile: 'explore' }),
+      }),
+    );
+    expect(lifecycle.run).toHaveBeenCalledWith(
+      'agent-child',
+      expect.objectContaining({ kind: 'prompt' }),
+      expect.anything(),
+    );
+    expect(result.output).toContain('agent_id: agent-child');
+  });
+
+  it('does not reuse an instance of a different profile — creates the requested one (team mode)', async () => {
+    const lifecycle = createAgentLifecycleStub({
+      createAgentIds: ['agent-child'],
+      runCompletion: async () => ({ summary: 'child result' }),
+    });
+    const context = createAgentToolContext(
+      lifecycle,
+      sessionService(
+        ISessionMetadata,
+        sessionMetadataStub({ 'agent-parked': subagentMeta() }),
+      ),
+      { initialConfig: { subagent: { teamMode: true } } },
+    );
+    lifecycle.addHandle('agent-parked', 'coder');
+
+    await executeAgentTool(context, {
+      prompt: 'Investigate',
+      description: 'Find cause',
+      subagent_type: 'explore',
+    });
+
+    expect(lifecycle.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        binding: expect.objectContaining({ profile: 'explore' }),
+      }),
+    );
+    expect(lifecycle.run).toHaveBeenCalledWith(
+      'agent-child',
+      expect.objectContaining({ kind: 'prompt' }),
+      expect.anything(),
+    );
+  });
+
+  it('does not reuse an instance owned by another caller — creates a fresh one (team mode)', async () => {
+    const lifecycle = createAgentLifecycleStub({
+      createAgentIds: ['agent-child'],
+      runCompletion: async () => ({ summary: 'child result' }),
+    });
+    const context = createAgentToolContext(
+      lifecycle,
+      sessionService(
+        ISessionMetadata,
+        sessionMetadataStub({ 'agent-parked': subagentMeta('other') }),
+      ),
+      { initialConfig: { subagent: { teamMode: true } } },
+    );
+    lifecycle.addHandle('agent-parked', 'explore');
+
+    await executeAgentTool(context, {
+      prompt: 'Investigate',
+      description: 'Find cause',
+      subagent_type: 'explore',
+    });
+
+    expect(lifecycle.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        binding: expect.objectContaining({ profile: 'explore' }),
+      }),
+    );
+    expect(lifecycle.run).toHaveBeenCalledWith(
+      'agent-child',
+      expect.objectContaining({ kind: 'prompt' }),
+      expect.anything(),
+    );
+  });
+
+  it('never reuses when team mode is off — always creates a fresh instance', async () => {
+    const lifecycle = createAgentLifecycleStub({
+      createAgentIds: ['agent-child'],
+      runCompletion: async () => ({ summary: 'child result' }),
+    });
+    const context = createAgentToolContext(
+      lifecycle,
+      sessionService(
+        ISessionMetadata,
+        sessionMetadataStub({ 'agent-parked': subagentMeta() }),
+      ),
+    );
+    lifecycle.addHandle('agent-parked', 'explore');
+
+    await executeAgentTool(context, {
+      prompt: 'Investigate',
+      description: 'Find cause',
+      subagent_type: 'explore',
+    });
+
+    expect(lifecycle.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        binding: expect.objectContaining({ profile: 'explore' }),
+      }),
+    );
+    expect(lifecycle.run).toHaveBeenCalledWith(
+      'agent-child',
+      expect.objectContaining({ kind: 'prompt' }),
+      expect.anything(),
+    );
+  });
+
   it('registers background subagents with the task manager', async () => {
     const completion = deferred<{ readonly summary: string }>();
     const lifecycle = createAgentLifecycleStub({

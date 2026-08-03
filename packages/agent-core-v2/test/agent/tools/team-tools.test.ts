@@ -1,9 +1,10 @@
 /**
- * Tests for TeamHire + TeamFire tools and the userFileAgentSource watcher.
+ * Tests for TeamHire + TeamFire + TeamScore tools and the userFileAgentSource watcher.
  *
  * Scenario: round-trip agent file (hire writes → parse reads back),
  * duplicate rejection, fire deletion, fire-then-not-found profile listing,
- * and watcher onDidChange delivery with tmp directories.
+ * watcher onDidChange delivery with tmp directories, and TeamScore perf
+ * recording / summary output against an in-memory perf stub.
  *
  * Run: `pnpm --filter @moonshot-ai/agent-core-v2 exec vitest run
  * test/agent/tools/team-tools.test.ts`.
@@ -336,7 +337,7 @@ import type {
   SubagentPoolState,
 } from '#/session/subagentPool/subagentPool';
 import type { IDisposable } from '#/_base/di/lifecycle';
-import type { ProfilePerformanceEntry } from '#/app/agentPerformance/agentPerformance';
+import type { PerformanceEntry, PerformanceSummary, ProfilePerformanceEntry } from '#/app/agentPerformance/agentPerformance';
 import { MODELS_SECTION, PROVIDERS_SECTION } from '#/app/kosongConfig/configSection';
 
 class NoopDisposable implements IDisposable {
@@ -572,5 +573,163 @@ describe('TeamConcurrency', () => {
     expect(TeamConcurrencyInputSchema.safeParse({ action: 'reset' }).success).toBe(false);
     expect(TeamConcurrencyInputSchema.safeParse({ action: 'set', value: 0 }).success).toBe(false);
     expect(TeamConcurrencyInputSchema.safeParse({ action: 'set', value: -1 }).success).toBe(false);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// TeamScore — perf.record + summary output, main-agent gate.
+// ---------------------------------------------------------------------------
+
+import { TeamScoreTool } from '#/agent/tools/team-score/teamScoreTool';
+import { TeamScoreToolInputSchema, SUBAGENT_NOT_ALLOWED } from '#/agent/tools/team-score/team-score';
+
+class ScorePerfStub {
+  readonly _serviceBrand: undefined;
+  readonly entries: PerformanceEntry[] = [];
+  private readonly summaries: Record<string, PerformanceSummary>;
+
+  constructor(summaries: Record<string, PerformanceSummary> = {}) {
+    this.summaries = summaries;
+  }
+
+  async record(entry: PerformanceEntry): Promise<void> {
+    this.entries.push(entry);
+  }
+
+  async summary(profileName: string): Promise<PerformanceSummary> {
+    return this.summaries[profileName] ?? { count: 0 };
+  }
+
+  async list(): Promise<ProfilePerformanceEntry[]> {
+    return [];
+  }
+
+  async recordShift(): Promise<void> {
+    /* noop */
+  }
+}
+
+function makeScoreTool(
+  tmpDir: string,
+  callerId: string,
+  agents: Record<string, unknown>,
+  perf: ScorePerfStub,
+): TeamScoreTool {
+  const stubs = gateStubs(tmpDir, callerId, agents);
+  return new TeamScoreTool(
+    stubs.sessionMeta as never,
+    stubs.scopeContext as never,
+    perf as never,
+    gateLogStub() as never,
+  );
+}
+
+describe('TeamScore', () => {
+  let tmpDir: string;
+  beforeEach(() => { tmpDir = mkTempDir(); });
+  afterEach(() => { cleanup(tmpDir); });
+
+  it('rejects a subagent caller without recording anything', async () => {
+    const perf = new ScorePerfStub();
+    const tool = makeScoreTool(tmpDir, 'agent-0', { 'agent-0': { type: 'sub' } }, perf);
+    const result = await runResolution(
+      await tool.resolveExecution({ profile: 'coder', score: 80, note: 'solid' }),
+    );
+    expect(result.isError).toBe(true);
+    expect(String(result.output)).toBe(SUBAGENT_NOT_ALLOWED);
+    expect(perf.entries).toHaveLength(0);
+  });
+
+  it('first score prints "No scores yet" when the profile has no history', async () => {
+    const perf = new ScorePerfStub({ coder: { count: 0 } });
+    const tool = makeScoreTool(tmpDir, 'main', { main: {} }, perf);
+    const result = await runResolution(
+      await tool.resolveExecution({ profile: 'coder', score: 72, note: 'first pass' }),
+    );
+    expect(result.isError).toBeUndefined();
+    expect(String(result.output)).toBe(
+      '[TeamScore] Scored "coder" — `72/100`. No scores yet.',
+    );
+  });
+
+  it('appends Last score and Average when history exists', async () => {
+    const perf = new ScorePerfStub({ coder: { last: 85, average: 81.5, count: 4 } });
+    const tool = makeScoreTool(tmpDir, 'main', { main: {} }, perf);
+    const result = await runResolution(
+      await tool.resolveExecution({ profile: 'coder', score: 90, note: 'top shelf' }),
+    );
+    expect(result.isError).toBeUndefined();
+    expect(String(result.output)).toBe(
+      '[TeamScore] Scored "coder" — `90/100`. Last score: 85. Average: 81.5 (4 total).',
+    );
+  });
+
+  it('omits the Average line when the summary has a last score but no average', async () => {
+    const perf = new ScorePerfStub({ coder: { last: 60, count: 2 } });
+    const tool = makeScoreTool(tmpDir, 'main', { main: {} }, perf);
+    const result = await runResolution(
+      await tool.resolveExecution({ profile: 'coder', score: 50, note: 'dip' }),
+    );
+    expect(result.isError).toBeUndefined();
+    expect(String(result.output)).toBe(
+      '[TeamScore] Scored "coder" — `50/100`. Last score: 60.',
+    );
+  });
+
+  it('maps record input fields onto the performance entry', async () => {
+    const perf = new ScorePerfStub({ coder: { count: 0 } });
+    const tool = makeScoreTool(tmpDir, 'main', { main: {} }, perf);
+    await runResolution(
+      await tool.resolveExecution({
+        profile: 'coder',
+        score: 88,
+        note: 'fast and clean',
+        model: 'local/qwen',
+        agent_id: 'inst-42',
+      }),
+    );
+    expect(perf.entries).toHaveLength(1);
+    const entry = perf.entries[0]!;
+    expect(entry.profileName).toBe('coder');
+    expect(entry.score).toBe(88);
+    expect(entry.note).toBe('fast and clean');
+    expect(entry.model).toBe('local/qwen');
+    expect(entry.agentId).toBe('inst-42'); // agent_id → agentId
+    expect(entry.ts).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+  });
+
+  it('passes undefined for optional model/agent_id when omitted', async () => {
+    const perf = new ScorePerfStub({ coder: { count: 0 } });
+    const tool = makeScoreTool(tmpDir, 'main', { main: {} }, perf);
+    await runResolution(
+      await tool.resolveExecution({ profile: 'coder', score: 60, note: 'bare' }),
+    );
+    const entry = perf.entries[0]!;
+    expect(entry.agentId).toBeUndefined();
+    expect(entry.model).toBeUndefined();
+  });
+
+  it('validates input schema constraints', () => {
+    // Valid: required fields, score at inclusive bounds, optional model/agent_id
+    expect(TeamScoreToolInputSchema.safeParse({ profile: 'coder', score: 50, note: 'ok' }).success).toBe(true);
+    expect(TeamScoreToolInputSchema.safeParse({ profile: 'coder', score: 0, note: 'min' }).success).toBe(true);
+    expect(TeamScoreToolInputSchema.safeParse({ profile: 'coder', score: 100, note: 'max' }).success).toBe(true);
+    expect(TeamScoreToolInputSchema.safeParse({ profile: 'coder', score: 50, note: 'n', model: 'm', agent_id: 'a' }).success).toBe(true);
+
+    // Invalid: score out of range, non-integer score, missing required field
+    expect(TeamScoreToolInputSchema.safeParse({ profile: 'coder', score: -1, note: 'x' }).success).toBe(false);
+    expect(TeamScoreToolInputSchema.safeParse({ profile: 'coder', score: 101, note: 'x' }).success).toBe(false);
+    expect(TeamScoreToolInputSchema.safeParse({ profile: 'coder', score: 50.5, note: 'x' }).success).toBe(false);
+    expect(TeamScoreToolInputSchema.safeParse({ profile: 'coder', score: 50 }).success).toBe(false);
+
+    // Whitespace-only profile trims to empty → rejected; surrounding whitespace is trimmed
+    expect(TeamScoreToolInputSchema.safeParse({ profile: '   ', score: 50, note: 'x' }).success).toBe(false);
+    const trimmed = TeamScoreToolInputSchema.safeParse({ profile: '  coder ', score: 50, note: ' n ' });
+    expect(trimmed.success).toBe(true);
+    if (trimmed.success) {
+      expect(trimmed.data.profile).toBe('coder');
+      expect(trimmed.data.note).toBe('n');
+    }
   });
 });

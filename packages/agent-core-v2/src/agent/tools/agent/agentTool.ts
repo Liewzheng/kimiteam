@@ -77,6 +77,7 @@ import {
 } from '#/app/agentPerformance/agentPerformance';
 import { IAgentLifecycleService } from '#/session/agentLifecycle/agentLifecycle';
 import { isSubagentMeta, subagentLabels, subagentParentAgentId } from '#/session/agentLifecycle/subagentMetadata';
+import { findIdleOwnedSubagent } from '#/session/agentLifecycle/subagentReuse';
 import { ISessionProcessRunner } from '#/session/process/processRunner';
 import { ISessionMetadata } from '#/session/sessionMetadata/sessionMetadata';
 import { ISessionWorkspaceContext } from '#/session/workspaceContext/workspaceContext';
@@ -361,43 +362,74 @@ export class SubagentTool implements ISubagentTool {
       if (profile === undefined) {
         throw new Error(`Unknown agent type: "${requestedProfileName}"`);
       }
-      if (own.modelAlias === undefined) {
-        throw new Error('Caller agent has no model bound');
-      }
-      const binding = resolveSubagentBinding(
-        this.config,
-        this.flags,
-        { modelAlias: own.modelAlias, thinkingLevel: own.thinkingLevel },
-        args.model ?? profile.modelPreference,
-        profile.name,
-        args.model !== undefined ? 'model-param' : 'model-preference',
-      );
-      let created: IAgentScopeHandle;
-      try {
-        this.modelCatalog.get(binding.model);
-        created = await this.lifecycle.create({
-          binding: {
-            profile: profile.name,
-            model: binding.model,
-            thinking: binding.thinking,
-            cwd: own.cwd,
-          },
-          labels: subagentLabels(this.callerAgentId),
+
+      // Team mode: reuse a parked idle subagent of the same profile (resume
+      // semantics — context preserved) instead of always creating a fresh
+      // one. Explicit `resume` is unaffected; when team mode is off this
+      // block is skipped and behavior is identical to a plain spawn.
+      let reused: IAgentScopeHandle | undefined;
+      if (resolveTeamMode(this.config)) {
+        const reuseId = await findIdleOwnedSubagent({
+          lifecycle: this.lifecycle,
+          metadata: this.sessionMetadata,
+          callerAgentId: this.callerAgentId,
+          profileName: requestedProfileName,
         });
-      } catch (error) {
-        throw wrapSubagentModelError(error, binding.model, own.modelAlias, binding.source, this.config);
+        if (reuseId !== undefined) {
+          const target = this.lifecycle.get(reuseId);
+          if (target === undefined) {
+            throw new Error(`Agent instance "${reuseId}" does not exist`);
+          }
+          await this.ensureOwnedIdleSubagent(reuseId, target);
+          reused = target;
+        }
       }
-      created.accessor.get(IAgentPermissionModeService).setMode(this.permissionMode.mode);
-      created.accessor
-        .get(IAgentUserToolService)
-        .inheritUserTools(requester.accessor.get(IAgentUserToolService));
-      agentId = created.id;
-      profileName = profile.name;
-      promptText = await applyProfilePromptPrefix(profile, args.prompt, {
-        cwd: this.workspace.workDir,
-        runner: this.processRunner,
-        log: this.log,
-      });
+
+      if (reused !== undefined) {
+        agentId = reused.id;
+        profileName =
+          reused.accessor.get(IAgentProfileService).data().profileName ?? RESUMED_LABEL;
+        // No prompt prefix: the reused agent keeps its own system prompt and
+        // context from its previous run (same as an explicit resume).
+      } else {
+        if (own.modelAlias === undefined) {
+          throw new Error('Caller agent has no model bound');
+        }
+        const binding = resolveSubagentBinding(
+          this.config,
+          this.flags,
+          { modelAlias: own.modelAlias, thinkingLevel: own.thinkingLevel },
+          args.model ?? profile.modelPreference,
+          profile.name,
+          args.model !== undefined ? 'model-param' : 'model-preference',
+        );
+        let created: IAgentScopeHandle;
+        try {
+          this.modelCatalog.get(binding.model);
+          created = await this.lifecycle.create({
+            binding: {
+              profile: profile.name,
+              model: binding.model,
+              thinking: binding.thinking,
+              cwd: own.cwd,
+            },
+            labels: subagentLabels(this.callerAgentId),
+          });
+        } catch (error) {
+          throw wrapSubagentModelError(error, binding.model, own.modelAlias, binding.source, this.config);
+        }
+        created.accessor.get(IAgentPermissionModeService).setMode(this.permissionMode.mode);
+        created.accessor
+          .get(IAgentUserToolService)
+          .inheritUserTools(requester.accessor.get(IAgentUserToolService));
+        agentId = created.id;
+        profileName = profile.name;
+        promptText = await applyProfilePromptPrefix(profile, args.prompt, {
+          cwd: this.workspace.workDir,
+          runner: this.processRunner,
+          log: this.log,
+        });
+      }
     }
 
     const runInBackground = this.resolveRunInBackground(args);

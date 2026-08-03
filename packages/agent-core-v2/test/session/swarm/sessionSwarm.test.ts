@@ -12,6 +12,7 @@ import { IAgentPermissionModeService } from '#/agent/permissionMode/permissionMo
 import { IAgentProfileService, type ProfileData } from '#/agent/profile/profile';
 import { IAgentLoopService } from '#/agent/loop/loop';
 import { IAgentUserToolService } from '#/agent/userTool/userTool';
+import { IConfigService } from '#/app/config/config';
 import { IEventBus, type DomainEvent } from '#/app/event/eventBus';
 import { ISessionAgentProfileCatalog } from '#/session/sessionAgentProfileCatalog/sessionAgentProfileCatalog';
 import { APIProviderRateLimitError } from '#/kosong/contract/errors';
@@ -843,6 +844,7 @@ describe('SessionSwarmService metadata compatibility', () => {
   let handles: Map<string, IAgentScopeHandle>;
   let lifecycle: IAgentLifecycleService;
   let subagents: ISessionSubagentService;
+  let config: MutableConfigStub;
   let createAgent: ReturnType<typeof vi.fn>;
   let runAgent: ReturnType<typeof vi.fn>;
   let eventBus: IEventBus;
@@ -857,10 +859,12 @@ describe('SessionSwarmService metadata compatibility', () => {
     subagents = subagentStub();
     createAgent = lifecycle.create as ReturnType<typeof vi.fn>;
     runAgent = subagents.run as ReturnType<typeof vi.fn>;
+    config = configStub(false);
     handles.set('main', agentHandle('main', lifecycle, eventBus));
 
     ix.stub(IAgentLifecycleService, lifecycle);
     ix.stub(ISessionSubagentService, subagents);
+    ix.stub(IConfigService, config);
     ix.stub(ISessionAgentProfileCatalog, {
       _serviceBrand: undefined,
       ready: Promise.resolve(),
@@ -1251,6 +1255,157 @@ describe('SessionSwarmService metadata compatibility', () => {
       expect.objectContaining({ type: 'subagent.spawned' }),
     );
   });
+
+  it('reuses an idle owned subagent of the same profile instead of creating (team mode)', async () => {
+    agents['agent-1'] = { labels: { parentAgentId: 'main' } };
+    handles.set('agent-1', agentHandle('agent-1', lifecycle, eventBus, { profileName: 'coder' }));
+    config.setTeamMode(true);
+    const service = ix.get(ISessionSwarmService);
+
+    await expect(
+      service.run({
+        callerAgentId: 'main',
+        tasks: [spawnSessionTask()],
+      }),
+    ).resolves.toMatchObject([{ status: 'completed', agentId: 'agent-1' }]);
+
+    expect(createAgent).not.toHaveBeenCalled();
+    expect(runAgent).toHaveBeenCalledWith(
+      'agent-1',
+      { kind: 'prompt', prompt: 'Review the file' },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+  });
+
+  it('does not reuse an instance of another profile — creates the requested one (team mode)', async () => {
+    agents['agent-1'] = { labels: { parentAgentId: 'main' } };
+    handles.set('agent-1', agentHandle('agent-1', lifecycle, eventBus, { profileName: 'explore' }));
+    config.setTeamMode(true);
+    const service = ix.get(ISessionSwarmService);
+
+    await expect(
+      service.run({
+        callerAgentId: 'main',
+        tasks: [spawnSessionTask()],
+      }),
+    ).resolves.toMatchObject([{ status: 'completed', agentId: 'agent-new' }]);
+
+    expect(createAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ binding: expect.objectContaining({ profile: 'coder' }) }),
+    );
+    expect(runAgent).not.toHaveBeenCalledWith(
+      'agent-1',
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it('does not reuse an instance owned by another caller — creates a fresh one (team mode)', async () => {
+    agents['agent-1'] = { labels: { parentAgentId: 'other' } };
+    handles.set('agent-1', agentHandle('agent-1', lifecycle, eventBus, { profileName: 'coder' }));
+    config.setTeamMode(true);
+    const service = ix.get(ISessionSwarmService);
+
+    await expect(
+      service.run({
+        callerAgentId: 'main',
+        tasks: [spawnSessionTask()],
+      }),
+    ).resolves.toMatchObject([{ status: 'completed', agentId: 'agent-new' }]);
+
+    expect(createAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ binding: expect.objectContaining({ profile: 'coder' }) }),
+    );
+    expect(runAgent).not.toHaveBeenCalledWith(
+      'agent-1',
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it('does not reuse a running instance — creates a fresh one (team mode)', async () => {
+    agents['agent-1'] = { labels: { parentAgentId: 'main' } };
+    handles.set(
+      'agent-1',
+      agentHandle('agent-1', lifecycle, eventBus, { profileName: 'coder' }, new Map([
+        [
+          IAgentLoopService,
+          {
+            _serviceBrand: undefined,
+            status: () => ({ state: 'running', activeTurnId: 1, pendingTurnIds: [], hasPendingRequests: true }),
+          },
+        ],
+      ])),
+    );
+    config.setTeamMode(true);
+    const service = ix.get(ISessionSwarmService);
+
+    await expect(
+      service.run({
+        callerAgentId: 'main',
+        tasks: [spawnSessionTask()],
+      }),
+    ).resolves.toMatchObject([{ status: 'completed', agentId: 'agent-new' }]);
+
+    expect(createAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ binding: expect.objectContaining({ profile: 'coder' }) }),
+    );
+    expect(runAgent).not.toHaveBeenCalledWith(
+      'agent-1',
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it('two spawn items of the same profile never claim the same parked instance (team mode)', async () => {
+    // One idle instance, two spawn items of the same profile: the first item
+    // reuses it, the second must not double-claim it and falls back to create.
+    agents['agent-1'] = { labels: { parentAgentId: 'main' } };
+    handles.set('agent-1', agentHandle('agent-1', lifecycle, eventBus, { profileName: 'coder' }));
+    config.setTeamMode(true);
+    const service = ix.get(ISessionSwarmService);
+
+    const results = await service.run({
+      callerAgentId: 'main',
+      tasks: [spawnSessionTask(), spawnSessionTask()],
+    });
+
+    expect(results).toMatchObject([
+      { status: 'completed' },
+      { status: 'completed' },
+    ]);
+    // Exactly one reuse of the parked instance and exactly one fresh create —
+    // no double claim of 'agent-1'.
+    expect(createAgent).toHaveBeenCalledTimes(1);
+    expect(
+      runAgent.mock.calls.filter(([agentId]) => agentId === 'agent-1'),
+    ).toHaveLength(1);
+    const runAgentIds = runAgent.mock.calls.map(([agentId]) => agentId);
+    expect(new Set(runAgentIds)).toEqual(new Set(['agent-1', 'agent-new']));
+  });
+
+  it('distributes multiple spawn items across multiple parked instances without creating (team mode)', async () => {
+    agents['agent-1'] = { labels: { parentAgentId: 'main' } };
+    agents['agent-2'] = { labels: { parentAgentId: 'main' } };
+    handles.set('agent-1', agentHandle('agent-1', lifecycle, eventBus, { profileName: 'coder' }));
+    handles.set('agent-2', agentHandle('agent-2', lifecycle, eventBus, { profileName: 'coder' }));
+    config.setTeamMode(true);
+    const service = ix.get(ISessionSwarmService);
+
+    const results = await service.run({
+      callerAgentId: 'main',
+      tasks: [spawnSessionTask(), spawnSessionTask()],
+    });
+
+    expect(results).toMatchObject([
+      { status: 'completed' },
+      { status: 'completed' },
+    ]);
+    expect(createAgent).not.toHaveBeenCalled();
+    const runAgentIds = runAgent.mock.calls.map(([agentId]) => agentId);
+    expect(new Set(runAgentIds)).toEqual(new Set(['agent-1', 'agent-2']));
+    expect(runAgentIds).toHaveLength(2);
+  });
 });
 
 function spawnSessionTask(swarmItem?: string): SessionSwarmSpawnTask {
@@ -1405,6 +1560,30 @@ function eventBusStub(): IEventBus {
     publish: vi.fn((_: DomainEvent) => {}),
     subscribe: vi.fn(() => ({ dispose: () => {} })) as IEventBus['subscribe'],
   };
+}
+
+/** Minimal config stub exposing only the `[subagent]` section that team-mode reuse reads. */
+type MutableConfigStub = IConfigService & { setTeamMode(mode: boolean): void };
+
+function configStub(teamMode: boolean): MutableConfigStub {
+  let current = teamMode;
+  return {
+    _serviceBrand: undefined,
+    ready: Promise.resolve(),
+    onDidChangeConfiguration: Event.None,
+    onDidSectionChange: Event.None,
+    get: (domain: string) => (domain === 'subagent' ? { teamMode: current } : undefined),
+    inspect: () => undefined,
+    getAll: () => ({}),
+    set: async () => {},
+    replace: async () => {},
+    replaceSections: async () => {},
+    reload: async () => {},
+    diagnostics: () => [],
+    setTeamMode: (mode: boolean) => {
+      current = mode;
+    },
+  } as unknown as MutableConfigStub;
 }
 
 type MockAgentRunAttemptOutcome<T> =

@@ -7,13 +7,18 @@
  * `npx vitest run test/session/subagent/subagentService.test.ts`.
  */
 
-import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
 import type { IDisposable } from '#/_base/di/lifecycle';
 import type { IAgentScopeHandle } from '#/_base/di/scope';
+import { IAgentLoopService } from '#/agent/loop/loop';
 import { IAgentProfileService } from '#/agent/profile/profile';
 import type { IAgentPerformanceService } from '#/app/agentPerformance/agentPerformance';
+import type { IRuntimeStatusService } from '#/app/runtimeStatus/runtimeStatus';
 import type { IConfigService } from '#/app/config/config';
+import type { IFlagService } from '#/app/flag/flag';
+import { SECONDARY_MODEL_SECTION } from '#/app/kosongConfig/configSection';
+import { SECONDARY_DERIVED_MODEL_ID } from '#/app/kosongConfig/secondaryModelOverlay';
 import type { ISessionAgentProfileCatalog } from '#/session/sessionAgentProfileCatalog/sessionAgentProfileCatalog';
 import type { ISessionContext } from '#/session/sessionContext/sessionContext';
 import type { IAgentLifecycleService } from '#/session/agentLifecycle/agentLifecycle';
@@ -22,6 +27,10 @@ import type { ISubagentPoolService } from '#/session/subagentPool/subagentPool';
 import { SessionSubagentService } from '#/session/subagent/subagentService';
 import { runAgentTurn } from '#/session/subagent/runAgentTurn';
 import type { AgentRunHandle, AgentRunRequest, RunAgentOptions } from '#/session/subagent/subagent';
+import { MAIN_AGENT_ID } from '#/session/agentLifecycle/agentLifecycle';
+import { SUBAGENT_IDLE_TTL_MS } from '#/session/subagent/idleReaper';
+import { stubLog } from '../../_base/log/stubs';
+import type { ILogService } from '#/_base/log/log';
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -62,13 +71,22 @@ function deferredCompletion(): {
 }
 
 interface ServiceStubs {
-  agentLifecycle: IAgentLifecycleService;
+  agentLifecycle: IAgentLifecycleService & { remove: Mock };
   catalog: ISessionAgentProfileCatalog;
   pool: ISubagentPoolService;
   config: IConfigService;
+  flags: IFlagService;
   performance: IAgentPerformanceService;
   sessionContext: ISessionContext;
+  log: ILogService;
+  status: IRuntimeStatusService & {
+    markWorking: Mock;
+    markResting: Mock;
+    removeProfile: Mock;
+  };
   agentHandle: IAgentScopeHandle;
+  /** Mutable loop state so tests can flip an instance to `running` mid-flight. */
+  loopState: { state: 'idle' | 'running' };
 }
 
 function buildStubs(options: {
@@ -76,20 +94,39 @@ function buildStubs(options: {
   profileName?: string;
   modelAlias?: string;
   poolActive?: number;
+  /** The agent id the single handle is registered under (default AGENT_ID). */
+  agentId?: string;
+  /** `[secondary_model]` config, when present; drives derived-secondary binding. */
+  secondaryModel?: { model?: string; defaultEffort?: string };
+  /** Whether the `secondary-model` experiment flag is enabled. */
+  secondaryModelFlag?: boolean;
 } = {}): ServiceStubs {
   const teamMode = options.teamMode ?? false;
   const profileName = 'profileName' in options ? options.profileName : PROFILE_NAME;
   const modelAlias = options.modelAlias ?? MODEL_ALIAS;
   const poolActive = options.poolActive ?? 1;
+  const agentId = options.agentId ?? AGENT_ID;
+  const secondaryModel = options.secondaryModel;
+  const secondaryModelFlag = options.secondaryModelFlag ?? true;
 
+  const loopState: { state: 'idle' | 'running' } = { state: 'idle' };
   const agentHandle = {
-    id: AGENT_ID,
+    id: agentId,
     kind: 'agent' as const,
     accessor: {
       get: (serviceId: unknown) => {
         if (serviceId === IAgentProfileService) {
           return {
             data: () => ({ profileName, modelAlias }),
+          };
+        }
+        if (serviceId === IAgentLoopService) {
+          return {
+            status: () => ({
+              state: loopState.state,
+              pendingTurnIds: [],
+              hasPendingRequests: false,
+            }),
           };
         }
         throw new Error(`Unexpected service: ${String(serviceId)}`);
@@ -100,8 +137,9 @@ function buildStubs(options: {
 
   const agentLifecycle = {
     _serviceBrand: undefined,
-    get: (id: string) => (id === AGENT_ID ? agentHandle : undefined),
-  } as unknown as IAgentLifecycleService;
+    get: (id: string) => (id === agentId ? agentHandle : undefined),
+    remove: vi.fn().mockResolvedValue(undefined),
+  } as unknown as IAgentLifecycleService & { remove: Mock };
 
   const catalog = {
     _serviceBrand: undefined,
@@ -118,8 +156,17 @@ function buildStubs(options: {
   const config = {
     _serviceBrand: undefined,
     get: (section: string) =>
-      section === 'subagent' ? { teamMode } : undefined,
+      section === 'subagent'
+        ? { teamMode }
+        : section === SECONDARY_MODEL_SECTION
+          ? secondaryModel
+          : undefined,
   } as unknown as IConfigService;
+
+  const flags = {
+    _serviceBrand: undefined,
+    enabled: vi.fn().mockReturnValue(secondaryModelFlag),
+  } as unknown as IFlagService & { enabled: Mock };
 
   const performance = {
     _serviceBrand: undefined,
@@ -131,19 +178,57 @@ function buildStubs(options: {
     sessionId: SESSION_ID,
   } as unknown as ISessionContext;
 
-  return { agentLifecycle, catalog, pool, config, performance, sessionContext, agentHandle };
+  const status = {
+    _serviceBrand: undefined,
+    markWorking: vi.fn().mockResolvedValue(undefined),
+    markResting: vi.fn().mockResolvedValue(undefined),
+    removeProfile: vi.fn().mockResolvedValue(undefined),
+  } as unknown as IRuntimeStatusService & {
+    markWorking: Mock;
+    markResting: Mock;
+    removeProfile: Mock;
+  };
+
+  return {
+    agentLifecycle,
+    catalog,
+    pool,
+    config,
+    flags,
+    performance,
+    sessionContext,
+    log: stubLog(),
+    status,
+    agentHandle,
+    loopState,
+  };
 }
 
+/** Every service built so far — disposed after each test to clear reaper timers. */
+const builtServices: SessionSubagentService[] = [];
+
 function buildService(stubs: ServiceStubs): SessionSubagentService {
-  return new SessionSubagentService(
+  const service = new SessionSubagentService(
     stubs.agentLifecycle,
     stubs.catalog,
     stubs.pool,
     stubs.config,
+    stubs.flags,
     stubs.performance,
     stubs.sessionContext,
+    stubs.log,
+    stubs.status,
   );
+  builtServices.push(service);
+  return service;
 }
+
+// Dispose every built service after each test so the idle reaper's timers are
+// always cleared — a team-mode settle arms a real (or faked) 10-minute timer.
+afterEach(() => {
+  for (const service of builtServices) service.dispose();
+  builtServices.length = 0;
+});
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -365,5 +450,300 @@ describe('SessionSubagentService — team-mode shift recording', () => {
     const shift5 = calls5[0]?.[1];
     // The active count was 3 when state() was read (pool slot not yet released).
     expect(shift5.concurrency).toBe(3);
+  });
+
+  it('records the real model id for a derived secondary binding (not __secondary__)', async () => {
+    // A secondary recipe with patch fields binds the synthesized derived
+    // entry; the shift must record the real model the recipe points at.
+    const stubs = buildStubs({
+      teamMode: true,
+      modelAlias: SECONDARY_DERIVED_MODEL_ID,
+      secondaryModel: { model: 'provider/real-model' },
+    });
+    const service = buildService(stubs);
+    const deferred = deferredCompletion();
+
+    mockRunAgentTurn.mockResolvedValue({
+      agentId: AGENT_ID,
+      turn: {} as never,
+      completion: deferred.promise,
+    });
+
+    await service.run(AGENT_ID, defaultRequest, defaultOpts);
+
+    deferred.resolve({ summary: 'done' });
+    await vi.waitFor(() => {
+      expect(stubs.performance.recordShift).toHaveBeenCalledTimes(1);
+    });
+
+    const callsDerived = (stubs.performance.recordShift as Mock).mock.calls;
+    const shiftDerived = callsDerived[0]?.[1];
+    expect(shiftDerived.model).toBe('provider/real-model');
+    // byModel aggregation keys off shift.model, so the new record surfaces
+    // under the real model id, never the reserved derived id.
+    expect(shiftDerived.model).not.toBe(SECONDARY_DERIVED_MODEL_ID);
+  });
+
+  it('records the real model id for a derived secondary binding on rejection', async () => {
+    const stubs = buildStubs({
+      teamMode: true,
+      modelAlias: SECONDARY_DERIVED_MODEL_ID,
+      secondaryModel: { model: 'provider/real-model' },
+    });
+    const service = buildService(stubs);
+    const deferred = deferredCompletion();
+
+    mockRunAgentTurn.mockResolvedValue({
+      agentId: AGENT_ID,
+      turn: {} as never,
+      completion: deferred.promise,
+    });
+
+    await service.run(AGENT_ID, defaultRequest, defaultOpts);
+
+    deferred.reject(new Error('boom'));
+    await expect(deferred.promise).rejects.toThrow('boom');
+
+    await vi.waitFor(() => {
+      expect(stubs.performance.recordShift).toHaveBeenCalledTimes(1);
+    });
+
+    const callsDerivedErr = (stubs.performance.recordShift as Mock).mock.calls;
+    const shiftDerivedErr = callsDerivedErr[0]?.[1];
+    expect(shiftDerivedErr.workSummary).toBe('failed: boom');
+    expect(shiftDerivedErr.model).toBe('provider/real-model');
+  });
+
+  it('records the plain alias as-is even when a secondary model is configured', async () => {
+    // Non-derived bindings (caller inheritance, explicit [models] id, or a
+    // pointer-only secondary recipe) must keep their alias untouched.
+    const stubs = buildStubs({
+      teamMode: true,
+      modelAlias: MODEL_ALIAS,
+      secondaryModel: { model: 'provider/real-model' },
+    });
+    const service = buildService(stubs);
+    const deferred = deferredCompletion();
+
+    mockRunAgentTurn.mockResolvedValue({
+      agentId: AGENT_ID,
+      turn: {} as never,
+      completion: deferred.promise,
+    });
+
+    await service.run(AGENT_ID, defaultRequest, defaultOpts);
+
+    deferred.resolve({ summary: 'ok' });
+    await vi.waitFor(() => {
+      expect(stubs.performance.recordShift).toHaveBeenCalledTimes(1);
+    });
+
+    const callsPlain = (stubs.performance.recordShift as Mock).mock.calls;
+    const shiftPlain = callsPlain[0]?.[1];
+    expect(shiftPlain.model).toBe(MODEL_ALIAS);
+  });
+
+  it('falls back to the bound alias when the secondary config cannot be resolved', async () => {
+    // Flag off mid-session: no secondary model resolves, so the recorded id
+    // stays the bound derived id rather than becoming undefined.
+    const stubs = buildStubs({
+      teamMode: true,
+      modelAlias: SECONDARY_DERIVED_MODEL_ID,
+      secondaryModel: { model: 'provider/real-model' },
+      secondaryModelFlag: false,
+    });
+    const service = buildService(stubs);
+    const deferred = deferredCompletion();
+
+    mockRunAgentTurn.mockResolvedValue({
+      agentId: AGENT_ID,
+      turn: {} as never,
+      completion: deferred.promise,
+    });
+
+    await service.run(AGENT_ID, defaultRequest, defaultOpts);
+
+    deferred.resolve({ summary: 'ok' });
+    await vi.waitFor(() => {
+      expect(stubs.performance.recordShift).toHaveBeenCalledTimes(1);
+    });
+
+    const callsFallback = (stubs.performance.recordShift as Mock).mock.calls;
+    const shiftFallback = callsFallback[0]?.[1];
+    expect(shiftFallback.model).toBe(SECONDARY_DERIVED_MODEL_ID);
+  });
+});
+
+describe('SessionSubagentService — idle reaper & runtime status', () => {
+  const defaultRequest: AgentRunRequest = { kind: 'prompt', prompt: 'do something' };
+  const defaultOpts: RunAgentOptions = {
+    signal: new AbortController().signal,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function mockedRun(completion: Promise<{ summary: string }>, agentId: string = AGENT_ID) {
+    mockRunAgentTurn.mockResolvedValue({
+      agentId,
+      turn: {} as never,
+      completion,
+    });
+  }
+
+  it('marks working on run start, resting on settle, and reaps after the TTL', async () => {
+    const stubs = buildStubs({ teamMode: true });
+    const service = buildService(stubs);
+    const deferred = deferredCompletion();
+    mockedRun(deferred.promise);
+
+    await service.run(AGENT_ID, defaultRequest, defaultOpts);
+    expect(stubs.status.markWorking).toHaveBeenCalledWith(PROFILE_NAME, AGENT_ID);
+
+    deferred.resolve({ summary: 'done' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(stubs.status.markResting).toHaveBeenCalledWith(
+      PROFILE_NAME,
+      AGENT_ID,
+      expect.any(String),
+    );
+
+    // Not yet expired.
+    await vi.advanceTimersByTimeAsync(SUBAGENT_IDLE_TTL_MS - 1);
+    expect(stubs.agentLifecycle.remove).not.toHaveBeenCalled();
+
+    // Expiry while idle → the instance is destroyed and its profile entry dropped.
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(0); // flush reap microtasks
+    expect(stubs.agentLifecycle.remove).toHaveBeenCalledWith(AGENT_ID);
+    expect(stubs.status.removeProfile).toHaveBeenCalledWith(PROFILE_NAME);
+  });
+
+  it('skips the reap when the instance is running at expiry', async () => {
+    const stubs = buildStubs({ teamMode: true });
+    const service = buildService(stubs);
+    const deferred = deferredCompletion();
+    mockedRun(deferred.promise);
+
+    await service.run(AGENT_ID, defaultRequest, defaultOpts);
+    deferred.resolve({ summary: 'ok' });
+    await vi.advanceTimersByTimeAsync(0); // settle → countdown armed
+
+    // A TeamMessage-style wake puts a turn in flight without a new run().
+    stubs.loopState.state = 'running';
+
+    await vi.advanceTimersByTimeAsync(SUBAGENT_IDLE_TTL_MS);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(stubs.agentLifecycle.remove).not.toHaveBeenCalled();
+    expect(stubs.status.removeProfile).not.toHaveBeenCalled();
+  });
+
+  it('cancels the idle countdown when a new run starts', async () => {
+    const stubs = buildStubs({ teamMode: true });
+    const service = buildService(stubs);
+    const d1 = deferredCompletion();
+    const d2 = deferredCompletion();
+    mockRunAgentTurn
+      .mockResolvedValueOnce({ agentId: AGENT_ID, turn: {} as never, completion: d1.promise })
+      .mockResolvedValueOnce({ agentId: AGENT_ID, turn: {} as never, completion: d2.promise });
+
+    await service.run(AGENT_ID, defaultRequest, defaultOpts);
+    d1.resolve({ summary: 'ok' });
+    await vi.advanceTimersByTimeAsync(0); // settle → countdown armed
+
+    // The second run (reuse / resume / new dispatch all land here) cancels it.
+    await service.run(AGENT_ID, defaultRequest, defaultOpts);
+    expect(stubs.status.markWorking).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(SUBAGENT_IDLE_TTL_MS);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(stubs.agentLifecycle.remove).not.toHaveBeenCalled();
+  });
+
+  it('clears all timers on disposal (session close)', async () => {
+    const stubs = buildStubs({ teamMode: true });
+    const service = buildService(stubs);
+    const deferred = deferredCompletion();
+    mockedRun(deferred.promise);
+
+    await service.run(AGENT_ID, defaultRequest, defaultOpts);
+    deferred.resolve({ summary: 'ok' });
+    await vi.advanceTimersByTimeAsync(0); // countdown armed
+
+    service.dispose(); // session close → reaper disposed → timers cleared
+
+    await vi.advanceTimersByTimeAsync(SUBAGENT_IDLE_TTL_MS * 2);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(stubs.agentLifecycle.remove).not.toHaveBeenCalled();
+  });
+
+  it('never supervises the main agent', async () => {
+    const stubs = buildStubs({ teamMode: true, agentId: MAIN_AGENT_ID });
+    const service = buildService(stubs);
+    const deferred = deferredCompletion();
+    mockedRun(deferred.promise, MAIN_AGENT_ID);
+
+    await service.run(MAIN_AGENT_ID, defaultRequest, defaultOpts);
+    deferred.resolve({ summary: 'ok' });
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(SUBAGENT_IDLE_TTL_MS);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(stubs.status.markWorking).not.toHaveBeenCalled();
+    expect(stubs.status.markResting).not.toHaveBeenCalled();
+    expect(stubs.agentLifecycle.remove).not.toHaveBeenCalled();
+  });
+
+  it('arms nothing when team mode is off', async () => {
+    const stubs = buildStubs({ teamMode: false });
+    const service = buildService(stubs);
+    const deferred = deferredCompletion();
+    mockedRun(deferred.promise);
+
+    await service.run(AGENT_ID, defaultRequest, defaultOpts);
+    deferred.resolve({ summary: 'ok' });
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(SUBAGENT_IDLE_TTL_MS);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(stubs.status.markWorking).not.toHaveBeenCalled();
+    expect(stubs.status.markResting).not.toHaveBeenCalled();
+    expect(stubs.agentLifecycle.remove).not.toHaveBeenCalled();
+  });
+
+  it('re-arms the idle countdown when a run fails to start', async () => {
+    const stubs = buildStubs({ teamMode: true });
+    const service = buildService(stubs);
+    const d1 = deferredCompletion();
+    mockRunAgentTurn
+      .mockResolvedValueOnce({ agentId: AGENT_ID, turn: {} as never, completion: d1.promise })
+      .mockRejectedValueOnce(new Error('busy'));
+
+    await service.run(AGENT_ID, defaultRequest, defaultOpts);
+    d1.resolve({ summary: 'ok' });
+    await vi.advanceTimersByTimeAsync(0); // settle → countdown armed
+
+    await expect(service.run(AGENT_ID, defaultRequest, defaultOpts)).rejects.toThrow('busy');
+
+    // The failed start restored idle supervision — the countdown is live again.
+    await vi.advanceTimersByTimeAsync(SUBAGENT_IDLE_TTL_MS);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(stubs.agentLifecycle.remove).toHaveBeenCalledWith(AGENT_ID);
+    expect(stubs.status.markResting).toHaveBeenCalledTimes(2);
+  });
+
+  it('swallows status-write failures — the run still completes', async () => {
+    const stubs = buildStubs({ teamMode: true });
+    (stubs.status.markWorking as Mock).mockRejectedValue(new Error('disk full'));
+    const service = buildService(stubs);
+    mockedRun(Promise.resolve({ summary: 'ok' }));
+
+    const handle = await service.run(AGENT_ID, defaultRequest, defaultOpts);
+    await expect(handle.completion).resolves.toEqual({ summary: 'ok' });
   });
 });

@@ -30,6 +30,7 @@ import { IAgentPermissionModeService } from '#/agent/permissionMode/permissionMo
 import { IAgentLoopService } from '#/agent/loop/loop';
 import { IAgentUserToolService } from '#/agent/userTool/userTool';
 import { IEventBus } from '#/app/event/eventBus';
+import { IConfigService } from '#/app/config/config';
 import { ISessionAgentProfileCatalog } from '#/session/sessionAgentProfileCatalog/sessionAgentProfileCatalog';
 import { applyProfilePromptPrefix } from '#/app/agentProfileCatalog/promptPrefix';
 import { IAgentLifecycleService } from '#/session/agentLifecycle/agentLifecycle';
@@ -39,9 +40,10 @@ import {
   subagentParentAgentId,
   subagentSwarmItem,
 } from '#/session/agentLifecycle/subagentMetadata';
+import { findIdleOwnedSubagent } from '#/session/agentLifecycle/subagentReuse';
 import { emitAgentRunSpawned, mirrorAgentRun } from '#/session/subagent/mirrorAgentRun';
 import { ISessionSubagentService } from '#/session/subagent/subagent';
-import { wrapSubagentModelError } from '#/session/subagent/configSection';
+import { resolveTeamMode, wrapSubagentModelError } from '#/session/subagent/configSection';
 import { ISessionContext } from '#/session/sessionContext/sessionContext';
 import { ISessionMetadata, type AgentMeta } from '#/session/sessionMetadata/sessionMetadata';
 import { ISessionProcessRunner } from '#/session/process/processRunner';
@@ -80,6 +82,13 @@ export class SessionSwarmService implements ISessionSwarmService {
   declare readonly _serviceBrand: undefined;
 
   private readonly inFlight = new Map<string, AbortController>();
+  /**
+   * Agent ids claimed for team-mode idle reuse by in-flight spawn attempts.
+   * A claim is made atomically with the pick (see `findIdleOwnedSubagent`) and
+   * released once the reused run starts (or fails to start), so two items in
+   * the same batch can never claim the same parked instance.
+   */
+  private readonly reservedForReuse = new Set<string>();
 
   constructor(
     @IAgentLifecycleService private readonly lifecycle: IAgentLifecycleService,
@@ -90,6 +99,7 @@ export class SessionSwarmService implements ISessionSwarmService {
     @ISessionProcessRunner private readonly processRunner: ISessionProcessRunner,
     @ILogService private readonly log: ILogService,
     @IModelCatalog private readonly modelCatalog: IModelCatalog,
+    @IConfigService private readonly config: IConfigService,
   ) {}
 
   async getSwarmItem(args: {
@@ -149,6 +159,26 @@ export class SessionSwarmService implements ISessionSwarmService {
       throw new Error(`Unknown agent type: "${options.profileName}"`);
     }
     const callerData = caller.accessor.get(IAgentProfileService).data();
+
+    // Team mode: reuse a parked idle subagent of the same profile (resume
+    // semantics — context preserved) instead of creating a fresh one. The
+    // claim is made atomically with the pick, so two spawn attempts in the
+    // same batch can never claim the same instance even though its run has
+    // not started yet. When team mode is off this block is skipped and
+    // behavior is identical to a plain spawn.
+    if (resolveTeamMode(this.config)) {
+      const reuseId = await findIdleOwnedSubagent({
+        lifecycle: this.lifecycle,
+        metadata: this.metadata,
+        callerAgentId,
+        profileName: options.profileName,
+        claimInto: this.reservedForReuse,
+      });
+      if (reuseId !== undefined) {
+        return this.reuseIdleAttempt(callerAgentId, reuseId, options);
+      }
+    }
+
     if (callerData.modelAlias === undefined) {
       throw new Error('Caller agent has no model bound');
     }
@@ -194,6 +224,24 @@ export class SessionSwarmService implements ISessionSwarmService {
       kind: 'prompt',
       prompt: promptText,
     }, options);
+  }
+
+  /**
+   * Drive a reused parked subagent through the explicit-resume path (ownership
+   * + idle re-validation, spawned announcement, prompt turn) and release the
+   * batch claim as soon as the run has started (or failed to start). From then
+   * on the instance's own `running` loop state excludes it from reuse.
+   */
+  private async reuseIdleAttempt(
+    callerAgentId: string,
+    reuseId: string,
+    options: AgentSpawnAttemptOptions,
+  ): Promise<AgentRunAttemptHandle> {
+    try {
+      return await this.resumeAttempt(callerAgentId, reuseId, options, false);
+    } finally {
+      this.reservedForReuse.delete(reuseId);
+    }
   }
 
   private async resumeAttempt(
