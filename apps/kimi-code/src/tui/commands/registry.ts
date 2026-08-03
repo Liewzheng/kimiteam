@@ -194,7 +194,10 @@ export const BUILTIN_SLASH_COMMANDS = [
     priority: 100,
     argumentHint: '[on|off]',
     completeArgs: teamArgumentCompletions,
-    availability: 'idle-only',
+    // Bare `/team` opens the read-only panel — safe to view while the agent is
+    // streaming (the panel refreshes itself and Ctrl+C still cancels the turn).
+    // `on`/`off` write config, so those stay idle-only like /swarm.
+    availability: (args) => (args.trim() === '' ? 'always' : 'idle-only'),
   },
   {
     name: 'model',

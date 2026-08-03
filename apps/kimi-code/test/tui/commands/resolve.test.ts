@@ -290,6 +290,57 @@ describe('goal command resolution', () => {
   });
 });
 
+describe('team command resolution', () => {
+  afterEach(() => {
+    setExperimentalFeatures([]);
+  });
+
+  it('resolves bare /team while streaming (read-only panel)', () => {
+    expect(resolve('/team', { isStreaming: true })).toMatchObject({
+      kind: 'builtin',
+      name: 'team',
+      args: '',
+    });
+  });
+
+  it('resolves whitespace-only /team while streaming', () => {
+    expect(resolve('/team   ', { isStreaming: true })).toMatchObject({
+      kind: 'builtin',
+      name: 'team',
+      args: '',
+    });
+  });
+
+  it('blocks /team on|off while streaming because they write config', () => {
+    expect(resolve('/team on', { isStreaming: true })).toEqual({
+      kind: 'blocked',
+      commandName: 'team',
+      reason: 'streaming',
+    });
+    expect(resolve('/team off', { isStreaming: true })).toEqual({
+      kind: 'blocked',
+      commandName: 'team',
+      reason: 'streaming',
+    });
+  });
+
+  it('blocks /team on while compacting', () => {
+    expect(resolve('/team on', { isCompacting: true })).toEqual({
+      kind: 'blocked',
+      commandName: 'team',
+      reason: 'compacting',
+    });
+  });
+
+  it('resolves /team on when idle', () => {
+    expect(resolve('/team on')).toMatchObject({
+      kind: 'builtin',
+      name: 'team',
+      args: 'on',
+    });
+  });
+});
+
 describe('slash command busy helpers', () => {
   it('resolves skill command aliases with and without skill prefix', () => {
     const map = new Map([

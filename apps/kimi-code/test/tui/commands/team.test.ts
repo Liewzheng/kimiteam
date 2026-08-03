@@ -7,25 +7,37 @@
  * dispatch are tested here.
  */
 
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import chalk from 'chalk';
 
 import { handleTeamCommand } from '#/tui/commands/index';
 import type { SlashCommandHost } from '#/tui/commands/dispatch';
+import { currentTheme } from '#/tui/theme';
+import { KIMI_CODE_HOME_ENV } from '#/constant/app';
 
 import {
   parseAgentFrontmatter,
   parsePerformanceData,
+  parseRuntimeStatusData,
+  deriveMemberStatus,
   formatDuration,
   aggregateMemberRows,
   resolveModelForProfile,
   TeamPanelComponent,
+  TEAM_PANEL_REFRESH_INTERVAL_MS,
 } from '#/tui/commands/team';
 
 import { formatBusinessCardSuffixFromMap } from '#/tui/components/messages/subagent-card-meta';
 import type { CardMeta } from '#/tui/components/messages/subagent-card-meta';
 
 // Hoisted mock factories — used by cache-wrapper tests below; defined here so
-// vi.mock can capture references before module resolution.
+// vi.mock can capture references before module resolution. These only replace
+// team.ts's *imported* bindings (e.g. subagent-card-meta); team.ts's own
+// internal reads are integration-tested against a temp KIMI_CODE_HOME instead.
 const { mockReadAgentProfiles, mockReadPerformanceData } = vi.hoisted(() => ({
   mockReadAgentProfiles: vi.fn<(dataDir: string, cwd: string) => unknown[]>(),
   mockReadPerformanceData: vi.fn<(dataDir: string) => unknown | null>(),
@@ -53,6 +65,10 @@ function makeHost() {
     state: {
       appState: {
         model: 'kimi-model',
+      },
+      // The panel's refresh path calls requestRender after each re-read.
+      ui: {
+        requestRender: vi.fn(),
       },
     },
     harness,
@@ -204,6 +220,102 @@ describe('parsePerformanceData', () => {
     expect(parsed['Charlie']).toBeDefined();
     expect(parsed['Charlie']!.entries).toBeUndefined();
     expect(parsed['Charlie']!.shifts).toBeUndefined();
+  });
+});
+
+// ===========================================================================
+// Pure function: parseRuntimeStatusData
+// ===========================================================================
+
+describe('parseRuntimeStatusData', () => {
+  it('parses a valid runtime-status.json with working and resting entries', () => {
+    const raw = JSON.stringify({
+      Alice: { state: 'working', agentId: 'agent-1', updatedAt: '2026-07-30T10:00:00.000Z' },
+      Bob: {
+        state: 'resting',
+        agentId: 'agent-2',
+        updatedAt: '2026-07-30T10:05:00.000Z',
+        restExpiresAt: '2026-07-30T10:15:00.000Z',
+      },
+    });
+    const parsed = parseRuntimeStatusData(raw)!;
+    expect(parsed['Alice']!.state).toBe('working');
+    expect(parsed['Bob']!.state).toBe('resting');
+    expect(parsed['Bob']!.restExpiresAt).toBe('2026-07-30T10:15:00.000Z');
+  });
+
+  it('returns null for invalid JSON', () => {
+    expect(parseRuntimeStatusData('not json')).toBeNull();
+  });
+
+  it('returns null for non-object JSON', () => {
+    expect(parseRuntimeStatusData('"hello"')).toBeNull();
+    expect(parseRuntimeStatusData('42')).toBeNull();
+  });
+
+  it('returns null for arrays', () => {
+    expect(parseRuntimeStatusData('[]')).toBeNull();
+  });
+
+  it('drops entries with an unknown state instead of failing the whole parse', () => {
+    // A future engine state must degrade to "no entry", never crash the panel.
+    const raw = JSON.stringify({
+      Alice: { state: 'suspended' },
+      Bob: { state: 'working' },
+    });
+    const parsed = parseRuntimeStatusData(raw)!;
+    expect(parsed['Alice']).toBeUndefined();
+    expect(parsed['Bob']!.state).toBe('working');
+  });
+
+  it('handles an empty object', () => {
+    const parsed = parseRuntimeStatusData('{}');
+    expect(parsed).not.toBeNull();
+    expect(Object.keys(parsed!)).toHaveLength(0);
+  });
+});
+
+// ===========================================================================
+// Pure function: deriveMemberStatus
+// ===========================================================================
+
+describe('deriveMemberStatus', () => {
+  const now = Date.parse('2026-07-30T12:00:00.000Z');
+
+  it('maps an active run to 工作 (working)', () => {
+    expect(deriveMemberStatus(true, { state: 'working' } as const, now)).toBe('working');
+  });
+
+  it('maps resting with an unexpired window to 休息 (resting)', () => {
+    const entry = { state: 'resting', restExpiresAt: '2026-07-30T12:10:00.000Z' } as const;
+    expect(deriveMemberStatus(true, entry, now)).toBe('resting');
+  });
+
+  it('treats an expired rest window as 上班 (on-duty)', () => {
+    const entry = { state: 'resting', restExpiresAt: '2026-07-30T11:59:00.000Z' } as const;
+    expect(deriveMemberStatus(true, entry, now)).toBe('on-duty');
+  });
+
+  it('treats a profile with no status entry as 上班 (on-duty)', () => {
+    expect(deriveMemberStatus(true, undefined, now)).toBe('on-duty');
+  });
+
+  it('treats a resting entry without restExpiresAt as 上班 (on-duty)', () => {
+    expect(deriveMemberStatus(true, { state: 'resting' } as const, now)).toBe('on-duty');
+  });
+
+  it('treats an unparseable restExpiresAt as 上班 (on-duty)', () => {
+    expect(
+      deriveMemberStatus(true, { state: 'resting', restExpiresAt: 'not-a-date' } as const, now),
+    ).toBe('on-duty');
+  });
+
+  it('maps a profile-less name to 下班 (off-duty)', () => {
+    expect(deriveMemberStatus(false, undefined, now)).toBe('off-duty');
+  });
+
+  it('ignores status entries for profile-less names (fired archive wins)', () => {
+    expect(deriveMemberStatus(false, { state: 'working' } as const, now)).toBe('off-duty');
   });
 });
 
@@ -468,6 +580,119 @@ describe('aggregateMemberRows', () => {
     expect(rows.find((r) => r.name === 'Alice')!.modelFromLastUse).toBe(true);
     expect(rows.find((r) => r.name === 'Bob')!.modelFromLastUse).toBeUndefined();
   });
+
+  // --- `__secondary__` derived alias (display-only resolution) ---
+
+  it('resolves the __secondary__ last-used alias to the real secondary model id', () => {
+    const lastUsed = { Alice: '__secondary__' };
+    const resolved = { Alice: 'gpt-4o' };
+    const rows = aggregateMemberRows(profiles, null, resolved, lastUsed, 'deepseek/deepseek-v4-flash');
+    const alice = rows.find((r) => r.name === 'Alice');
+    expect(alice!.model).toBe('deepseek/deepseek-v4-flash');
+    expect(alice!.modelFromLastUse).toBe(true);
+  });
+
+  it('falls back to resolvedModels when __secondary__ cannot be resolved', () => {
+    const lastUsed = { Alice: '__secondary__' };
+    const resolved = { Alice: 'gpt-4o' };
+    const rows = aggregateMemberRows(profiles, null, resolved, lastUsed, undefined);
+    const alice = rows.find((r) => r.name === 'Alice');
+    expect(alice!.model).toBe('gpt-4o');
+    expect(alice!.modelFromLastUse).toBeUndefined();
+  });
+
+  it('falls back to modelPreference when __secondary__ cannot be resolved and no resolvedModels', () => {
+    const lastUsed = { Bob: '__secondary__' };
+    const rows = aggregateMemberRows(profiles, null, {}, lastUsed, undefined);
+    const bob = rows.find((r) => r.name === 'Bob');
+    expect(bob!.model).toBe('claude-3');
+    expect(bob!.modelFromLastUse).toBeUndefined();
+  });
+
+  it('falls back to "—" when __secondary__ cannot be resolved and no fallback exists', () => {
+    const lastUsed = { Charlie: '__secondary__' };
+    const rows = aggregateMemberRows(profiles, null, {}, lastUsed, undefined);
+    const charlie = rows.find((r) => r.name === 'Charlie');
+    expect(charlie!.model).toBe('—');
+    expect(charlie!.modelFromLastUse).toBeUndefined();
+  });
+
+  it('treats a blank secondary model id as unavailable when resolving __secondary__', () => {
+    const lastUsed = { Alice: '__secondary__' };
+    const resolved = { Alice: 'gpt-4o' };
+    const rows = aggregateMemberRows(profiles, null, resolved, lastUsed, '');
+    expect(rows.find((r) => r.name === 'Alice')!.model).toBe('gpt-4o');
+    expect(rows.find((r) => r.name === 'Alice')!.modelFromLastUse).toBeUndefined();
+  });
+});
+
+// ===========================================================================
+// Pure function: aggregateMemberRows — four-state status + off-duty archives
+// ===========================================================================
+
+describe('aggregateMemberRows runtime status + off-duty rows', () => {
+  const profiles = [
+    { name: 'Alice', description: 'Dev', role: 'Developer', modelPreference: 'gpt-4' },
+    { name: 'Bob', description: 'Reviewer', role: 'Reviewer', modelPreference: 'claude-3' },
+  ];
+  // Dana: performance history but no profile file → fired / archived (下班).
+  const perf = {
+    Alice: { entries: [{ profileName: 'Alice', ts: 'x', score: 8 }] },
+    Bob: { shifts: [{ startedAt: 'x', endedAt: 'y', durationMs: 60000, workSummary: 'w' }] },
+    Dana: { entries: [{ profileName: 'Dana', ts: 'x', score: 6.5 }] },
+  };
+  const now = Date.parse('2026-07-30T12:00:00.000Z');
+
+  it('maps an active run to 工作 (working)', () => {
+    const rows = aggregateMemberRows(
+      profiles, perf, undefined, undefined, undefined,
+      { Alice: { state: 'working' } } as const, now,
+    );
+    expect(rows.find((r) => r.name === 'Alice')!.status).toBe('working');
+    expect(rows.find((r) => r.name === 'Bob')!.status).toBe('on-duty');
+  });
+
+  it('maps an unexpired rest window to 休息 (resting)', () => {
+    const rows = aggregateMemberRows(
+      profiles, perf, undefined, undefined, undefined,
+      { Alice: { state: 'resting', restExpiresAt: '2026-07-30T12:10:00.000Z' } } as const, now,
+    );
+    expect(rows.find((r) => r.name === 'Alice')!.status).toBe('resting');
+  });
+
+  it('maps an expired rest window back to 上班 (on-duty)', () => {
+    const rows = aggregateMemberRows(
+      profiles, perf, undefined, undefined, undefined,
+      { Alice: { state: 'resting', restExpiresAt: '2026-07-30T11:59:00.000Z' } } as const, now,
+    );
+    expect(rows.find((r) => r.name === 'Alice')!.status).toBe('on-duty');
+  });
+
+  it('lists perf-only names as 下班 (off-duty) with role/model dash and history kept', () => {
+    const rows = aggregateMemberRows(profiles, perf, undefined, undefined, undefined, undefined, now);
+    const dana = rows.find((r) => r.name === 'Dana');
+    expect(dana).toBeDefined();
+    expect(dana!.status).toBe('off-duty');
+    expect(dana!.role).toBe('—');
+    expect(dana!.model).toBe('—');
+    expect(dana!.avgScore).toBeCloseTo(6.5);
+    expect(dana!.scoreCount).toBe(1);
+  });
+
+  it('treats a missing runtime-status file (null) as all on-duty, no error', () => {
+    const rows = aggregateMemberRows(profiles, perf, undefined, undefined, undefined, null, now);
+    expect(rows.find((r) => r.name === 'Alice')!.status).toBe('on-duty');
+    expect(rows.find((r) => r.name === 'Bob')!.status).toBe('on-duty');
+    // Off-duty archives still surface without the status file.
+    expect(rows.find((r) => r.name === 'Dana')!.status).toBe('off-duty');
+  });
+
+  it('does not list perf keys with neither entries nor shifts', () => {
+    const rows = aggregateMemberRows(
+      profiles, { ...perf, Ghost: {} }, undefined, undefined, undefined, undefined, now,
+    );
+    expect(rows.find((r) => r.name === 'Ghost')).toBeUndefined();
+  });
 });
 
 // ===========================================================================
@@ -556,6 +781,85 @@ describe('handleTeamCommand', () => {
 
     panel.handleInput('q');
     expect(host.restoreEditor).toHaveBeenCalled();
+  });
+
+  // ---------------------------------------------------------------------------
+  // Panel refresh (periodic re-read) + Ctrl+C forwarding
+  // ---------------------------------------------------------------------------
+
+  describe('team panel refresh and Ctrl+C forwarding', () => {
+    function mountedPanelWith(host: ReturnType<typeof makeHost>['host']): TeamPanelComponent {
+      return (host.mountEditorReplacement as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as TeamPanelComponent;
+    }
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('re-reads the data snapshot on the refresh interval while the panel is open', async () => {
+      const { host } = makeHost();
+      await handleTeamCommand(host, '');
+
+      // Initial load reads the config snapshot once
+      expect(host.harness.getConfig).toHaveBeenCalledTimes(1);
+      expect(host.state.ui.requestRender).not.toHaveBeenCalled();
+
+      // Advance past one refresh interval → the panel re-reads and re-renders
+      await vi.advanceTimersByTimeAsync(TEAM_PANEL_REFRESH_INTERVAL_MS);
+
+      expect(host.harness.getConfig).toHaveBeenCalledTimes(2);
+      expect(host.state.ui.requestRender).toHaveBeenCalledTimes(1);
+    });
+
+    it('stops re-reading after the panel is closed', async () => {
+      const { host } = makeHost();
+      await handleTeamCommand(host, '');
+      const panel = mountedPanelWith(host);
+      expect(host.harness.getConfig).toHaveBeenCalledTimes(1);
+
+      // Close via Esc — the refresh timer must be torn down
+      panel.handleInput('\u001B');
+      expect(host.restoreEditor).toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(TEAM_PANEL_REFRESH_INTERVAL_MS * 3);
+      expect(host.harness.getConfig).toHaveBeenCalledTimes(1);
+      expect(host.state.ui.requestRender).not.toHaveBeenCalled();
+    });
+
+    it('keeps the panel alive when a refresh fails', async () => {
+      const { host } = makeHost();
+      await handleTeamCommand(host, '');
+
+      // Next refresh: the config read fails (transient). The panel must not
+      // crash — it degrades via the loadError branch and keeps refreshing.
+      (host.harness.getConfig as unknown as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+        new Error('config read failed'),
+      );
+      await vi.advanceTimersByTimeAsync(TEAM_PANEL_REFRESH_INTERVAL_MS);
+
+      expect(host.state.ui.requestRender).toHaveBeenCalledTimes(1);
+      expect(host.mountEditorReplacement).toHaveBeenCalledOnce();
+
+      // A later refresh recovers
+      await vi.advanceTimersByTimeAsync(TEAM_PANEL_REFRESH_INTERVAL_MS);
+      expect(host.harness.getConfig).toHaveBeenCalledTimes(3);
+    });
+
+    it('forwards Ctrl+C to the injected streaming-cancel callback', async () => {
+      const { host } = makeHost();
+      const cancel = vi.fn(async () => {});
+      host.session = { cancel } as unknown as NonNullable<SlashCommandHost['session']>;
+      await handleTeamCommand(host, '');
+      const panel = mountedPanelWith(host);
+
+      panel.handleInput('\x03');
+
+      expect(cancel).toHaveBeenCalledOnce();
+    });
   });
 });
 
@@ -809,6 +1113,7 @@ describe('TeamPanelComponent CJK alignment', () => {
   const members = [
     {
       name: 'shen-yifan',
+      status: 'on-duty' as const,
       role: '前端工程师·组件架构',
       model: 'gpt-4o',  // fits within 20-char column
       avgScore: 85.3,
@@ -818,6 +1123,7 @@ describe('TeamPanelComponent CJK alignment', () => {
     },
     {
       name: 'qi-yuan',
+      status: 'on-duty' as const,
       role: '后端工程师·数据层',
       model: 'claude-3.5',  // fits within 20-char column
       avgScore: null,
@@ -827,7 +1133,7 @@ describe('TeamPanelComponent CJK alignment', () => {
     },
   ];
 
-  it('renders table with CJK Role column without breaking alignment', () => {
+  it('splits the CJK Role into position and focus columns without breaking alignment', () => {
     const panel = new TeamPanelComponent({
       teamMode: true,
       members,
@@ -837,9 +1143,10 @@ describe('TeamPanelComponent CJK alignment', () => {
     // Render at 120 columns wide — wide enough to avoid final-line truncation
     const lines = panel.render(120);
 
-    // Header should exist
-    const headerLine = lines.find((l) => l.includes('Name') && l.includes('Role'));
+    // Header now carries separate 职位 / 职能 columns
+    const headerLine = lines.find((l) => l.includes('Name') && l.includes('职位'));
     expect(headerLine).toBeDefined();
+    expect(headerLine).toContain('职能');
 
     // Each data row should have consistent column separators.
     // Find the row lines (containing member names)
@@ -847,6 +1154,15 @@ describe('TeamPanelComponent CJK alignment', () => {
       (l) => l.includes('shen-yifan') || l.includes('qi-yuan'),
     );
     expect(rowLines).toHaveLength(2);
+
+    // Position and focus render in their own columns; the raw '·'-joined
+    // role string no longer appears in a data row.
+    expect(rowLines[0]).toContain('前端工程师');
+    expect(rowLines[0]).toContain('组件架构');
+    expect(rowLines[0]).not.toContain('前端工程师·组件架构');
+    expect(rowLines[1]).toContain('后端工程师');
+    expect(rowLines[1]).toContain('数据层');
+    expect(rowLines[1]).not.toContain('后端工程师·数据层');
 
     // Verify the data rows contain model IDs
     expect(rowLines[0]).toContain('gpt-4o');
@@ -857,17 +1173,16 @@ describe('TeamPanelComponent CJK alignment', () => {
     expect(rowLines[0]!).toContain('2m 0s');
     expect(rowLines[1]!).toContain('—');
 
-    // Role column (frontmatter row) is kept within its allocated width;
-    // the header 'Role' label plus CJK content both fit in 16 visible columns.
-    // Verify no content bleeds past its column by checking that the model
-    // column contents appear in a consistent position.
-    const rolePos = rowLines[0]!.indexOf('前端工程师');
+    // Column order within a row: position → focus → model
+    const posPos = rowLines[0]!.indexOf('前端工程师');
+    const focusPos = rowLines[0]!.indexOf('组件架构');
     const modelPos = rowLines[0]!.indexOf('gpt-4o');
-    expect(rolePos).toBeGreaterThanOrEqual(0);
-    expect(modelPos).toBeGreaterThan(rolePos);
+    expect(posPos).toBeGreaterThanOrEqual(0);
+    expect(focusPos).toBeGreaterThan(posPos);
+    expect(modelPos).toBeGreaterThan(focusPos);
   });
 
-  it('truncates long CJK Role to fit column width', () => {
+  it('truncates a long CJK focus to fit the focus column width', () => {
     const longRoleMembers = [
       {
         ...members[0]!,
@@ -885,12 +1200,47 @@ describe('TeamPanelComponent CJK alignment', () => {
     const rowLine = lines.find((l) => l.includes('shen-yifan'));
     expect(rowLine).toBeDefined();
 
-    // The truncated role should be ≤ 16 visible columns; visibleWidth
-    // accounts for CJK double-width, so the ellipsis '…' should appear.
-    // We just verify that the line is not broken and fits within expected bounds.
-    expect(rowLine!.length).toBeGreaterThan(0);
-    // The rendered line should not contain the full untruncated role
+    // The position column stays intact; the long focus is truncated with '…'
+    // (visibleWidth accounts for CJK double-width).
+    expect(rowLine).toContain('前端工程师');
+    expect(rowLine).toContain('…');
+    // The full untruncated focus must not appear
     expect(rowLine).not.toContain('组件架构与设计系统');
+  });
+
+  it('leaves the focus column blank when the role has no separator', () => {
+    const noSepMembers = [
+      {
+        ...members[0]!,
+        role: '产品经理',
+      },
+    ];
+
+    const panel = new TeamPanelComponent({
+      teamMode: true,
+      members: noSepMembers,
+      onClose: () => {},
+    });
+
+    const lines = panel.render(120);
+    const rowLine = lines.find((l) => l.includes('shen-yifan'));
+    expect(rowLine).toBeDefined();
+
+    // The whole role renders in the position column, with no separator text
+    expect(rowLine).toContain('产品经理');
+    expect(rowLine).not.toContain('·');
+
+    // The focus cell is blank: between the position text and the status cell
+    // there is nothing but padding spaces.
+    const posEnd = rowLine!.indexOf('产品经理') + '产品经理'.length;
+    const statusStart = rowLine!.indexOf('上班');
+    const between = rowLine!.slice(posEnd, statusStart);
+    expect(between.trim()).toBe('');
+
+    // The status cell then sits before the model column.
+    const statusEnd = statusStart + '上班'.length;
+    const modelStart = rowLine!.indexOf('gpt-4o');
+    expect(modelStart).toBeGreaterThan(statusEnd);
   });
 
   it('handles narrow terminal without breaking layout', () => {
@@ -910,5 +1260,224 @@ describe('TeamPanelComponent CJK alignment', () => {
       const plain = line.replace(/\x1b\[[\d;]*m/g, '');
       expect(plain.length).toBeLessThanOrEqual(42); // 40 + small slack for ANSI
     }
+  });
+});
+
+// ===========================================================================
+// TeamPanelComponent status column — four states + off-duty archive styling
+// ===========================================================================
+//
+// Colour contract (tokens from currentTheme, asserted as truecolor ANSI):
+//   working  → primary   (the "running badge" token)
+//   resting  → warning   (yellow, the rest window)
+//   on-duty  → uncoloured (inherits the row dim)
+//   off-duty → whole row muted (textMuted) — greyed-out archive
+//
+// vitest runs chalk with colours disabled by default; force truecolor (the
+// same pattern as goal-panel / welcome / tool-call tests) so token differences
+// surface as ANSI codes.
+
+function hexToRgbAnsi(hex: string): string {
+  const m = /^#([0-9a-fA-F]{6})$/.exec(hex);
+  if (m === null) throw new Error(`unexpected hex token: ${hex}`);
+  const value = parseInt(m[1]!, 16);
+  return `${(value >> 16) & 255};${(value >> 8) & 255};${value & 255}`;
+}
+
+function ansiFg(hex: string): string {
+  return `\u001B[38;2;${hexToRgbAnsi(hex)}m`;
+}
+
+describe('TeamPanelComponent status column', () => {
+  const previousChalkLevel = chalk.level;
+  beforeEach(() => {
+    chalk.level = 3; // force truecolor so token colours surface as ANSI
+  });
+  afterEach(() => {
+    chalk.level = previousChalkLevel;
+  });
+
+  const workingFg = ansiFg(currentTheme.color('primary'));
+  const warningFg = ansiFg(currentTheme.color('warning'));
+  const mutedFg = ansiFg(currentTheme.color('textMuted'));
+
+  const onDuty = {
+    name: 'alice',
+    status: 'on-duty' as const,
+    role: 'Dev',
+    model: 'gpt-4o',
+    avgScore: 8,
+    scoreCount: 1,
+    avgDurationMs: 60_000,
+    shiftCount: 1,
+  };
+  const offDuty = {
+    name: 'zed',
+    status: 'off-duty' as const,
+    role: '—',
+    model: '—',
+    avgScore: 6.5,
+    scoreCount: 3,
+    avgDurationMs: 120_000,
+    shiftCount: 2,
+  };
+
+  it('renders the Status column in the table header', () => {
+    const panel = new TeamPanelComponent({
+      teamMode: true,
+      members: [onDuty],
+      onClose: () => {},
+    });
+    const header = panel.render(120).find((l) => l.includes('Status'));
+    expect(header).toBeDefined();
+    expect(header).toContain('Name');
+    expect(header).toContain('Status');
+    expect(header).toContain('Model');
+  });
+
+  it('renders 工作 in the primary (running badge) color', () => {
+    const panel = new TeamPanelComponent({
+      teamMode: true,
+      members: [{ ...onDuty, status: 'working' as const }],
+      onClose: () => {},
+    });
+    const row = panel.render(120).find((l) => l.includes('alice'))!;
+    expect(row).toContain('工作');
+    expect(row).toContain(workingFg); // primary
+  });
+
+  it('renders 休息 in the warning (yellow) color', () => {
+    const panel = new TeamPanelComponent({
+      teamMode: true,
+      members: [{ ...onDuty, status: 'resting' as const }],
+      onClose: () => {},
+    });
+    const row = panel.render(120).find((l) => l.includes('alice'))!;
+    expect(row).toContain('休息');
+    expect(row).toContain(warningFg); // warning
+  });
+
+  it('renders 上班 uncoloured for on-duty members', () => {
+    const panel = new TeamPanelComponent({
+      teamMode: true,
+      members: [onDuty],
+      onClose: () => {},
+    });
+    const row = panel.render(120).find((l) => l.includes('alice'))!;
+    expect(row).toContain('上班');
+    expect(row).not.toContain(workingFg); // no primary
+    expect(row).not.toContain(warningFg); // no warning
+  });
+
+  it('renders an off-duty row dimmed (muted) with model column —', () => {
+    const panel = new TeamPanelComponent({
+      teamMode: true,
+      members: [onDuty, offDuty],
+      onClose: () => {},
+    });
+    const rows = panel.render(120);
+    const row = rows.find((l) => l.includes('zed'))!;
+    expect(row).toContain('下班');
+    expect(row).toContain('—'); // role and model both collapse to the em-dash
+    expect(row).not.toContain('gpt-4o');
+    // Archived rows drop a step fainter than active rows: textMuted, not textDim.
+    expect(row).toContain(mutedFg);
+    const activeRow = rows.find((l) => l.includes('alice'))!;
+    expect(activeRow).not.toContain(mutedFg);
+  });
+});
+
+// ===========================================================================
+// loadTeamPanelData integration — real reads against a temp KIMI_CODE_HOME
+// ===========================================================================
+//
+// team.ts's own internal reads (readAgentProfiles / readPerformanceData /
+// readRuntimeStatusData) bypass the partial vi.mock, so the panel's refresh
+// chain is verified here against a real temp data dir: missing runtime-status
+// file must not error, and a 2.5s refresh must pick up a changed status file.
+
+describe('team panel runtime-status integration', () => {
+  const realHome = process.env[KIMI_CODE_HOME_ENV];
+  let tmp: string;
+
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), 'kimi-team-panel-'));
+    const agentsDir = join(tmp, 'agents');
+    mkdirSync(agentsDir, { recursive: true });
+    writeFileSync(
+      join(agentsDir, 'alice.md'),
+      '---\nname: Alice\ndescription: Dev\nrole: Developer\n---\n',
+    );
+    // No runtime-status.json by default — the absent-file case.
+    writeFileSync(join(agentsDir, 'performance.json'), JSON.stringify({}));
+    process.env[KIMI_CODE_HOME_ENV] = tmp;
+  });
+
+  afterEach(() => {
+    rmSync(tmp, { recursive: true, force: true });
+    if (realHome === undefined) delete process.env[KIMI_CODE_HOME_ENV];
+    else process.env[KIMI_CODE_HOME_ENV] = realHome;
+  });
+
+  function mountedPanel(host: ReturnType<typeof makeHost>['host']): TeamPanelComponent {
+    return (host.mountEditorReplacement as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as TeamPanelComponent;
+  }
+
+  it('opens with all on-duty and no error when runtime-status.json is absent', async () => {
+    const { host } = makeHost();
+    await handleTeamCommand(host, '');
+
+    expect(host.showError).not.toHaveBeenCalled();
+    const joined = mountedPanel(host).render(120).join('\n');
+    expect(joined).toContain('上班');
+    expect(joined).not.toContain('工作');
+    expect(joined).not.toContain('休息');
+  });
+
+  it('flips 工作 → 休息 after a 2.5s refresh re-reads runtime-status.json', async () => {
+    vi.useFakeTimers();
+    try {
+      writeFileSync(
+        join(tmp, 'agents', 'runtime-status.json'),
+        JSON.stringify({ Alice: { state: 'working' } }),
+      );
+      const { host } = makeHost();
+      await handleTeamCommand(host, '');
+      const panel = mountedPanel(host);
+      expect(panel.render(120).join('\n')).toContain('工作');
+
+      // The engine settles the instance into its rest window.
+      writeFileSync(
+        join(tmp, 'agents', 'runtime-status.json'),
+        JSON.stringify({
+          Alice: { state: 'resting', restExpiresAt: '2999-01-01T00:00:00.000Z' },
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(TEAM_PANEL_REFRESH_INTERVAL_MS);
+
+      const joined = panel.render(120).join('\n');
+      expect(joined).toContain('休息');
+      expect(joined).not.toContain('工作');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('lists a perf-only name as an off-duty archive row with history', async () => {
+    writeFileSync(
+      join(tmp, 'agents', 'performance.json'),
+      JSON.stringify({
+        Alice: { entries: [{ profileName: 'Alice', ts: '2026-07-30T10:00:00.000Z', score: 8 }] },
+        Dana: { entries: [{ profileName: 'Dana', ts: '2026-07-30T09:00:00.000Z', score: 6.5 }] },
+      }),
+    );
+    const { host } = makeHost();
+    await handleTeamCommand(host, '');
+
+    const joined = mountedPanel(host).render(120).join('\n');
+    expect(joined).toContain('Dana');
+    expect(joined).toContain('下班');
+    expect(joined).toContain('6.5');
+    expect(joined).not.toContain('工作');
   });
 });

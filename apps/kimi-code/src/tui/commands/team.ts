@@ -89,8 +89,33 @@ export interface PerformanceData {
   };
 }
 
+/**
+ * Four-state member lifecycle status, confirmed with product.
+ * See `deriveMemberStatus` for the exact derivation rules.
+ */
+export type MemberStatus = 'working' | 'resting' | 'on-duty' | 'off-duty';
+
+/** One entry of `runtime-status.json` — a profile's live engine lifecycle state. */
+export interface RuntimeStatusEntry {
+  readonly state: 'working' | 'resting';
+  readonly agentId?: string;
+  readonly updatedAt?: string;
+  /** ISO-8601 timestamp; present while `state === 'resting'` (rest window). */
+  readonly restExpiresAt?: string;
+}
+
+/**
+ * Parsed shape of `<dataDir>/agents/runtime-status.json`, keyed by profile name.
+ * The file may be absent (v1 engine / team mode never ran) — treat as empty.
+ */
+export interface RuntimeStatusData {
+  readonly [profileName: string]: RuntimeStatusEntry | undefined;
+}
+
 export interface TeamMemberRow {
   readonly name: string;
+  /** Lifecycle status — 工作 / 休息 / 上班 / 下班. */
+  readonly status: MemberStatus;
   readonly role: string;
   readonly model: string;
   /** True when model comes from the latest shift's `model` field (last-used). */
@@ -163,6 +188,67 @@ export function parsePerformanceData(raw: string): PerformanceData | null {
 }
 
 /**
+ * Parse the raw content of `runtime-status.json` (engine-written, team mode).
+ * Returns null if JSON is invalid or not an object. Malformed entries are
+ * dropped per-key rather than failing the whole parse, so a future engine
+ * state can never crash the panel.
+ */
+export function parseRuntimeStatusData(raw: string): RuntimeStatusData | null {
+  try {
+    const parsed = JSON.parse(raw);
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      return null;
+    }
+    const result: Record<string, RuntimeStatusEntry> = {};
+    for (const [name, rawEntry] of Object.entries(parsed)) {
+      if (typeof rawEntry !== 'object' || rawEntry === null) continue;
+      const entry = rawEntry as Record<string, unknown>;
+      const state = entry['state'];
+      if (state !== 'working' && state !== 'resting') continue;
+      result[name] = {
+        state,
+        agentId: typeof entry['agentId'] === 'string' ? entry['agentId'] : undefined,
+        updatedAt: typeof entry['updatedAt'] === 'string' ? entry['updatedAt'] : undefined,
+        restExpiresAt:
+          typeof entry['restExpiresAt'] === 'string' ? entry['restExpiresAt'] : undefined,
+      };
+    }
+    return result as RuntimeStatusData;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Derive the four-state lifecycle status for one member.
+ *
+ * Rules (by instance lifecycle):
+ *  - 工作 working:  profile exists && status.state === 'working'
+ *  - 休息 resting:  profile exists && status.state === 'resting'
+ *                    && rest window (`restExpiresAt`) has not expired
+ *  - 上班 on-duty:  profile exists && (no status entry || resting expired)
+ *                    — employed, no live instance, spawns on demand
+ *  - 下班 off-duty: no profile file, but performance history exists
+ *                    (fired / archived)
+ *
+ * `now` is injected so callers can freeze time for the rest-window check.
+ */
+export function deriveMemberStatus(
+  hasProfile: boolean,
+  entry: RuntimeStatusEntry | undefined,
+  now: number,
+): MemberStatus {
+  if (!hasProfile) return 'off-duty';
+  if (entry?.state === 'working') return 'working';
+  if (entry?.state === 'resting' && entry.restExpiresAt !== undefined) {
+    const expiresAt = Date.parse(entry.restExpiresAt);
+    // Unparseable timestamps count as expired → the member is on-duty.
+    if (Number.isFinite(expiresAt) && expiresAt > now) return 'resting';
+  }
+  return 'on-duty';
+}
+
+/**
  * Format a duration in milliseconds to "Xm Ys" or "Xs" for short durations.
  */
 export function formatDuration(ms: number): string {
@@ -192,8 +278,31 @@ export function aggregateMemberRows(
    * Takes priority over `resolvedModels`.
    */
   lastUsedModels?: Readonly<Record<string, string>>,
+  /**
+   * Real model id behind the `[secondary_model]` recipe (`secondaryModel.model`).
+   * The engine records the derived alias `__secondary__` in shift `model`
+   * fields; display resolves that alias to this id. When the id is unavailable,
+   * an unresolved `__secondary__` falls through to the normal fallback chain
+   * (resolved → profile default → '—').
+   */
+  secondaryModelId?: string,
+  /**
+   * Parsed `<dataDir>/agents/runtime-status.json` (live engine lifecycle
+   * state). Absent file / null → every existing profile is on-duty; perf-only
+   * names are still listed as off-duty archives.
+   */
+  runtimeStatus?: RuntimeStatusData | null,
+  /**
+   * Reference "now" for the rest-window expiry check; injected so tests can
+   * freeze time. Defaults to the real clock.
+   */
+  now: number = Date.now(),
 ): TeamMemberRow[] {
-  return profiles.map((profile) => {
+  const rows: TeamMemberRow[] = [];
+  const activeNames = new Set<string>();
+
+  for (const profile of profiles) {
+    activeNames.add(profile.name);
     const profileData = perf?.[profile.name];
     const entries = profileData?.entries ?? [];
     const shifts = profileData?.shifts ?? [];
@@ -212,20 +321,67 @@ export function aggregateMemberRows(
 
     // Last-used model from the latest shift wins, then resolvedModels, then profile default
     const lastUsed = lastUsedModels?.[profile.name];
+    // `__secondary__` is an engine-internal derived alias recorded in shift
+    // `model` fields — never a user-visible id. Resolve it to the real
+    // secondary model id for display; when that id is missing, drop the
+    // last-used entry so the normal fallback chain applies.
+    const lastUsedForDisplay =
+      lastUsed !== '__secondary__'
+        ? lastUsed
+        : secondaryModelId !== undefined && secondaryModelId.length > 0
+          ? secondaryModelId
+          : undefined;
     const resolved = resolvedModels?.[profile.name] ?? profile.modelPreference ?? '—';
-    const model = lastUsed ?? resolved;
+    const model = lastUsedForDisplay ?? resolved;
 
-    return {
+    rows.push({
       name: profile.name,
+      status: deriveMemberStatus(true, runtimeStatus?.[profile.name], now),
       role: profile.role ?? '—',
       model,
-      modelFromLastUse: lastUsed !== undefined ? true : undefined,
+      modelFromLastUse: lastUsedForDisplay !== undefined ? true : undefined,
       avgScore,
       scoreCount,
       avgDurationMs,
       shiftCount,
-    };
-  });
+    });
+  }
+
+  // Archived members: names with performance history but no profile file
+  // (fired / dismissed → 下班). Off-duty rows keep their score & duration
+  // history but have no role/model; they render dimmed as a greyed archive.
+  if (perf !== null) {
+    for (const name of Object.keys(perf)) {
+      if (activeNames.has(name)) continue;
+      const profileData = perf[name];
+      const entries = profileData?.entries ?? [];
+      const shifts = profileData?.shifts ?? [];
+      // A key with neither entries nor shifts carries no 绩效/工时历史 — not a member.
+      if (entries.length === 0 && shifts.length === 0) continue;
+      const scoreCount = entries.length;
+      const avgScore =
+        scoreCount > 0
+          ? entries.reduce((sum, e) => sum + e.score, 0) / scoreCount
+          : null;
+      const shiftCount = shifts.length;
+      const avgDurationMs =
+        shiftCount > 0
+          ? shifts.reduce((sum, s) => sum + s.durationMs, 0) / shiftCount
+          : null;
+      rows.push({
+        name,
+        status: 'off-duty',
+        role: '—',
+        model: '—',
+        avgScore,
+        scoreCount,
+        avgDurationMs,
+        shiftCount,
+      });
+    }
+  }
+
+  return rows;
 }
 
 /**
@@ -326,6 +482,21 @@ export function readPerformanceData(dataDir: string): PerformanceData | null {
   }
 }
 
+/**
+ * Read and parse runtime-status.json from the data-dir agents folder.
+ * Absent file (v1 engine / team mode never ran) → null, treated as empty —
+ * never an error.
+ */
+export function readRuntimeStatusData(dataDir: string): RuntimeStatusData | null {
+  const filePath = join(dataDir, 'agents', 'runtime-status.json');
+  try {
+    const raw = readFileSync(filePath, 'utf-8');
+    return parseRuntimeStatusData(raw);
+  } catch {
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Panel component
 // ---------------------------------------------------------------------------
@@ -354,12 +525,26 @@ export interface TeamPanelOptions {
   /** Error message if data loading failed entirely. */
   readonly loadError?: string;
   readonly onClose: () => void;
+  /**
+   * Invoked when the user presses Ctrl+C while the panel has focus. Wired (in
+   * showTeamPanel) to the same streaming-cancel path as the editor's Ctrl+C,
+   * so opening the panel mid-turn never strands the user unable to interrupt.
+   */
+  readonly onCancel?: () => void;
   readonly maxVisible?: number;
 }
 
+/** Status column copy — the four lifecycle states (Chinese, target audience). */
+const STATUS_LABELS: Record<MemberStatus, string> = {
+  working: '工作',
+  resting: '休息',
+  'on-duty': '上班',
+  'off-duty': '下班',
+};
+
 export class TeamPanelComponent extends Container implements Focusable {
   focused = false;
-  private readonly opts: TeamPanelOptions;
+  private opts: TeamPanelOptions;
   private scrollTop = 0;
 
   constructor(opts: TeamPanelOptions) {
@@ -367,8 +552,23 @@ export class TeamPanelComponent extends Container implements Focusable {
     this.opts = opts;
   }
 
+  /**
+   * Replace the displayed data in place (used by the periodic re-read while
+   * the panel stays open). Callbacks are preserved.
+   */
+  update(data: Pick<TeamPanelOptions, 'teamMode' | 'members' | 'loadError'>): void {
+    this.opts = { ...this.opts, ...data };
+  }
+
   handleInput(data: string): void {
     const printable = decodeKittyPrintable(data) ?? data;
+    if (matchesKey(data, Key.ctrl('c'))) {
+      // Forward Ctrl+C to the injected streaming-cancel path instead of
+      // swallowing it — otherwise opening the panel during a turn creates a
+      // dead zone where the user must Esc back to the editor to interrupt.
+      this.opts.onCancel?.();
+      return;
+    }
     if (
       matchesKey(data, Key.escape) ||
       matchesKey(data, Key.enter) ||
@@ -446,7 +646,9 @@ export class TeamPanelComponent extends Container implements Focusable {
     const hasDimmedModel = this.opts.members.some((m) => !m.modelFromLastUse);
     const colDefs = [
       { label: 'Name', width: 18 },
-      { label: 'Role', width: 16 },
+      { label: '职位', width: 10 },
+      { label: '职能', width: 14 },
+      { label: 'Status', width: 6 },
       { label: hasDimmedModel ? 'Model*' : 'Model', width: 20 },
       { label: 'Score', width: 7 },
       { label: '#', width: 4 },
@@ -468,25 +670,45 @@ export class TeamPanelComponent extends Container implements Focusable {
         member.avgDurationMs !== null
           ? formatDuration(member.avgDurationMs)
           : '—';
-      // Role may contain CJK double-width characters; truncate to column
-      // width so it never pushes subsequent columns out of alignment.
-      const roleDisplay = truncateToWidth(member.role, 16, '…');
+      // Role is `职位·职能` (U+00B7 separator); split on the first separator so
+      // each column gets its own CJK-aligned width. Roles without a separator
+      // render entirely in the position column, leaving the focus column blank.
+      const sepIdx = member.role.indexOf('·');
+      const position = sepIdx === -1 ? member.role : member.role.slice(0, sepIdx);
+      const focus = sepIdx === -1 ? '' : member.role.slice(sepIdx + 1);
+      const positionDisplay = truncateToWidth(position, 10, '…');
+      const focusDisplay = truncateToWidth(focus, 14, '…');
       const nameDisplay = truncateToWidth(member.name, 18, '…');
       const modelText = truncateToWidth(member.model, 20, '…');
       // Last-used model is shown directly; resolution-fallback gets a dim style
       const modelDisplay = member.modelFromLastUse
         ? modelText
         : dim(modelText);
+      // Status colour: 工作 = primary (the "running badge" token), 休息 =
+      // warning (yellow, the rest window). 上班 / 下班 stay uncoloured — 上班
+      // inherits the row dim, 下班 rows are muted at row level (greyed archive).
+      const statusLabel = STATUS_LABELS[member.status];
+      const statusDisplay =
+        member.status === 'working'
+          ? accent(statusLabel)
+          : member.status === 'resting'
+            ? warning(statusLabel)
+            : statusLabel;
       const cells = [
         padToVisibleWidth(nameDisplay, 18),
-        padToVisibleWidth(roleDisplay, 16),
+        padToVisibleWidth(positionDisplay, 10),
+        padToVisibleWidth(focusDisplay, 14),
+        padToVisibleWidth(statusDisplay, 6),
         padToVisibleWidth(modelDisplay, 20),
         padStartVisible(scoreStr, 6) + ' ',
         padStartVisible(String(member.scoreCount), 3) + ' ',
         padStartVisible(durationStr, 9) + ' ',
         padStartVisible(String(member.shiftCount), 3),
       ];
-      lines.push(`  ${dim(cells.join(' '))}`);
+      // Active rows render in the usual dim; archived (下班) rows drop a step
+      // fainter to textMuted so the whole line reads as a greyed-out record.
+      const rowStyle = member.status === 'off-duty' ? muted : dim;
+      lines.push(`  ${rowStyle(cells.join(' '))}`);
     }
 
     lines.push('');
@@ -515,7 +737,27 @@ export class TeamPanelComponent extends Container implements Focusable {
 // Internal — panel assembly
 // ---------------------------------------------------------------------------
 
-async function showTeamPanel(host: SlashCommandHost): Promise<void> {
+/**
+ * How often the open team panel re-reads agent profiles / performance /
+ * runtime-status data so scores, models and lifecycle states stay current
+ * while the agent keeps working underneath (ms). File reads are cheap and the
+ * panel is short-lived; 2.5s keeps the view fresh without hammering the disk.
+ */
+export const TEAM_PANEL_REFRESH_INTERVAL_MS = 2_500;
+
+export interface TeamPanelData {
+  readonly teamMode: boolean;
+  readonly members: readonly TeamMemberRow[];
+  readonly loadError?: string;
+}
+
+/**
+ * Read the full panel snapshot: config (teamMode + model resolution), agent
+ * profiles, and performance data. Failures degrade to defaults / a loadError
+ * message rather than throwing — a transient read error while the panel is
+ * open must never crash the UI.
+ */
+async function loadTeamPanelData(host: SlashCommandHost): Promise<TeamPanelData> {
   let teamMode = false;
   let loadError: string | undefined;
   let members: TeamMemberRow[] = [];
@@ -538,6 +780,9 @@ async function showTeamPanel(host: SlashCommandHost): Promise<void> {
     const cwd = process.cwd();
     const profiles = readAgentProfiles(dataDir, cwd);
     const perf = readPerformanceData(dataDir);
+    // Live engine lifecycle state. Missing file → null → every profile with no
+    // status entry is on-duty; perf-only names still list as off-duty archives.
+    const runtimeStatus = readRuntimeStatusData(dataDir);
 
     // Resolve effective model for each profile.
     // `fullConfig.secondaryModel` is available on both v1 and v2 engines now.
@@ -564,21 +809,60 @@ async function showTeamPanel(host: SlashCommandHost): Promise<void> {
       }
     }
 
-    members = aggregateMemberRows(profiles, perf, resolvedModels, lastUsedModels);
+    // Real id behind the `[secondary_model]` recipe (`secondaryModel.model`).
+    // The engine records the derived alias `__secondary__` in shift `model`
+    // fields; the panel resolves that alias to this id for display. When the
+    // config lacks it, the display-side resolution simply falls back.
+    const secondaryModelId: string | undefined =
+      typeof fullConfig?.secondaryModel?.model === 'string'
+        ? fullConfig.secondaryModel.model
+        : undefined;
+
+    members = aggregateMemberRows(
+      profiles,
+      perf,
+      resolvedModels,
+      lastUsedModels,
+      secondaryModelId,
+      runtimeStatus,
+    );
   } catch (error) {
     loadError = `Could not load team data: ${formatErrorMessage(error)}`;
   }
 
-  host.mountEditorReplacement(
-    new TeamPanelComponent({
-      teamMode,
-      members,
-      loadError,
-      onClose: () => {
-        host.restoreEditor();
-      },
-    }),
-  );
+  return { teamMode, members, loadError };
+}
+
+async function showTeamPanel(host: SlashCommandHost): Promise<void> {
+  const initial = await loadTeamPanelData(host);
+
+  // Refresh timer lives in the host-facing closure (not the component), so the
+  // panel stays a dumb view. It is cleared when the panel closes — the only
+  // exit is onClose (Esc / Enter / q), so clearing there covers unmount.
+  let refreshTimer: ReturnType<typeof setInterval> | undefined;
+  const panel = new TeamPanelComponent({
+    teamMode: initial.teamMode,
+    members: initial.members,
+    loadError: initial.loadError,
+    onCancel: () => {
+      // Same streaming-cancel path as the editor's Ctrl+C (editor-keyboard):
+      // interrupt the in-flight agent turn through the session handle.
+      void host.session?.cancel();
+    },
+    onClose: () => {
+      if (refreshTimer !== undefined) clearInterval(refreshTimer);
+      host.restoreEditor();
+    },
+  });
+
+  refreshTimer = setInterval(() => {
+    void loadTeamPanelData(host).then((data) => {
+      panel.update(data);
+      host.state.ui.requestRender();
+    });
+  }, TEAM_PANEL_REFRESH_INTERVAL_MS);
+
+  host.mountEditorReplacement(panel);
 }
 
 async function applyTeamMode(host: SlashCommandHost, enabled: boolean): Promise<void> {
