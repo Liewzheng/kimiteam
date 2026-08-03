@@ -42,15 +42,7 @@ kimiteam                    # 启动交互式会话（与官方 kimi 参数兼�
 
 ## Windows 支持
 
-- **WSL(推荐)**:安装 WSL 后,在 WSL 终端里执行与 Linux 相同的安装命令:
-
-  ```sh
-  curl -fsSL https://raw.githubusercontent.com/Liewzheng/kimi-code/feat/subagent-team/scripts/install-kimiteam.sh | bash
-  ```
-
-  之后用 `kimiteam` 启动,行为与 Linux 一致。
-
-- **原生 PowerShell**:一键安装(免下载,短链脚本为 ASCII-only,安全经 `irm|iex` 管道执行):
+- **原生 PowerShell 一键安装(首选)**:免下载,短链脚本为 ASCII-only,安全经 `irm|iex` 管道执行:
 
   ```powershell
   irm https://liewzheng.github.io/kimi-code/install.ps1 | iex
@@ -70,7 +62,13 @@ kimiteam                    # 启动交互式会话（与官方 kimi 参数兼�
 
   (把 `~\.kimi-code\bin` 加入 PATH 后可直接运行 `kimiteam`。)
 
-> 注意:原生 Windows 的 TUI 交互(流式刷新、Ctrl+C 中断等)尚未实测,建议优先使用 WSL;若在原生 PowerShell 下遇到交互异常,请回到 WSL 或 Git Bash。
+- **WSL(完整交互推荐)**:原生 Windows 的 TUI 交互(流式刷新、Ctrl+C 中断等)尚未实测;若在意完整交互体验或遇到交互异常,建议优先使用 WSL(或 Git Bash)。安装 WSL 后,在 WSL 终端里执行与 Linux 相同的安装命令:
+
+  ```sh
+  curl -fsSL https://raw.githubusercontent.com/Liewzheng/kimi-code/feat/subagent-team/scripts/install-kimiteam.sh | bash
+  ```
+
+  之后用 `kimiteam` 启动,行为与 Linux 一致。
 
 ## 与官方 kimi 的关系
 
