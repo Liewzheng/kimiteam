@@ -1,9 +1,13 @@
 /**
- * `profile` domain (L4) — system-prompt context assembly.
+ * `profile` domain — system-prompt context assembly.
  *
  * Loads the AGENTS.md instruction hierarchy (user-level brand + generic files,
- * then project-level files from the project root down to the cwd) and assembles
- * the {@link SystemPromptContext} bag consumed by `IAgentProfileService.useProfile`.
+ * then project-level files from the project root down to the cwd — the root
+ * discovered through a git work-tree probe) and assembles
+ * the {@link SystemPromptContext} bag.
+ * `agentsMdWatchRoots` exposes the watch plan for the probed file set, and
+ * `prepareSystemPromptContext` accepts a `preloadedAgentsMd` snapshot so the
+ * caller can inject an already-read snapshot instead of re-reading the files.
  *
  * Pipeline instructions are collected in parallel with AGENTS.md, same
  * structure but a single file per level: the user-level
@@ -26,6 +30,7 @@
 
 import { dirname, join, normalize } from 'pathe';
 
+import { findGitWorkTree } from '#/app/git/workTree';
 import type { IHostFileSystem } from '#/os/interface/hostFileSystem';
 
 import type { SystemPromptContext } from './profile';
@@ -40,6 +45,8 @@ interface ProfileContextDeps {
   readonly homeDir: string;
 }
 
+export type { ProfileContextDeps };
+
 export interface PreparedSystemPromptContext extends SystemPromptContext {
   readonly cwdListing?: string;
   readonly agentsMd?: string;
@@ -51,6 +58,7 @@ export interface PreparedSystemPromptContext extends SystemPromptContext {
 
 export interface PrepareSystemPromptContextOptions {
   readonly additionalDirs?: readonly string[];
+  readonly preloadedAgentsMd?: LoadedAgentsMd;
 }
 
 export async function prepareSystemPromptContext(
@@ -62,7 +70,9 @@ export async function prepareSystemPromptContext(
   const additionalDirs = dedupeDirs(options?.additionalDirs ?? []);
   const [cwdListing, agentsMdResult, pipelineResult, additionalDirsInfo] = await Promise.all([
     listDirectory(deps, workDir, { collapseHiddenDirs: true }),
-    loadAgentsMdForRoots(deps, brandHome, [workDir]),
+    options?.preloadedAgentsMd !== undefined
+      ? Promise.resolve(options.preloadedAgentsMd)
+      : loadAgentsMdForRoots(deps, brandHome, [workDir]),
     loadPipelineForRoots(deps, brandHome, [workDir]),
     loadAdditionalDirsInfo(deps, additionalDirs),
   ]);
@@ -90,7 +100,9 @@ interface LoadedAgentsMd {
   readonly warning: string | undefined;
 }
 
-async function loadAgentsMdForRoots(
+export type { LoadedAgentsMd };
+
+export async function loadAgentsMdForRoots(
   deps: ProfileContextDeps,
   brandHome: string | undefined,
   workDirs: readonly string[],
@@ -126,7 +138,7 @@ async function loadAgentsMdForRoots(
 
   for (const workDir of workDirs) {
     const rootWorkDir = normalize(workDir);
-    const projectRoot = await findProjectRoot(deps, rootWorkDir);
+    const projectRoot = (await findGitWorkTree(deps.fs, rootWorkDir))?.root ?? rootWorkDir;
     const dirs = dirsRootToLeaf(rootWorkDir, projectRoot);
 
     for (const dir of dirs) {
@@ -164,8 +176,8 @@ interface PipelineFile {
 /**
  * Collects the pipeline.md hierarchy in parallel with AGENTS.md: the user-level
  * `brandHome/pipeline.md` plus the project-level
- * `<projectRoot>/.kimi-code/pipeline.md` (project root found via
- * {@link findProjectRoot}, which walks up to `.git`). Unlike AGENTS.md there is
+ * `<projectRoot>/.kimi-code/pipeline.md` (project root found via the same git
+ * work-tree probe {@link findGitWorkTree} uses). Unlike AGENTS.md there is
  * exactly one file per level, so no root-to-leaf walk is needed. Missing files
  * are skipped silently; the combined content gets `Global` / `Project` labels
  * and the same soft-budget warning as AGENTS.md (full content kept, warning
@@ -198,7 +210,7 @@ async function loadPipelineForRoots(
 
   for (const workDir of workDirs) {
     const rootWorkDir = normalize(workDir);
-    const projectRoot = await findProjectRoot(deps, rootWorkDir);
+    const projectRoot = (await findGitWorkTree(deps.fs, rootWorkDir))?.root ?? rootWorkDir;
     await collect(join(projectRoot, '.kimi-code', 'pipeline.md'), 'project');
   }
 
@@ -225,6 +237,39 @@ function renderPipelineFiles(files: readonly PipelineFile[]): string {
     .join('\n\n');
 }
 
+export interface AgentsMdWatchRoot {
+  readonly root: string;
+  readonly candidates: readonly string[];
+}
+
+export async function agentsMdWatchRoots(
+  deps: ProfileContextDeps,
+  workDir: string,
+  brandHome?: string,
+): Promise<readonly AgentsMdWatchRoot[]> {
+  const realHome = deps.homeDir;
+  const brandDir = brandHome ?? join(realHome, '.kimi-code');
+  const plan: AgentsMdWatchRoot[] = [
+    { root: brandDir, candidates: [join(brandDir, 'AGENTS.md')] },
+    {
+      root: realHome,
+      candidates: [join(realHome, '.agents', 'AGENTS.md'), join(realHome, '.agents', 'agents.md')],
+    },
+  ];
+  const rootWorkDir = normalize(workDir);
+  const projectRoot = (await findGitWorkTree(deps.fs, rootWorkDir))?.root ?? rootWorkDir;
+  const projectCandidates: string[] = [];
+  for (const dir of dirsRootToLeaf(rootWorkDir, projectRoot)) {
+    projectCandidates.push(
+      join(dir, '.kimi-code', 'AGENTS.md'),
+      join(dir, 'AGENTS.md'),
+      join(dir, 'agents.md'),
+    );
+  }
+  plan.push({ root: projectRoot, candidates: projectCandidates });
+  return plan;
+}
+
 async function loadAdditionalDirsInfo(
   deps: ProfileContextDeps,
   additionalDirs: readonly string[],
@@ -236,18 +281,6 @@ async function loadAdditionalDirsInfo(
     }),
   );
   return sections.join('\n\n');
-}
-
-async function findProjectRoot(deps: ProfileContextDeps, workDir: string): Promise<string> {
-  const initial = normalize(workDir);
-  let current = initial;
-
-  while (true) {
-    if (await pathExists(deps, join(current, '.git'))) return current;
-    const parent = dirname(current);
-    if (parent === current) return initial;
-    current = parent;
-  }
 }
 
 function dirsRootToLeaf(workDir: string, projectRoot: string): string[] {

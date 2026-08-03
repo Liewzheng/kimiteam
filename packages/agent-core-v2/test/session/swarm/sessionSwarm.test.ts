@@ -1025,7 +1025,6 @@ describe('SessionSwarmService metadata compatibility', () => {
           profile: 'coder',
           model: 'kimi-test',
           thinking: 'medium',
-          cwd: '/repo',
         },
         labels: { parentAgentId: 'main', swarmItem: 'src/a.ts', profileName: 'coder' },
       }),
@@ -1051,7 +1050,6 @@ describe('SessionSwarmService metadata compatibility', () => {
           profileName: opts.binding?.profile ?? 'coder',
           modelAlias: opts.binding?.model ?? 'kimi-test',
           thinkingLevel: opts.binding?.thinking ?? 'medium',
-          cwd: opts.binding?.cwd ?? '/repo',
         },
         new Map([[IAgentUserToolService, childUserTools]]),
       );
@@ -1138,7 +1136,6 @@ describe('SessionSwarmService metadata compatibility', () => {
           profile: 'coder',
           model: 'provider/secondary',
           thinking: 'low',
-          cwd: '/repo',
         },
       }),
     );
@@ -1463,7 +1460,6 @@ function lifecycleStub(
         profileName: opts.binding?.profile ?? 'coder',
         modelAlias: opts.binding?.model ?? 'kimi-test',
         thinkingLevel: opts.binding?.thinking ?? 'medium',
-        cwd: opts.binding?.cwd ?? '/repo',
       });
       handles.set(id, handle);
       return handle;
@@ -1501,7 +1497,6 @@ function agentHandle(
   services: ReadonlyMap<unknown, unknown> = new Map(),
 ): IAgentScopeHandle {
   const profile = profileService({
-    cwd: '/repo',
     modelAlias: 'kimi-test',
     modelCapabilities: {} as never,
     profileName: 'agent',

@@ -9,6 +9,8 @@
 
 import { describe, expect, it } from 'vitest';
 
+import { Event } from '#/_base/event';
+
 import { AgentToolPolicyService } from '#/agent/toolPolicy/toolPolicyService';
 
 interface BuildOptions {
@@ -29,11 +31,17 @@ function buildService(options: BuildOptions = {}) {
       section === 'subagent' ? { teamMode: state.teamMode } : undefined,
   };
   const sessionToolPolicy = { disabledTools: () => [] };
+  const toolPolicyGate = {
+    _serviceBrand: undefined,
+    disabledTools: [] as readonly string[],
+    onDidChange: Event.None,
+  };
   const toolExecutor = { registerToolCallGuard: () => ({ dispose: () => {} }) };
   const service = new AgentToolPolicyService(
     profile as never,
     config as never,
     sessionToolPolicy as never,
+    toolPolicyGate as never,
     toolExecutor as never,
   );
   return { service, state };

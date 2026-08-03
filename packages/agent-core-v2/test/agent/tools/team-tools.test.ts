@@ -16,8 +16,8 @@ import os from 'node:os';
 import path from 'pathe';
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 
-import { parseAgentFileText } from '#/app/agentFileCatalog/agentFile';
-import type { AgentFileDefinition } from '#/app/agentFileCatalog/types';
+import { parseAgentFileText } from '#/workspace/workspaceAgentProfileLoader/internal/agentFile';
+import type { AgentFileDefinition } from '#/workspace/workspaceAgentProfileLoader/internal/types';
 import { TeamHireInputSchema, TEAM_HIRE_NAME_PATTERN as NAME_PAT } from '#/agent/tools/team-hire/team-hire';
 import { buildPerformanceCard } from '#/agent/tools/agent/agentTool';
 
