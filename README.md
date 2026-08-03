@@ -50,19 +50,19 @@ kimiteam                    # 启动交互式会话（与官方 kimi 参数兼�
 
   之后用 `kimiteam` 启动,行为与 Linux 一致。
 
-- **原生 PowerShell**:在仓库目录(或任意位置)执行安装脚本:
+- **原生 PowerShell**:一键安装(免下载,短链脚本为 ASCII-only,安全经 `irm|iex` 管道执行):
+
+  ```powershell
+  irm https://liewzheng.github.io/kimi-code/install.ps1 | iex
+  ```
+
+  若公司/系统限制 `irm|iex`,可下载脚本后用 `-File` 方式执行(仓库内中文版):
 
   ```powershell
   powershell -ExecutionPolicy Bypass -File scripts/install-kimiteam.ps1
   ```
 
-  `-ExecutionPolicy Bypass` 只对本条命令生效,无需改动系统策略;若想免下载直接执行,也可用:
-
-  ```powershell
-  irm https://raw.githubusercontent.com/Liewzheng/kimi-code/feat/subagent-team/scripts/install-kimiteam.ps1 | iex
-  ```
-
-  安装后启动器位于 `~\.kimi-code\bin\kimiteam.ps1`,在 PowerShell 中运行:
+  (原始 raw 长链备选:`irm https://raw.githubusercontent.com/Liewzheng/kimi-code/feat/subagent-team/scripts/install-kimiteam.ps1 | iex`。)`-ExecutionPolicy Bypass` 只对本条命令生效,无需改动系统策略。安装后启动器位于 `~\.kimi-code\bin\kimiteam.ps1`,在 PowerShell 中运行:
 
   ```powershell
   & ~\.kimi-code\bin\kimiteam.ps1
