@@ -1,7 +1,7 @@
 import { execSync } from 'node:child_process';
 
 import type { createKimiDeviceId as createKimiDeviceIdFn } from '@moonshot-ai/kimi-code-oauth';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { runShell } from '#/cli/run-shell';
 
@@ -156,8 +156,18 @@ vi.mock('node:child_process', () => ({
 }));
 
 describe('runShell', () => {
+  beforeEach(() => {
+    // Pin the experimental flag off so the default v1 path is deterministic
+    // regardless of the host environment (matches run-prompt.test.ts and
+    // goal-prompt.test.ts). `isKimiV2Enabled()` reads the env lazily at each
+    // runShell() call, so this is enough to isolate the suite; the two
+    // harness-construction tests below opt back in / out with withEnv().
+    vi.stubEnv('KIMI_CODE_EXPERIMENTAL_FLAG', '');
+  });
+
   afterEach(() => {
     vi.clearAllMocks();
+    vi.unstubAllEnvs();
     mocks.harnessGetConfig.mockResolvedValue({
       providers: {},
       defaultModel: 'k2',
