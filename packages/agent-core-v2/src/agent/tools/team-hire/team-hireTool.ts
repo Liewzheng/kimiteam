@@ -79,6 +79,9 @@ function renderFrontmatter(input: TeamHireInput): string {
   if (input.subagents !== undefined && input.subagents.length > 0) {
     fields.push('subagents:\n' + serializeList(input.subagents));
   }
+  if (input.skills !== undefined && input.skills.length > 0) {
+    fields.push('skills:\n' + serializeList(input.skills));
+  }
 
   return ['---', ...fields, '---'].join('\n');
 }

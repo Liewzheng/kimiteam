@@ -183,6 +183,7 @@ function agentsStub(): AgentsStub {
     mainContext,
     onDidCreate: created.event,
     onDidDispose: () => ({ dispose: () => {} }),
+    onDidRestore: () => ({ dispose: () => {} }),
     create: () => Promise.reject(new Error('not implemented')),
     fork: () => Promise.reject(new Error('not implemented')),
     get: (id) => (id === MAIN_AGENT_ID && mainPresent ? mainHandle : undefined),

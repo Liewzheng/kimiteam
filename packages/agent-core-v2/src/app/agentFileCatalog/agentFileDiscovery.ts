@@ -62,7 +62,10 @@ export async function discoverAgentFiles(
   async function parseAndRegister(filePath: string, root: AgentFileRoot): Promise<void> {
     try {
       const text = await fs.readText(filePath);
-      const agent = parseAgentFileText({ path: filePath, source: root.source, text });
+      // `warn` is threaded through so the parser's unknown-frontmatter-field
+      // diagnostics (the file still loads; the fields are ignored) reach the
+      // same channel as the rest of discovery's skip warnings.
+      const agent = parseAgentFileText({ path: filePath, source: root.source, text, warn });
       if (!byName.has(agent.name)) {
         byName.set(agent.name, agent);
       }
@@ -111,8 +114,21 @@ export async function discoverAgentFiles(
           await walk(entryPath, root, depth + 1);
           continue;
         }
-        if (!entry.endsWith('.md') || !(await isFilePath(fs, entryPath))) continue;
-        await parseAndRegister(entryPath, root);
+        if (entry.endsWith('.md')) {
+          if (await isFilePath(fs, entryPath)) await parseAndRegister(entryPath, root);
+          continue;
+        }
+        // Non-Markdown files are never loaded, but a YAML profile is a common
+        // misconfiguration worth surfacing once — agent profiles are .md only.
+        if (entry.endsWith('.yaml') || entry.endsWith('.yml')) {
+          if (await isFilePath(fs, entryPath)) {
+            const suggested = `${entry.replace(/\.ya?ml$/, '')}.md`;
+            warnCapped(
+              entryPath,
+              `Agent profiles only support Markdown (.md): ${entryPath} will not be loaded — rename it to ${suggested}`,
+            );
+          }
+        }
       } catch (error) {
         if (
           error instanceof HostFsError &&

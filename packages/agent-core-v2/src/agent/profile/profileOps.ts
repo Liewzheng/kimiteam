@@ -49,6 +49,7 @@ export interface ProfileModelState {
   readonly systemPrompt: string;
   readonly disallowedTools?: readonly string[];
   readonly subagents?: readonly string[];
+  readonly skills?: readonly string[];
 }
 
 export const ProfileModel = defineModel<ProfileModelState>('profile', () => ({
@@ -66,6 +67,7 @@ export const profileBind = ProfileModel.defineOp('profile.bind', {
     activeToolNames: z.array(z.string()).readonly().optional(),
     disallowedTools: z.array(z.string()).readonly(),
     subagents: z.array(z.string()).readonly().optional(),
+    skills: z.array(z.string()).readonly().optional(),
   }),
   apply: (s, p) => ({
     cwd: p.cwd ?? s.cwd,
@@ -75,6 +77,7 @@ export const profileBind = ProfileModel.defineOp('profile.bind', {
     systemPrompt: p.systemPrompt,
     disallowedTools: p.disallowedTools,
     subagents: p.subagents,
+    skills: p.skills,
   }),
 });
 

@@ -75,6 +75,7 @@ import {
   IAgentPerformanceService,
   type PerformanceSummary,
 } from '#/app/agentPerformance/agentPerformance';
+import { IRuntimeStatusService } from '#/app/runtimeStatus/runtimeStatus';
 import { IAgentLifecycleService } from '#/session/agentLifecycle/agentLifecycle';
 import { isSubagentMeta, subagentLabels, subagentParentAgentId } from '#/session/agentLifecycle/subagentMetadata';
 import { findIdleOwnedSubagent } from '#/session/agentLifecycle/subagentReuse';
@@ -147,6 +148,7 @@ export class SubagentTool implements ISubagentTool {
     @IFlagService private readonly flags: IFlagService,
     @IModelCatalog private readonly modelCatalog: IModelCatalog,
     @IAgentPerformanceService private readonly performance: IAgentPerformanceService,
+    @IRuntimeStatusService private readonly runtimeStatus: IRuntimeStatusService,
   ) {
     this.callerAgentId = scopeContext.agentId;
     this.canRunInBackground = () =>
@@ -187,7 +189,7 @@ export class SubagentTool implements ISubagentTool {
     // stale (≥60 s). The current render uses whatever cache is available — the
     // first render may show no scores; subsequent LLM turns will pick them up.
     if (teamMode) {
-      this.refreshPerfCache();
+      void this.refreshPerfCache();
     }
 
     const typeLines = buildProfileDescriptions(
@@ -213,22 +215,29 @@ export class SubagentTool implements ISubagentTool {
   }
 
   /**
-   * Fire-and-forget refresh of the performance cache. Does not block the
-   * caller — on failure the cache stays as-is (possibly empty Map) and the
-   * loaded-at timestamp is bumped so the TTL guard prevents retries for a
-   * while.
+   * Ensure the performance cache is populated and fresh, resolving once it is
+   * usable: immediately when a fresh cache exists, or after an async load.
+   * Callers that need the data before acting (e.g. launch-time card injection)
+   * await it; the description getter fires it without awaiting. On failure the
+   * cache stays as-is (possibly empty Map) and the loaded-at timestamp is
+   * bumped so the TTL guard prevents retries for a while.
    *
    * Concurrent calls during an in-flight refresh are deduplicated: only the
-   * first one kicks off the request; subsequent ones piggyback on the same
-   * pending promise.
+   * first one kicks off the request; subsequent ones await the same pending
+   * promise.
    */
-  private refreshPerfCache(): void {
-    if (this.pendingRefresh !== undefined) return;
+  private refreshPerfCache(): Promise<void> {
     const now = Date.now();
-    if (this.perfCache !== undefined && now - this.perfCacheLoadedAt < SubagentTool.PERF_CACHE_TTL_MS) {
-      return; // cache is fresh enough
+    if (
+      this.perfCache !== undefined &&
+      now - this.perfCacheLoadedAt < SubagentTool.PERF_CACHE_TTL_MS
+    ) {
+      return Promise.resolve(); // cache is fresh enough
     }
-    this.pendingRefresh = this.performance
+    if (this.pendingRefresh !== undefined) {
+      return this.pendingRefresh; // piggyback on the in-flight refresh
+    }
+    const refresh = this.performance
       .list()
       .then((entries) => {
         const map = new Map<string, PerformanceSummary>();
@@ -250,6 +259,21 @@ export class SubagentTool implements ISubagentTool {
       .finally(() => {
         this.pendingRefresh = undefined;
       });
+    this.pendingRefresh = refresh;
+    return refresh;
+  }
+
+  /**
+   * Prepend the spawned profile's `<performance_card>` to the child prompt.
+   * The card is reference-only data about the profile's own recent scores and
+   * team rank; the prompt is returned unchanged when the profile has no scored
+   * entries (count 0) — the common case outside team-mode scoring.
+   */
+  private async withPerformanceCard(profileName: string, prompt: string): Promise<string> {
+    await this.refreshPerfCache();
+    const card =
+      this.perfCache === undefined ? undefined : buildPerformanceCard(profileName, this.perfCache);
+    return card === undefined ? prompt : `${card}\n\n${prompt}`;
   }
 
   private knownToolReferences(): ToolReference[] {
@@ -372,6 +396,7 @@ export class SubagentTool implements ISubagentTool {
         const reuseId = await findIdleOwnedSubagent({
           lifecycle: this.lifecycle,
           metadata: this.sessionMetadata,
+          runtimeStatus: this.runtimeStatus,
           callerAgentId: this.callerAgentId,
           profileName: requestedProfileName,
         });
@@ -413,7 +438,7 @@ export class SubagentTool implements ISubagentTool {
               thinking: binding.thinking,
               cwd: own.cwd,
             },
-            labels: subagentLabels(this.callerAgentId),
+            labels: subagentLabels(this.callerAgentId, { profileName: profile.name }),
           });
         } catch (error) {
           throw wrapSubagentModelError(error, binding.model, own.modelAlias, binding.source, this.config);
@@ -442,7 +467,7 @@ export class SubagentTool implements ISubagentTool {
 
     const run = await this.subagents.run(
       agentId,
-      { kind: 'prompt', prompt: promptText },
+      { kind: 'prompt', prompt: await this.withPerformanceCard(profileName, promptText) },
       { signal: controller.signal },
     );
     const mirrored = mirrorAgentRun(requester, run, {
@@ -668,6 +693,53 @@ function buildPerfSuffix(summary: PerformanceSummary | undefined): string {
   }
   const avg = Math.round(summary.average);
   return ` — avg score ${avg} (${summary.count} scored)`;
+}
+
+/** Minimum score count before a profile's rank is considered meaningful. */
+export const MIN_SCORED_COUNT = 3;
+
+/**
+ * Build the spawn-time `<performance_card>` for one profile: its own average
+ * over the last `count` scores plus a team rank among profiles with at least
+ * `MIN_SCORED_COUNT` scores. English, neutral tone; never names or shows
+ * another member's scores. Returns `undefined` (no card) when the profile has
+ * no scored entries. The lowest-scored member is flagged neutrally only when
+ * at least two members are scored.
+ */
+export function buildPerformanceCard(
+  profileName: string,
+  perfByProfile: ReadonlyMap<string, PerformanceSummary>,
+): string | undefined {
+  const summary = perfByProfile.get(profileName);
+  if (summary === undefined || summary.count === 0 || summary.average === undefined) {
+    return undefined;
+  }
+  const scored = [...perfByProfile.entries()]
+    .filter(
+      (entry): entry is [string, PerformanceSummary & { average: number }] =>
+        entry[1].count >= MIN_SCORED_COUNT && entry[1].average !== undefined,
+    )
+    .sort((a, b) => b[1].average - a[1].average);
+  const rank = scored.findIndex(([name]) => name === profileName);
+  const countLabel = summary.count === 1 ? 'score' : 'scores';
+  const averageLine = `average: ${summary.average} (last ${summary.count} ${countLabel})`;
+  let rankLine: string;
+  if (rank >= 0) {
+    const total = scored.length;
+    rankLine = `rank: ${rank + 1}/${total}`;
+    if (total >= 2 && rank === total - 1) {
+      rankLine += ` — currently the lowest among ${total} scored members (reference only)`;
+    }
+  } else {
+    rankLine = `rank: insufficient data (need at least ${MIN_SCORED_COUNT} scores)`;
+  }
+  return [
+    '<performance_card>',
+    `profile: ${profileName}`,
+    averageLine,
+    rankLine,
+    '</performance_card>',
+  ].join('\n');
 }
 
 function formatBackgroundAgentResult(

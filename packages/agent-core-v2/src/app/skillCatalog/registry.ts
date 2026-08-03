@@ -114,10 +114,12 @@ export class InMemorySkillCatalog implements SkillCatalog {
     return rendered.length === 0 ? 'No skills' : rendered;
   }
 
-  getModelSkillListing(): string {
+  getModelSkillListing(filter?: (name: string) => boolean): string {
     const lines = ['DISREGARD any earlier skill listings. Current available skills:'];
     const listing = renderGroupedSkills(
-      this.listInvocableSkills().filter((skill) => skill.metadata.isSubSkill !== true),
+      this.listInvocableSkills()
+        .filter((skill) => skill.metadata.isSubSkill !== true)
+        .filter((skill) => filter === undefined || filter(skill.name)),
       formatModelSkill,
     );
     if (listing.length > 0) {

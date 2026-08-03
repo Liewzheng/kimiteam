@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'pathe';
 
@@ -9,6 +9,8 @@ import { ConfigTarget, IConfigService } from '#/app/config/config';
 import { TOOLS_SECTION } from '#/agent/toolPolicy/configSection';
 import { DEFAULT_AGENT_PROFILE_NAME, IAgentProfileCatalogService } from '#/app/agentProfileCatalog/agentProfileCatalog';
 import { registerAgentProfile } from '#/app/agentProfileCatalog/contribution';
+import { renderSystemPrompt } from '#/app/agentProfileCatalog/profile-shared';
+import { bootstrapSeed } from '#/app/bootstrap/bootstrap';
 import type { ToolCall } from '#/kosong/contract/message';
 import { IAgentProfileService, type ResolvedAgentProfile } from '#/agent/profile/profile';
 import { IAgentToolPolicyService } from '#/agent/toolPolicy/toolPolicy';
@@ -25,11 +27,13 @@ import type { ExecutableTool, ToolExecution, ToolResult, ToolSource } from '#/to
 import {
   InMemoryWireRecordPersistence,
   appService,
+  appServices,
   createTestAgent,
   hostEnvironmentServices,
   sessionService,
   type TestAgentContext,
 } from '../../harness';
+import { stubClientIdentity } from '../../app/bootstrap/stubs';
 
 const MOCK_MODEL = 'mock-model';
 
@@ -959,6 +963,278 @@ describe('AgentProfileService tool-pattern warnings', () => {
     expect(messages.some((m) => m.includes('"*"') && m.includes('disallowedTools'))).toBe(true);
   });
 
+});
+
+describe('AgentProfileService skill allowlist', () => {
+  beforeAll(() => {
+    registerAgentProfile({
+      name: 'skill-allow',
+      skills: ['alpha-skill'],
+      systemPrompt: (ctx) => renderSystemPrompt('', ctx, { skillActive: true }),
+    });
+    registerAgentProfile({
+      name: 'skill-none',
+      skills: [],
+      systemPrompt: (ctx) => renderSystemPrompt('', ctx, { skillActive: true }),
+    });
+    registerAgentProfile({
+      name: 'skill-ghost',
+      skills: ['ghost-skill'],
+      systemPrompt: (ctx) => renderSystemPrompt('', ctx, { skillActive: true }),
+    });
+  });
+
+  let ctx: TestAgentContext;
+  let homeDir: string;
+
+  beforeEach(async () => {
+    homeDir = await mkdtemp(join(tmpdir(), 'kimi-skills-home-'));
+  });
+
+  afterEach(async () => {
+    await ctx?.dispose();
+    await rm(homeDir, { recursive: true, force: true });
+  });
+
+  /** A session skill catalog whose model listing honors the caller's filter. */
+  function skillCatalogListing(names: readonly string[]): ISessionSkillCatalog {
+    return {
+      _serviceBrand: undefined,
+      catalog: {
+        getModelSkillListing: (filter?: (name: string) => boolean) => {
+          const kept = names.filter((name) => filter === undefined || filter(name));
+          return kept.length === 0
+            ? ''
+            : `DISREGARD any earlier skill listings. Current available skills:\n### User\n${kept
+                .map((name) => `- ${name}: test skill`)
+                .join('\n')}`;
+        },
+      } as never,
+      ready: Promise.resolve(),
+      onDidChange: Event.None as Event<string>,
+      load: async () => {},
+      reload: async () => {},
+    };
+  }
+
+  it('lists only whitelisted skills in the prompt', async () => {
+    ctx = createTestAgent(
+      hostEnvironmentServices(homeDir),
+      sessionService(ISessionSkillCatalog, skillCatalogListing(['alpha-skill', 'beta-skill'])),
+    );
+    const profile = ctx.get(IAgentProfileService);
+    await profile.bind({ profile: 'skill-allow', model: MOCK_MODEL });
+
+    const prompt = profile.getSystemPrompt();
+    expect(prompt).toContain('alpha-skill');
+    expect(prompt).not.toContain('beta-skill');
+  });
+
+  it('keeps the full listing when the profile declares no skills allowlist', async () => {
+    ctx = createTestAgent(
+      hostEnvironmentServices(homeDir),
+      sessionService(ISessionSkillCatalog, skillCatalogListing(['alpha-skill', 'beta-skill'])),
+    );
+    const profile = ctx.get(IAgentProfileService);
+    await profile.bind({ profile: DEFAULT_AGENT_PROFILE_NAME, model: MOCK_MODEL });
+
+    const prompt = profile.getSystemPrompt();
+    expect(prompt).toContain('alpha-skill');
+    expect(prompt).toContain('beta-skill');
+  });
+
+  it('silently drops whitelisted skills that do not exist in the catalog', async () => {
+    ctx = createTestAgent(
+      hostEnvironmentServices(homeDir),
+      sessionService(ISessionSkillCatalog, skillCatalogListing(['alpha-skill'])),
+    );
+    const profile = ctx.get(IAgentProfileService);
+    await profile.bind({ profile: 'skill-ghost', model: MOCK_MODEL });
+
+    const prompt = profile.getSystemPrompt();
+    expect(prompt).not.toContain('ghost-skill');
+    expect(prompt).not.toContain('# Skills');
+  });
+
+  it('omits the skills section entirely for an empty allowlist', async () => {
+    ctx = createTestAgent(
+      hostEnvironmentServices(homeDir),
+      sessionService(ISessionSkillCatalog, skillCatalogListing(['alpha-skill', 'beta-skill'])),
+    );
+    const profile = ctx.get(IAgentProfileService);
+    await profile.bind({ profile: 'skill-none', model: MOCK_MODEL });
+
+    expect(profile.getSystemPrompt()).not.toContain('# Skills');
+  });
+
+  it('persists the skills allowlist and restores it on resume without catalog resolution', async () => {
+    const persistence = new InMemoryWireRecordPersistence();
+    ctx = createTestAgent({ persistence }, hostEnvironmentServices(homeDir));
+
+    await ctx.get(IAgentProfileService).bind({ profile: 'skill-allow', model: MOCK_MODEL });
+    await ctx.get(IWireService).flush();
+
+    expect(persistence.records.find((record) => record.type === 'profile.bind')).toMatchObject({
+      profileName: 'skill-allow',
+      skills: ['alpha-skill'],
+    });
+    expect(ctx.get(IAgentProfileService).data().skills).toEqual(['alpha-skill']);
+
+    await ctx.dispose();
+    // Resume by replaying the same records, with a catalog that cannot resolve
+    // the bound profile (e.g. its agent file was deleted): the skills allowlist
+    // must come from the persisted record, not from a catalog lookup.
+    const emptyCatalog = {
+      _serviceBrand: undefined,
+      ready: Promise.resolve(),
+      get: () => undefined,
+      getDefault: () => ({
+        name: DEFAULT_AGENT_PROFILE_NAME,
+        tools: undefined,
+        systemPrompt: () => '',
+      }),
+      list: () => [],
+      load: async () => {},
+      reload: async () => {},
+    } as unknown as ISessionAgentProfileCatalog;
+    ctx = createTestAgent(
+      { persistence },
+      hostEnvironmentServices(homeDir),
+      sessionService(ISessionAgentProfileCatalog, emptyCatalog),
+    );
+    await ctx.restorePersisted();
+
+    expect(ctx.get(IAgentProfileService).data()).toMatchObject({
+      profileName: 'skill-allow',
+      skills: ['alpha-skill'],
+    });
+  });
+});
+
+describe('AgentProfileService pipeline injection', () => {
+  let ctx: TestAgentContext;
+  let homeDir: string;
+  let extraDirs: string[];
+
+  beforeEach(async () => {
+    homeDir = await mkdtemp(join(tmpdir(), 'kimi-pipeline-home-'));
+    extraDirs = [];
+  });
+
+  afterEach(async () => {
+    await ctx?.dispose();
+    await rm(homeDir, { recursive: true, force: true });
+    await Promise.all(extraDirs.map((dir) => rm(dir, { recursive: true, force: true })));
+  });
+
+  // Point the brand home (bootstrap) at the temp dir so the user-level
+  // pipeline.md (brandHome/pipeline.md) is under our control, while keeping the
+  // harness's in-memory storage backend (homeDirServices would swap in disk
+  // storage and race async session-metadata writes against teardown).
+  async function bindInProject(projectDir: string): Promise<IAgentProfileService> {
+    ctx = createTestAgent(
+      hostEnvironmentServices(homeDir),
+      appServices((reg) => {
+        for (const [id, value] of bootstrapSeed({
+          homeDir,
+          cwd: process.cwd(),
+          env: process.env,
+          clientIdentity: stubClientIdentity,
+        })) {
+          reg.defineInstance(id, value);
+        }
+      }),
+    );
+    const profile = ctx.get(IAgentProfileService);
+    await profile.bind({
+      profile: DEFAULT_AGENT_PROFILE_NAME,
+      model: MOCK_MODEL,
+      cwd: projectDir,
+    });
+    return profile;
+  }
+
+  async function makeProject(): Promise<string> {
+    const projectDir = await mkdtemp(join(tmpdir(), 'kimi-pipeline-project-'));
+    extraDirs.push(projectDir);
+    await mkdir(join(projectDir, '.git'));
+    return projectDir;
+  }
+
+  it('injects user- and project-level pipeline content into the rendered prompt', async () => {
+    await writeFile(join(homeDir, 'pipeline.md'), 'user pipeline rules', 'utf-8');
+    const projectDir = await makeProject();
+    await mkdir(join(projectDir, '.kimi-code'), { recursive: true });
+    await writeFile(
+      join(projectDir, '.kimi-code', 'pipeline.md'),
+      'project pipeline rules',
+      'utf-8',
+    );
+
+    const svc = await bindInProject(projectDir);
+
+    const prompt = svc.getSystemPrompt();
+    expect(prompt).toContain('# Project Pipeline');
+    expect(prompt).toContain('user pipeline rules');
+    expect(prompt).toContain('project pipeline rules');
+    expect(prompt).toContain(`<!-- From: ${join(homeDir, 'pipeline.md')} -->`);
+    expect(prompt).toContain(`<!-- From: ${join(projectDir, '.kimi-code', 'pipeline.md')} -->`);
+  });
+
+  it('merges the user-level pipeline before the project-level one', async () => {
+    await writeFile(join(homeDir, 'pipeline.md'), 'user pipeline rules', 'utf-8');
+    const projectDir = await makeProject();
+    await mkdir(join(projectDir, '.kimi-code'), { recursive: true });
+    await writeFile(
+      join(projectDir, '.kimi-code', 'pipeline.md'),
+      'project pipeline rules',
+      'utf-8',
+    );
+
+    const svc = await bindInProject(projectDir);
+
+    const prompt = svc.getSystemPrompt();
+    expect(prompt.indexOf('user pipeline rules')).toBeLessThan(
+      prompt.indexOf('project pipeline rules'),
+    );
+    // The pipeline section renders in the builtin template next to AGENTS.md,
+    // before the final reminders — not appended somewhere at the end.
+    expect(prompt.indexOf('project pipeline rules')).toBeLessThan(
+      prompt.indexOf('# Ultimate Reminders'),
+    );
+  });
+
+  it('silently omits the pipeline section when no pipeline files exist', async () => {
+    const projectDir = await makeProject();
+
+    const svc = await bindInProject(projectDir);
+
+    const prompt = svc.getSystemPrompt();
+    expect(prompt).not.toContain('# Project Pipeline');
+    expect(prompt).not.toContain('## Global');
+    expect(prompt).toContain('# Ultimate Reminders');
+  });
+
+  it('keeps full pipeline content and publishes a warning over the size budget', async () => {
+    const projectDir = await makeProject();
+    await mkdir(join(projectDir, '.kimi-code'), { recursive: true });
+    const largeContent = 'y'.repeat(40 * 1024);
+    await writeFile(join(projectDir, '.kimi-code', 'pipeline.md'), largeContent, 'utf-8');
+
+    const svc = await bindInProject(projectDir);
+
+    expect(svc.getSystemPrompt()).toContain(largeContent);
+
+    const events = ctx.newEvents() as readonly {
+      event: string;
+      args?: { code?: string; message?: string };
+    }[];
+    const warning = events.find(
+      (entry) => entry.event === 'warning' && entry.args?.code === 'pipeline-oversized',
+    );
+    expect(warning).toBeDefined();
+    expect(warning?.args?.message).toContain('exceeds the recommended');
+  });
 });
 
 async function executeDirectToolCall(ctx: TestAgentContext, name: string): Promise<ToolResult> {

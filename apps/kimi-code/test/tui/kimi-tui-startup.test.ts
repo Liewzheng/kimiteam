@@ -310,6 +310,7 @@ describe('KimiTUI startup', () => {
 
     expect(harness.resumeSession).toHaveBeenCalledWith({
       id: 'ses-latest',
+      additionalDirs: undefined,
       replayTurnLimit: REPLAY_TURN_LIMIT,
       includeSubagents: true,
     });
@@ -1539,6 +1540,7 @@ describe('KimiTUI startup', () => {
 
     expect(harness.resumeSession).toHaveBeenCalledWith({
       id: 'ses-latest',
+      additionalDirs: undefined,
       replayTurnLimit: REPLAY_TURN_LIMIT,
       includeSubagents: true,
     });
@@ -1560,6 +1562,7 @@ describe('KimiTUI startup', () => {
 
     expect(harness.resumeSession).toHaveBeenCalledWith({
       id: 'ses-target',
+      additionalDirs: undefined,
       replayTurnLimit: REPLAY_TURN_LIMIT,
       includeSubagents: true,
     });
@@ -1818,6 +1821,7 @@ describe('KimiTUI startup', () => {
     });
     expect(harness.resumeSession).toHaveBeenCalledWith({
       id: 'ses-target',
+      additionalDirs: undefined,
       replayTurnLimit: REPLAY_TURN_LIMIT,
       includeSubagents: true,
     });

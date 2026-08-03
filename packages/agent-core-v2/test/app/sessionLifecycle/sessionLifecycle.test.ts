@@ -302,6 +302,7 @@ function agentLifecycleStub(): IAgentLifecycleService {
     _serviceBrand: undefined,
     onDidCreate: () => ({ dispose: () => {} }),
     onDidDispose: () => ({ dispose: () => {} }),
+    onDidRestore: () => ({ dispose: () => {} }),
     create: () => Promise.reject(new Error('not implemented')),
     fork: () => Promise.reject(new Error('not implemented')),
     get: () => undefined,

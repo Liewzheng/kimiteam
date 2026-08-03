@@ -1,13 +1,14 @@
 /**
- * `subagent` domain (L6) — idle-subagent reaper (10-minute off-duty TTL).
+ * `subagent` domain (L6) — idle-subagent reaper (default 2-hour off-duty TTL,
+ * configurable via `[subagent] idle_ttl_ms`).
  *
  * Session-scoped helper owned by `SessionSubagentService`. After a subagent's
- * run settles (success, failure, or cancellation) it starts a
- * `SUBAGENT_IDLE_TTL_MS` countdown; when the countdown expires while the
- * instance is still idle it is destroyed through
- * `IAgentLifecycleService.remove` — the instance goes off duty. The countdown
- * is cancelled the moment a new run starts on the instance (reuse claim,
- * explicit resume, and fresh spawns all funnel through
+ * run settles (success, failure, or cancellation) it starts an idle countdown
+ * (the resolved `idle_ttl_ms`, defaulting to {@link SUBAGENT_IDLE_TTL_MS}); when
+ * the countdown expires while the instance is still idle it is destroyed
+ * through `IAgentLifecycleService.remove` — the instance goes off duty. The
+ * countdown is cancelled the moment a new run starts on the instance (reuse
+ * claim, explicit resume, and fresh spawns all funnel through
  * `SessionSubagentService.run`), so an instance with work is never reaped.
  * Turns woken outside `run` (e.g. a TeamMessage inject) are protected by the
  * final `state !== 'running'` re-check at reap time. The main agent is never
@@ -17,12 +18,20 @@
 
 import { Disposable } from '#/_base/di/lifecycle';
 import { ILogService } from '#/_base/log/log';
+import { IConfigService } from '#/app/config/config';
 import { IAgentLoopService } from '#/agent/loop/loop';
 import { IAgentLifecycleService, MAIN_AGENT_ID } from '#/session/agentLifecycle/agentLifecycle';
 import { IRuntimeStatusService } from '#/app/runtimeStatus/runtimeStatus';
+import {
+  DEFAULT_SUBAGENT_IDLE_TTL_MS,
+  resolveSubagentIdleTtlMs,
+} from './configSection';
 
-/** How long a parked subagent instance may stay idle before being reaped. */
-export const SUBAGENT_IDLE_TTL_MS = 10 * 60_000;
+/**
+ * Default idle TTL for a parked subagent instance. When `[subagent]
+ * idle_ttl_ms` is not configured the reaper falls back to this.
+ */
+export const SUBAGENT_IDLE_TTL_MS = DEFAULT_SUBAGENT_IDLE_TTL_MS;
 
 /**
  * ISO expiry for `now + ttl` — the resting horizon written to the runtime
@@ -49,6 +58,7 @@ export class SubagentIdleReaper extends Disposable {
     private readonly lifecycle: IAgentLifecycleService,
     private readonly status: IRuntimeStatusService,
     private readonly log: ILogService,
+    private readonly config: IConfigService,
   ) {
     super();
     this._register({
@@ -62,13 +72,46 @@ export class SubagentIdleReaper extends Disposable {
   /**
    * Start (or restart) the idle countdown for `agentId` after its run settled.
    * The main agent is never armed. No-op when a countdown is already pending
-   * for another reason — it is simply restarted.
+   * for another reason — it is simply restarted. `ttlMs` defaults to the
+   * resolved `[subagent] idle_ttl_ms` (falling back to the default idle TTL);
+   * callers that re-hang a partially-elapsed horizon (see {@link reconcile})
+   * pass the remaining time instead.
    */
-  arm(agentId: string, profileName: string | undefined): void {
+  arm(agentId: string, profileName: string | undefined, ttlMs?: number): void {
     if (agentId === MAIN_AGENT_ID) return;
     this.cancel(agentId);
-    const timeout = setTimeout(() => this.onTimerFired(agentId), SUBAGENT_IDLE_TTL_MS);
+    const effectiveTtl = ttlMs ?? resolveSubagentIdleTtlMs(this.config);
+    const timeout = setTimeout(() => this.onTimerFired(agentId), effectiveTtl);
     this.timers.set(agentId, { profileName, timeout });
+  }
+
+  /**
+   * Re-arm a resting instance's countdown after a cold resume (session was
+   * restarted, so this reaper's in-process timers were all lost).
+   *
+   * Reads the persisted runtime status: when a `resting` entry references
+   * `agentId`, the countdown is restarted for the *remaining* TTL (the
+   * `restExpiresAt` written before the process died), or — when that horizon
+   * already passed while we were down — the entry is reaped immediately
+   * (instance removed + profile entry dropped). Entries referencing other
+   * agents, `working` entries, and the main agent are left untouched. Resolves
+   * once the entry has been re-armed or fully reaped.
+   */
+  async reconcile(agentId: string): Promise<void> {
+    if (agentId === MAIN_AGENT_ID) return;
+    const raw = await this.status.list();
+    for (const [profileName, entry] of Object.entries(raw)) {
+      if (entry.state !== 'resting' || entry.agentId !== agentId) continue;
+      const remainingMs = Date.parse(entry.restExpiresAt ?? '') - Date.now();
+      if (Number.isFinite(remainingMs) && remainingMs > 0) {
+        this.arm(agentId, profileName, remainingMs);
+      } else {
+        // No `restExpiresAt` (malformed resting entry) or already elapsed —
+        // the parked instance goes off duty now.
+        await this.reap(agentId, profileName);
+      }
+      return;
+    }
   }
 
   /** Cancel a pending countdown — a new run is starting on the instance. */
@@ -102,7 +145,7 @@ export class SubagentIdleReaper extends Disposable {
     }
     this.log.info('subagent idle reap: instance went off duty', { agentId, profileName });
     if (profileName !== undefined) {
-      void this.status.removeProfile(profileName).catch(() => { /* swallow */ });
+      await this.status.removeProfile(profileName).catch(() => { /* swallow */ });
     }
   }
 }

@@ -10,7 +10,7 @@ import {
   type Scope,
 } from '#/_base/di/scope';
 import { createScopedTestHost, stubPair, type ScopedTestHost } from '#/_base/di/test';
-import { Emitter } from '#/_base/event';
+import { Emitter, Event } from '#/_base/event';
 import { IEventBus, type DomainEvent } from '#/app/event/eventBus';
 import { IAgentActivityView, type AgentActivityState } from '#/agent/activityView/activityView';
 import { IAgentLifecycleService, MAIN_AGENT_ID } from '#/session/agentLifecycle/agentLifecycle';
@@ -74,6 +74,7 @@ class FakeAgentLifecycle implements IAgentLifecycleService {
   private readonly disposeEmitter = new Emitter<string>();
   readonly onDidCreate = this.createEmitter.event;
   readonly onDidDispose = this.disposeEmitter.event;
+  readonly onDidRestore: Event<string> = Event.None as Event<string>;
   readonly handles: FakeAgentHandle[] = [];
 
   list(): readonly IAgentScopeHandle[] {

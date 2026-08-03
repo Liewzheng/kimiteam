@@ -46,6 +46,13 @@ export interface IRuntimeStatusService {
 
   /** Drop the profile's entry — its instance was reaped (went off duty). */
   removeProfile(profileName: string): Promise<void>;
+
+  /**
+   * Read the current runtime status table (profile name → latest entry).
+   * Pure read: never writes or repairs — degrades to `{}` when the document
+   * is absent or corrupt (same policy as the writers' read helper).
+   */
+  list(): Promise<RuntimeStatusRaw>;
 }
 
 export const IRuntimeStatusService: ServiceIdentifier<IRuntimeStatusService> =

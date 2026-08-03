@@ -56,6 +56,8 @@ export type AgentConfigUpdateData = Partial<{
 
 export interface SystemPromptContext extends AgentProfileContext {
   readonly agentsMdWarning?: string;
+  readonly pipeline?: string;
+  readonly pipelineWarning?: string;
 }
 
 export type ResolvedAgentProfile = AgentProfile;
@@ -64,6 +66,7 @@ export interface ProfileData extends AgentConfigData {
   readonly activeToolNames?: readonly string[];
   readonly disallowedTools?: readonly string[];
   readonly subagents?: readonly string[];
+  readonly skills?: readonly string[];
 }
 
 export type ProfileUpdateData = Partial<{
@@ -85,6 +88,7 @@ export interface ProfileBindingSnapshot {
   readonly activeToolNames?: readonly string[];
   readonly disallowedTools?: readonly string[];
   readonly subagents?: readonly string[];
+  readonly skills?: readonly string[];
 }
 
 export interface ProfileServiceOptions {

@@ -24,6 +24,7 @@ import { randomUUID } from 'node:crypto';
 import type { SkillActivationOrigin } from '#/agent/contextMemory/types';
 import { IAgentSkillService } from '#/agent/skill/skill';
 import { renderModelToolSkillPrompt } from '#/agent/skill/prompt';
+import { IAgentProfileService } from '#/agent/profile/profile';
 import type { ExecutableToolResult, ToolDeliveryMessage, ToolExecution } from '#/tool/toolContract';
 import { registerAgentToolService } from '#/agent/toolRegistry/toolContribution';
 import { isInlineSkillType } from '#/app/skillCatalog/types';
@@ -56,6 +57,7 @@ export class SkillTool implements ISkillTool {
     @ISessionSkillCatalog private readonly catalog: ISessionSkillCatalog,
     @IAgentSkillService private readonly skill: IAgentSkillService,
     @ISessionContext private readonly sessionContext: ISessionContext,
+    @IAgentProfileService private readonly profile: IAgentProfileService,
   ) {}
 
   resolveExecution(args: SkillToolInput): ToolExecution {
@@ -69,7 +71,7 @@ export class SkillTool implements ISkillTool {
   }
 
   withInitialQueryDepth(initialQueryDepth: number): SkillTool {
-    const clone = new SkillTool(this.catalog, this.skill, this.sessionContext);
+    const clone = new SkillTool(this.catalog, this.skill, this.sessionContext, this.profile);
     clone.queryDepth = initialQueryDepth;
     return clone;
   }
@@ -78,6 +80,7 @@ export class SkillTool implements ISkillTool {
     return executeModelSkill(
       this.catalog,
       this.skill,
+      this.profile,
       args,
       this.queryDepth,
       this.sessionContext.sessionId,
@@ -90,6 +93,7 @@ registerAgentToolService(ISkillTool, SkillTool, { name: 'Skill', domain: 'skill'
 export async function executeModelSkill(
   catalog: ISessionSkillCatalog,
   skillService: IAgentSkillService,
+  profile: IAgentProfileService,
   args: SkillToolInput,
   queryDepth: number,
   sessionId: string,
@@ -103,6 +107,22 @@ export async function executeModelSkill(
   const skill = catalog.catalog.getSkill(args.skill);
   if (skill === undefined) {
     return errorResult(`Skill "${args.skill}" not found in the current skill listing.`);
+  }
+  // Profile `skills` allowlist gate: `undefined` (undeclared) or `*`
+  // (unrestricted) lets every skill through; a named allowlist restricts to
+  // those skills. Applies to root and nested (queryDepth > 0) invocations
+  // alike — both funnel through this single execution body. The tool itself
+  // is only reachable when the profile's tool list keeps `Skill` active, so
+  // no separate skillActive check is needed here.
+  const profileSkills = profile.data().skills;
+  if (
+    profileSkills !== undefined &&
+    !profileSkills.includes('*') &&
+    !profileSkills.includes(args.skill)
+  ) {
+    return errorResult(
+      `Skill "${args.skill}" is not in this profile's skills allowlist.`,
+    );
   }
   if (skill.metadata.disableModelInvocation === true) {
     return errorResult(

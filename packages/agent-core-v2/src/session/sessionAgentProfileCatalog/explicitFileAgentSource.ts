@@ -9,6 +9,7 @@
 
 import { createDecorator, type ServiceIdentifier } from '#/_base/di/instantiation';
 import { LifecycleScope, ScopeActivation, registerScopedService } from '#/_base/di/scope';
+import { ILogService } from '#/_base/log/log';
 import type { AgentProfile } from '#/app/agentProfileCatalog/agentProfileCatalog';
 import { IAgentCatalogRuntimeOptions } from '#/app/agentFileCatalog/agentCatalogRuntimeOptions';
 import { parseAgentFileText } from '#/app/agentFileCatalog/agentFile';
@@ -44,6 +45,7 @@ export class ExplicitFileAgentSource implements IExplicitFileAgentSource {
     @IBootstrapService private readonly bootstrap: IBootstrapService,
     @IHostFileSystem private readonly fs: IHostFileSystem,
     @IUserFileAgentSource private readonly user: IUserFileAgentSource,
+    @ILogService private readonly log: ILogService,
   ) {}
 
   async load(): Promise<AgentProfileContribution> {
@@ -53,8 +55,14 @@ export class ExplicitFileAgentSource implements IExplicitFileAgentSource {
       const filePath = resolveAgentPath(file, this.workspace.workDir, this.bootstrap.osHomeDir);
       const text = await this.fs.readText(filePath);
       profiles.push(
-        agentProfileFromFile(parseAgentFileText({ path: filePath, source: 'explicit', text }), (context) =>
-          this.user.getDefaultProfile().systemPrompt(context),
+        agentProfileFromFile(
+          parseAgentFileText({
+            path: filePath,
+            source: 'explicit',
+            text,
+            warn: (message) => this.log.warn(message),
+          }),
+          (context) => this.user.getDefaultProfile().systemPrompt(context),
         ),
       );
     }

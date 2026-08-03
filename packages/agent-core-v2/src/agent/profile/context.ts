@@ -5,6 +5,13 @@
  * then project-level files from the project root down to the cwd) and assembles
  * the {@link SystemPromptContext} bag consumed by `IAgentProfileService.useProfile`.
  *
+ * Pipeline instructions are collected in parallel with AGENTS.md, same
+ * structure but a single file per level: the user-level
+ * `brandHome/pipeline.md` and the project-level
+ * `<projectRoot>/.kimi-code/pipeline.md`, rendered with `Global` / `Project`
+ * section labels so the model can tell the scopes apart. Both levels are
+ * optional — missing files are silently skipped.
+ *
  * Runs on top of the os `IHostFileSystem` (for `readText` / `stat` / `readdir`)
  * plus the host's `homeDir` — supplied together as a small `ProfileContextDeps`
  * bag threaded through the helpers.
@@ -13,7 +20,8 @@
  * AGENTS.md content is injected in full; when it exceeds the soft
  * {@link AGENTS_MD_RECOMMENDED_MAX_BYTES} budget a visible `agentsMdWarning`
  * is produced (surfaced through `getSessionWarnings`) instead of silently
- * truncating.
+ * truncating. The combined pipeline content mirrors the same soft budget and
+ * warning behavior (`pipelineWarning`).
  */
 
 import { dirname, join, normalize } from 'pathe';
@@ -35,8 +43,10 @@ interface ProfileContextDeps {
 export interface PreparedSystemPromptContext extends SystemPromptContext {
   readonly cwdListing?: string;
   readonly agentsMd?: string;
+  readonly pipeline?: string;
   readonly additionalDirsInfo?: string;
   readonly agentsMdWarning?: string;
+  readonly pipelineWarning?: string;
 }
 
 export interface PrepareSystemPromptContextOptions {
@@ -50,16 +60,19 @@ export async function prepareSystemPromptContext(
   options?: PrepareSystemPromptContextOptions,
 ): Promise<PreparedSystemPromptContext> {
   const additionalDirs = dedupeDirs(options?.additionalDirs ?? []);
-  const [cwdListing, agentsMdResult, additionalDirsInfo] = await Promise.all([
+  const [cwdListing, agentsMdResult, pipelineResult, additionalDirsInfo] = await Promise.all([
     listDirectory(deps, workDir, { collapseHiddenDirs: true }),
     loadAgentsMdForRoots(deps, brandHome, [workDir]),
+    loadPipelineForRoots(deps, brandHome, [workDir]),
     loadAdditionalDirsInfo(deps, additionalDirs),
   ]);
   return {
     cwdListing,
     agentsMd: agentsMdResult.content,
+    pipeline: pipelineResult.content,
     additionalDirsInfo,
     agentsMdWarning: agentsMdResult.warning,
+    pipelineWarning: pipelineResult.warning,
   };
 }
 
@@ -135,6 +148,81 @@ async function loadAgentsMdForRoots(
   }
   const warning = loadWarnings.length > 0 ? loadWarnings.join('\n') : undefined;
   return { content, warning };
+}
+
+interface LoadedPipeline {
+  readonly content: string;
+  readonly warning: string | undefined;
+}
+
+interface PipelineFile {
+  readonly path: string;
+  readonly content: string;
+  readonly scope: 'global' | 'project';
+}
+
+/**
+ * Collects the pipeline.md hierarchy in parallel with AGENTS.md: the user-level
+ * `brandHome/pipeline.md` plus the project-level
+ * `<projectRoot>/.kimi-code/pipeline.md` (project root found via
+ * {@link findProjectRoot}, which walks up to `.git`). Unlike AGENTS.md there is
+ * exactly one file per level, so no root-to-leaf walk is needed. Missing files
+ * are skipped silently; the combined content gets `Global` / `Project` labels
+ * and the same soft-budget warning as AGENTS.md (full content kept, warning
+ * produced instead of truncating).
+ */
+async function loadPipelineForRoots(
+  deps: ProfileContextDeps,
+  brandHome: string | undefined,
+  workDirs: readonly string[],
+): Promise<LoadedPipeline> {
+  const discovered: PipelineFile[] = [];
+  const seen = new Set<string>();
+  const loadWarnings: string[] = [];
+  const warnLoad = (message: string): void => {
+    loadWarnings.push(message);
+  };
+
+  const collect = async (path: string, scope: PipelineFile['scope']): Promise<void> => {
+    const file = await readAgentFile(deps, path, warnLoad);
+    if (file === undefined) return;
+    const key = normalize(file.path);
+    if (seen.has(key)) return;
+    seen.add(key);
+    discovered.push({ ...file, scope });
+  };
+
+  const realHome = deps.homeDir;
+  const brandDir = brandHome ?? join(realHome, '.kimi-code');
+  await collect(join(brandDir, 'pipeline.md'), 'global');
+
+  for (const workDir of workDirs) {
+    const rootWorkDir = normalize(workDir);
+    const projectRoot = await findProjectRoot(deps, rootWorkDir);
+    await collect(join(projectRoot, '.kimi-code', 'pipeline.md'), 'project');
+  }
+
+  const content = renderPipelineFiles(discovered);
+  const totalBytes = byteLength(content);
+  if (totalBytes > AGENTS_MD_RECOMMENDED_MAX_BYTES) {
+    loadWarnings.push(
+      `pipeline total ${formatKB(totalBytes)} KB exceeds the recommended ` +
+        `${formatKB(AGENTS_MD_RECOMMENDED_MAX_BYTES)} KB. Large pipeline instruction files ` +
+        `increase cost and may impact performance; consider trimming.`,
+    );
+  }
+  const warning = loadWarnings.length > 0 ? loadWarnings.join('\n') : undefined;
+  return { content, warning };
+}
+
+function renderPipelineFiles(files: readonly PipelineFile[]): string {
+  if (files.length === 0) return '';
+  return files
+    .map((file) => {
+      const label = file.scope === 'global' ? 'Global' : 'Project';
+      return `## ${label}\n\n${annotationFor(file.path)}${file.content}`;
+    })
+    .join('\n\n');
 }
 
 async function loadAdditionalDirsInfo(

@@ -40,10 +40,9 @@ import {
   type RunAgentOptions,
 } from './subagent';
 import { ISubagentPoolService } from '../subagentPool/subagentPool';
-import { resolveRecordedModelId, resolveTeamMode } from './configSection';
+import { resolveRecordedModelId, resolveSubagentIdleTtlMs, resolveTeamMode } from './configSection';
 import { runAgentTurn } from './runAgentTurn';
 import {
-  SUBAGENT_IDLE_TTL_MS,
   SubagentIdleReaper,
   subagentRestExpiresAt,
 } from './idleReaper';
@@ -56,12 +55,13 @@ export class SessionSubagentService extends Disposable implements ISessionSubage
     new Emitter<AgentTaskStopHookContext>(),
   );
   /**
-   * Team-mode idle supervisor: arms a 10-minute countdown per subagent after
-   * its run settles and destroys the instance through the lifecycle when it
-   * is still idle at expiry. Owned here because every subagent run — the
-   * Agent tool, AgentSwarm, explicit resume, reuse claim — funnels through
-   * {@link run}, which is both the countdown's cancel point (run start) and
-   * its arm point (run settle).
+   * Team-mode idle supervisor: arms an idle countdown per subagent after its
+   * run settles (default 2 hours, configurable via `[subagent] idle_ttl_ms`)
+   * and destroys the instance through the lifecycle when it is still idle at
+   * expiry. Owned here because every subagent run — the Agent tool,
+   * AgentSwarm, explicit resume, reuse claim — funnels through {@link run},
+   * which is both the countdown's cancel point (run start) and its arm point
+   * (run settle).
    */
   private readonly idleReaper: SubagentIdleReaper;
 
@@ -82,7 +82,18 @@ export class SessionSubagentService extends Disposable implements ISessionSubage
   ) {
     super();
     this.idleReaper = this._register(
-      new SubagentIdleReaper(this.agentLifecycle, this.runtimeStatus, log),
+      new SubagentIdleReaper(this.agentLifecycle, this.runtimeStatus, log, this.config),
+    );
+    // Re-hang a resumed resting instance's idle countdown: cold materialization
+    // (session resume) creates agents through `IAgentLifecycleService.create`,
+    // whose `onDidRestore` fires once the handle is fully bootstrapped. The
+    // reaper's in-process timers died with the previous process, so the resting
+    // TTL is restored from the persisted runtime status here — or reaped
+    // immediately when it already elapsed while we were down.
+    this._register(
+      this.agentLifecycle.onDidRestore((agentId) => {
+        void this.idleReaper.reconcile(agentId);
+      }),
     );
   }
 
@@ -104,9 +115,9 @@ export class SessionSubagentService extends Disposable implements ISessionSubage
     // release it when the run settles (or the start itself fails).
     const teamMode = resolveTeamMode(this.config);
     // Team-mode idle supervision: only named subagent profiles — never the
-    // main agent — get the 10-minute idle TTL and a profile runtime-status
-    // entry. When team mode is off, or the profile is unknown, this block is
-    // skipped and behavior is identical to a plain run.
+    // main agent — get the idle TTL (default 2h, configurable) and a profile
+    // runtime-status entry. When team mode is off, or the profile is unknown,
+    // this block is skipped and behavior is identical to a plain run.
     const supervised = teamMode && agentId !== MAIN_AGENT_ID && profileName !== undefined;
     if (supervised) {
       // A new run on this instance cancels any pending idle countdown before
@@ -186,8 +197,8 @@ export class SessionSubagentService extends Disposable implements ISessionSubage
     }
 
     // Team-mode idle supervision: once the run settles (success, failure, or
-    // cancellation) start the 10-minute idle countdown and mark the profile
-    // resting with its expiry. The next run on this instance cancels it.
+    // cancellation) start the idle countdown and mark the profile resting
+    // with its expiry. The next run on this instance cancels it.
     if (supervised) {
       void run.completion.then(
         () => this.onRunSettled(agentId, profileName!),
@@ -202,7 +213,11 @@ export class SessionSubagentService extends Disposable implements ISessionSubage
   /** Restore idle supervision after a run failed to start. */
   private onRunStartFailed(agentId: string, profileName: string): void {
     this.idleReaper.arm(agentId, profileName);
-    void this.runtimeStatus.markResting(profileName, agentId, subagentRestExpiresAt()).catch(
+    void this.runtimeStatus.markResting(
+      profileName,
+      agentId,
+      subagentRestExpiresAt(Date.now(), resolveSubagentIdleTtlMs(this.config)),
+    ).catch(
       () => { /* swallow — status write never blocks the run */ },
     );
   }
@@ -210,7 +225,11 @@ export class SessionSubagentService extends Disposable implements ISessionSubage
   /** A run settled: park the instance under the idle TTL. */
   private onRunSettled(agentId: string, profileName: string): void {
     this.idleReaper.arm(agentId, profileName);
-    void this.runtimeStatus.markResting(profileName, agentId, subagentRestExpiresAt()).catch(
+    void this.runtimeStatus.markResting(
+      profileName,
+      agentId,
+      subagentRestExpiresAt(Date.now(), resolveSubagentIdleTtlMs(this.config)),
+    ).catch(
       () => { /* swallow — status write never blocks the run */ },
     );
   }

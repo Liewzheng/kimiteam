@@ -10,11 +10,14 @@ import type { AgentMeta } from '#/session/sessionMetadata/sessionMetadata';
 
 export function subagentLabels(
   parentAgentId: string,
-  options: { readonly swarmItem?: string } = {},
+  options: { readonly swarmItem?: string; readonly profileName?: string } = {},
 ): Readonly<Record<string, string>> {
   const labels: Record<string, string> = { parentAgentId };
   if (options.swarmItem !== undefined) {
     labels['swarmItem'] = options.swarmItem;
+  }
+  if (options.profileName !== undefined) {
+    labels['profileName'] = options.profileName;
   }
   return labels;
 }
@@ -30,6 +33,10 @@ export function labelsFromAgentMeta(
   const swarmItem = subagentSwarmItem(meta);
   if (swarmItem !== undefined) {
     labels['swarmItem'] = swarmItem;
+  }
+  const profileName = subagentProfileName(meta);
+  if (profileName !== undefined) {
+    labels['profileName'] = profileName;
   }
   return Object.keys(labels).length > 0 ? labels : undefined;
 }
@@ -48,6 +55,16 @@ export function subagentParentAgentId(meta: AgentMeta | undefined): string | und
 export function subagentSwarmItem(meta: AgentMeta | undefined): string | undefined {
   if (meta === undefined) return undefined;
   return firstNonEmpty(meta.labels?.['swarmItem'], meta.swarmItem);
+}
+
+/**
+ * The profile the subagent was spawned as. Only present on sessions recorded
+ * after the `profileName` label was introduced; older sessions return
+ * `undefined` and are treated as non-matching by cold reuse.
+ */
+export function subagentProfileName(meta: AgentMeta | undefined): string | undefined {
+  if (meta === undefined) return undefined;
+  return firstNonEmpty(meta.labels?.['profileName']);
 }
 
 function firstNonEmpty(...values: readonly (string | undefined)[]): string | undefined {

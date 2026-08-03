@@ -353,6 +353,7 @@ merge_all_available_skills = true
 timeout_ms = 7200000
 # max_concurrency: integer
 # team_mode: boolean
+# idle_ttl_ms: integer
 # model_overrides: record<string, string>
 
 # ##########################################################################

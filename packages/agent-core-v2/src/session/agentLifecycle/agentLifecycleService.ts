@@ -66,6 +66,7 @@ export class AgentLifecycleService extends Disposable implements IAgentLifecycle
   private readonly handles = new Map<string, IAgentScopeHandle>();
   private readonly onDidCreateEmitter = this._register(new Emitter<IAgentScopeHandle>());
   private readonly onDidDisposeEmitter = this._register(new Emitter<string>());
+  private readonly onDidRestoreEmitter = this._register(new Emitter<string>());
   private readonly interactionBusDisposables = new Map<string, IDisposable>();
   /** In-flight creation promises, keyed by agent id. Concurrent creations of
    *  the same id join the in-flight one (never a duplicate scope), so a caller
@@ -77,6 +78,9 @@ export class AgentLifecycleService extends Disposable implements IAgentLifecycle
   }
   get onDidDispose() {
     return this.onDidDisposeEmitter.event;
+  }
+  get onDidRestore() {
+    return this.onDidRestoreEmitter.event;
   }
 
   constructor(
@@ -196,6 +200,13 @@ export class AgentLifecycleService extends Disposable implements IAgentLifecycle
       // before the handle admits turns: restore and binding own the final
       // `activeToolNames`, so this must run after both.
       await handle.accessor.get(IAgentToolActivationService).activate();
+      // Announce that the agent is fully bootstrapped. This is the choke point
+      // every cold materialization (SDK resume, engine-internal cold restore)
+      // funnels through; the subagent idle supervisor re-hangs a resumed
+      // resting instance's TTL here. Deliberately fired at the *end* of
+      // creation — a handler (e.g. an immediate reap of an already-expired
+      // resting entry) must only ever see a fully-built handle.
+      this.onDidRestoreEmitter.fire(agentId);
       return handle;
     } catch (error) {
       // Startup failed: drop the half-built agent so the next `create` starts

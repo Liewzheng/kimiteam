@@ -9,25 +9,37 @@
  * the session closes, so after a run finishes the instance is idle again and
  * becomes the next spawn target.
  *
- * The candidate scan is synchronous after a single metadata read, and the
- * claim (when `claimInto` is provided) happens in the same synchronous block.
- * With JavaScript's single-threaded semantics no two concurrent spawn
+ * The in-process candidate scan is synchronous after a single metadata read,
+ * and the claim (when `claimInto` is provided) happens in the same synchronous
+ * block. With JavaScript's single-threaded semantics no two concurrent spawn
  * attempts can pick the same instance between the scan and the claim — the
  * batch's "no double-claim" guarantee. The caller must release the claim
  * (delete from `claimInto`) once the run has started or failed to start; from
  * then on the instance's own `running` loop state excludes it from reuse.
+ *
+ * After a process restart the registry no longer holds the session's parked
+ * instances, so a cold fallback re-materializes a resting subagent from the
+ * persisted session metadata + runtime-status table (`create` is create-or-get
+ * for an explicit id, so concurrent materializations of the same instance join
+ * instead of duplicating the scope — no lock needed).
  */
 
 import { IAgentProfileService } from '#/agent/profile/profile';
 import { IAgentLoopService } from '#/agent/loop/loop';
+import { IRuntimeStatusService } from '#/app/runtimeStatus/runtimeStatus';
 import { ISessionMetadata } from '#/session/sessionMetadata/sessionMetadata';
 
 import { IAgentLifecycleService } from './agentLifecycle';
-import { isSubagentMeta, subagentParentAgentId } from './subagentMetadata';
+import {
+  isSubagentMeta,
+  subagentParentAgentId,
+  subagentProfileName,
+} from './subagentMetadata';
 
 export interface FindIdleOwnedSubagentInput {
   readonly lifecycle: IAgentLifecycleService;
   readonly metadata: ISessionMetadata;
+  readonly runtimeStatus: IRuntimeStatusService;
   readonly callerAgentId: string;
   readonly profileName: string;
   /** Instances already claimed for reuse within the current batch — skipped. */
@@ -46,8 +58,10 @@ export interface FindIdleOwnedSubagentInput {
 export async function findIdleOwnedSubagent(
   input: FindIdleOwnedSubagentInput,
 ): Promise<string | undefined> {
-  const { lifecycle, metadata, callerAgentId, profileName, claimInto } = input;
+  const { lifecycle, metadata, runtimeStatus, callerAgentId, profileName, claimInto } = input;
   const agents = (await metadata.read()).agents ?? {};
+
+  // 1) Process-internal scan: parked instances still in the live registry.
   let best: string | undefined;
   let bestOrdinal = Number.NEGATIVE_INFINITY;
   for (const handle of lifecycle.list()) {
@@ -67,7 +81,43 @@ export async function findIdleOwnedSubagent(
     // Atomic with the pick: no await between the scan and the claim, so two
     // concurrent spawn attempts can never both claim `best`.
     claimInto?.add(best);
+    return best;
   }
+
+  // 2) Cold fallback: after a process restart the registry no longer holds the
+  // session's parked subagents, but a resting one is recoverable from the
+  // persisted session metadata (parent + `profileName` labels) intersected
+  // with the runtime-status table. Old sessions whose agent metadata predates
+  // the `profileName` label never match here and fall through to a fresh
+  // creation (degradation, never an error).
+  best = undefined;
+  bestOrdinal = Number.NEGATIVE_INFINITY;
+  const statuses = await runtimeStatus.list();
+  for (const [agentId, agentMeta] of Object.entries(agents)) {
+    if (claimInto?.has(agentId) === true) continue;
+    if (!isSubagentMeta(agentMeta)) continue;
+    if (subagentParentAgentId(agentMeta) !== callerAgentId) continue;
+    if (subagentProfileName(agentMeta) !== profileName) continue;
+    const entry = statuses[profileName];
+    if (entry === undefined || entry.state !== 'resting' || entry.agentId !== agentId) continue;
+    const ordinal = agentOrdinal(agentId);
+    if (ordinal > bestOrdinal) {
+      best = agentId;
+      bestOrdinal = ordinal;
+    }
+  }
+  if (best === undefined) return undefined;
+
+  // Materialize the parked instance back into the live registry. `create` is
+  // create-or-get for an explicit id, so concurrent cold materializations of
+  // the same instance join into a single scope — no lock needed here.
+  const handle = await lifecycle.create({ agentId: best });
+  // Re-check running: a concurrent path may have materialized and started the
+  // instance while we were scanning; a running instance is not reusable.
+  if (handle.accessor.get(IAgentLoopService).status().state === 'running') {
+    return undefined;
+  }
+  claimInto?.add(best);
   return best;
 }
 

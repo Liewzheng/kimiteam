@@ -154,6 +154,65 @@ describe('parseAgentFileText', () => {
     expect(def.prompt).toBe('body');
   });
 
+  it('warns about a misspelled when_to_use key and still ignores the field', () => {
+    const warnings: string[] = [];
+    const def = parseAgentFileText({
+      path: '/tmp/agents/reviewer.md',
+      source: 'project',
+      text: '---\nname: solo\ndescription: d\nwhen_to_use: reviews\n---\n\nbody\n',
+      warn: (message) => warnings.push(message),
+    });
+
+    // Parsing behavior is unchanged — the misspelled field is ignored.
+    expect(def.whenToUse).toBeUndefined();
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('when_to_use');
+    expect(warnings[0]).toContain('whenToUse');
+  });
+
+  it('lists every unknown key in one warn, with hints for common misspellings', () => {
+    const warnings: string[] = [];
+    parseAgentFileText({
+      path: '/tmp/agents/reviewer.md',
+      source: 'project',
+      text: [
+        '---',
+        'name: solo',
+        'description: d',
+        'when_to_use: reviews',
+        'when-to-use: reviews',
+        'disallowed_tools: Bash',
+        'mystery: x',
+        '---',
+        '',
+        'body',
+        '',
+      ].join('\n'),
+      warn: (message) => warnings.push(message),
+    });
+
+    expect(warnings).toHaveLength(1);
+    const message = warnings[0]!;
+    for (const key of ['when_to_use', 'when-to-use', 'disallowed_tools', 'mystery']) {
+      expect(message).toContain(key);
+    }
+    expect(message).toContain('"when_to_use" → use "whenToUse"');
+    expect(message).toContain('"disallowed_tools" → use "disallowedTools"');
+  });
+
+  it('emits no warn when every frontmatter key is canonical', () => {
+    const warnings: string[] = [];
+    const def = parseAgentFileText({
+      path: '/tmp/agents/reviewer.md',
+      source: 'project',
+      text: '---\nname: solo\ndescription: d\nwhenToUse: reviews\ntools: Read\ndisallowedTools: Bash\nmodel_preference: primary\nrole: r\nduty: true\n---\n\nbody\n',
+      warn: (message) => warnings.push(message),
+    });
+
+    expect(def.whenToUse).toBe('reviews');
+    expect(warnings).toHaveLength(0);
+  });
+
   it('rejects a non-boolean override field', () => {
     expect(() => parse('---\nname: solo\ndescription: d\noverride: yes\n---\n\nbody\n')).toThrow(
       /"override"/,
@@ -187,6 +246,42 @@ describe('parseAgentFileText', () => {
     const def = parse('---\nname: solo\ndescription: d\nsubagents: "*"\n---\n\nbody\n');
 
     expect(def.subagents).toBeUndefined();
+  });
+
+  it('parses a skills allowlist as a list or a comma-separated string', () => {
+    const fromList = parse(
+      '---\nname: solo\ndescription: d\nskills:\n  - explore\n  - plan\n---\n\nbody\n',
+    );
+    const fromString = parse(
+      '---\nname: solo\ndescription: d\nskills: explore, plan\n---\n\nbody\n',
+    );
+
+    expect(fromList.skills).toEqual(['explore', 'plan']);
+    expect(fromString.skills).toEqual(['explore', 'plan']);
+  });
+
+  it('treats a lone "*" skills field as unrestricted', () => {
+    const def = parse('---\nname: solo\ndescription: d\nskills: "*"\n---\n\nbody\n');
+
+    expect(def.skills).toBeUndefined();
+  });
+
+  it('parses an empty skills array as zero skills', () => {
+    const def = parse('---\nname: solo\ndescription: d\nskills: []\n---\n\nbody\n');
+
+    expect(def.skills).toEqual([]);
+  });
+
+  it('treats skills as a canonical key (no unknown-key warn)', () => {
+    const warnings: string[] = [];
+    parseAgentFileText({
+      path: '/tmp/agents/reviewer.md',
+      source: 'project',
+      text: '---\nname: solo\ndescription: d\nskills:\n  - explore\n---\n\nbody\n',
+      warn: (message) => warnings.push(message),
+    });
+
+    expect(warnings).toHaveLength(0);
   });
 
   it('rejects a non-string, non-list subagents field', () => {

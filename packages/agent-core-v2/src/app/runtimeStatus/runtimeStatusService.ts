@@ -83,6 +83,10 @@ export class RuntimeStatusService implements IRuntimeStatusService {
     });
   }
 
+  list(): Promise<RuntimeStatusRaw> {
+    return this._readOrCreate();
+  }
+
   private enqueue(op: () => Promise<void>): Promise<void> {
     const run = this._queue.then(op);
     // Keep the chain alive even when one write fails.

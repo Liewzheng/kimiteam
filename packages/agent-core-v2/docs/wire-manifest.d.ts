@@ -454,6 +454,7 @@ interface ProfileBindPayload {
   activeToolNames?: string[];
   disallowedTools: string[];
   subagents?: string[];
+  skills?: string[];
 }
 
 /**

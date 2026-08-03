@@ -48,6 +48,7 @@
  * flag-gated tools (which every builtin profile lists) stay "known" even when
  * unregistered.
  * The mutable plain-data state (`activeToolNamesOverlay` / `agentsMdWarning`
+ * / `pipelineWarning`
  * / the three emitted-warning dedupe sets) is registered into `agentState`
  * (`IAgentStateService`) and read/written through it; `optionsValue` (holds
  * the `cwd` / `chdir` / `emitStatusUpdated` callbacks) and `activeProfile`
@@ -164,6 +165,10 @@ export const profileAgentsMdWarningKey = defineState<string | undefined>(
   'profile.agentsMdWarning',
   () => undefined as string | undefined,
 );
+export const profilePipelineWarningKey = defineState<string | undefined>(
+  'profile.pipelineWarning',
+  () => undefined as string | undefined,
+);
 export const profileEmittedThinkingEffortWarningsKey = defineState<Set<string>>(
   'profile.emittedThinkingEffortWarnings',
   () => new Set(),
@@ -216,6 +221,7 @@ export class AgentProfileService extends Disposable implements IAgentProfileServ
     super();
     this.states.register(profileActiveToolNamesOverlayKey);
     this.states.register(profileAgentsMdWarningKey);
+    this.states.register(profilePipelineWarningKey);
     this.states.register(profileEmittedThinkingEffortWarningsKey);
     this.states.register(profileEmittedToolPatternWarningsKey);
     this.states.register(profileEmittedPluginBudgetWarningsKey);
@@ -256,6 +262,14 @@ export class AgentProfileService extends Disposable implements IAgentProfileServ
 
   private set agentsMdWarning(value: string | undefined) {
     this.states.set(profileAgentsMdWarningKey, value);
+  }
+
+  private get pipelineWarning(): string | undefined {
+    return this.states.get(profilePipelineWarningKey);
+  }
+
+  private set pipelineWarning(value: string | undefined) {
+    this.states.set(profilePipelineWarningKey, value);
   }
 
   private get emittedThinkingEffortWarnings(): Set<string> {
@@ -308,6 +322,7 @@ export class AgentProfileService extends Disposable implements IAgentProfileServ
         activeToolNames: snapshot.activeToolNames,
         disallowedTools: snapshot.disallowedTools ?? [],
         subagents: snapshot.subagents,
+        skills: snapshot.skills,
       }),
     );
     this.afterConfigDispatch({
@@ -355,6 +370,7 @@ export class AgentProfileService extends Disposable implements IAgentProfileServ
     const systemPrompt = profile.systemPrompt(context);
     this.activeProfile = profile;
     this.cacheAgentsMdWarning(context);
+    this.cachePipelineWarning(context);
 
     const thinkingLevel = this.resolveThinkingEffort(
       input.thinking ?? (currentProfileName !== undefined ? this.thinkingLevel : undefined),
@@ -371,6 +387,7 @@ export class AgentProfileService extends Disposable implements IAgentProfileServ
       activeToolNames: profile.tools,
       disallowedTools: profile.disallowedTools ?? [],
       subagents: profile.subagents,
+      skills: profile.skills,
     }));
     this.afterConfigDispatch({
       cwd: input.cwd,
@@ -382,6 +399,7 @@ export class AgentProfileService extends Disposable implements IAgentProfileServ
     });
 
     this.publishAgentsMdWarning();
+    this.publishPipelineWarning();
     this.publishToolPatternWarnings(profile);
   }
 
@@ -448,7 +466,9 @@ export class AgentProfileService extends Disposable implements IAgentProfileServ
     const context = await this.buildSystemPromptContext(profile, undefined, options);
     this.useProfile(profile, context);
     this.cacheAgentsMdWarning(context);
+    this.cachePipelineWarning(context);
     this.publishAgentsMdWarning();
+    this.publishPipelineWarning();
     this.publishToolPatternWarnings(profile);
   }
 
@@ -473,7 +493,9 @@ export class AgentProfileService extends Disposable implements IAgentProfileServ
       systemPrompt: profile.systemPrompt(context),
     });
     this.cacheAgentsMdWarning(context);
+    this.cachePipelineWarning(context);
     this.publishAgentsMdWarning();
+    this.publishPipelineWarning();
   }
 
   getAgentsMdWarning(): string | undefined {
@@ -493,6 +515,7 @@ export class AgentProfileService extends Disposable implements IAgentProfileServ
       disallowedTools: [...(this.profileState.disallowedTools ?? [])],
       subagents:
         this.profileState.subagents === undefined ? undefined : [...this.profileState.subagents],
+      skills: this.profileState.skills === undefined ? undefined : [...this.profileState.skills],
     };
   }
 
@@ -807,6 +830,20 @@ export class AgentProfileService extends Disposable implements IAgentProfileServ
     });
   }
 
+  private cachePipelineWarning(context: Pick<SystemPromptContext, 'pipelineWarning'>): void {
+    this.pipelineWarning = context.pipelineWarning;
+  }
+
+  private publishPipelineWarning(): void {
+    const warning = this.pipelineWarning;
+    if (warning === undefined) return;
+    this.eventBus.publish({
+      type: 'warning',
+      message: warning,
+      code: 'pipeline-oversized',
+    });
+  }
+
   private publishToolPatternWarnings(profile?: ResolvedAgentProfile): void {
     const known = new Set<string>();
     // The registry only holds tools the bound Profile activated; the
@@ -869,7 +906,7 @@ export class AgentProfileService extends Disposable implements IAgentProfileServ
       this.bootstrap.homeDir,
       { additionalDirs: options?.additionalDirs ?? this.workspace.additionalDirs },
     );
-    const skills = await this.resolveSkillListing();
+    const skills = await this.resolveSkillListing(profile);
     const pluginSections = await this.resolvePluginSections();
     return {
       ...base,
@@ -902,10 +939,19 @@ export class AgentProfileService extends Disposable implements IAgentProfileServ
     );
   }
 
-  private async resolveSkillListing(): Promise<string> {
+  private async resolveSkillListing(profile: ResolvedAgentProfile): Promise<string> {
     try {
       await this.skillCatalog.ready;
-      return this.skillCatalog.catalog.getModelSkillListing();
+      const skills = profile.skills;
+      // Undeclared (`undefined`) or `*` = full access; `[]` = zero skills.
+      // Whitelisted names that do not exist in the catalog simply never appear
+      // in the listing — no error.
+      if (skills === undefined || skills.includes('*')) {
+        return this.skillCatalog.catalog.getModelSkillListing();
+      }
+      if (skills.length === 0) return '';
+      const allowed = new Set(skills);
+      return this.skillCatalog.catalog.getModelSkillListing((name) => allowed.has(name));
     } catch {
       return '';
     }

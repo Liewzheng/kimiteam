@@ -34,6 +34,8 @@ export interface TeamHireInput {
   disallowed_tools?: string[];
   /** Allowed subagent types (YAML list) in the agent file. */
   subagents?: string[];
+  /** Skill-name allowlist (YAML list) in the agent file — omitted = every skill. */
+  skills?: string[];
   /** Whether this is an on-duty member (`duty: true`). */
   duty?: boolean;
   /** Profile scope — user-level `~/.kimi-code/agents/` or project-level `<cwd>/.agents/`. */
@@ -95,6 +97,13 @@ export const TeamHireInputSchema: z.ZodType<TeamHireInput> = z.object({
     .min(1)
     .optional()
     .describe('Allowed subagent types for this agent (YAML list).'),
+  skills: z
+    .array(z.string())
+    .min(1)
+    .optional()
+    .describe(
+      'Allowed skill names — rendered as a YAML list in the agent file. Written as frontmatter `skills`. Omit to allow every skill.',
+    ),
   duty: z.boolean().optional().describe('Whether this is an on-duty member (duty: true).'),
   scope: z
     .enum(['user', 'project'])

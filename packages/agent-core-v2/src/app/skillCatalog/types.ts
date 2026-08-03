@@ -64,7 +64,13 @@ export interface SkillCatalog {
   listInvocableSkills(): readonly SkillDefinition[];
   getSkillRoots(): readonly string[];
   getSkippedByPolicy(): readonly SkippedSkill[];
-  getModelSkillListing(): string;
+  /**
+   * Model-facing listing of invocable top-level skills, or `''` when none.
+   * An optional `filter` restricts which skills appear — the predicate is the
+   * caller's (e.g. a profile's `skills` allowlist); without it the listing is
+   * identical to the unfiltered form, so shared callers are unaffected.
+   */
+  getModelSkillListing(filter?: (name: string) => boolean): string;
 }
 
 export function normalizeSkillName(name: string): string {

@@ -57,6 +57,14 @@ export interface IAgentLifecycleService {
   readonly onDidCreate: Event<IAgentScopeHandle>;
   /** Fires after an agent is removed, with its agent id. */
   readonly onDidDispose: Event<string>;
+  /**
+   * Fires after an agent finishes bootstrapping (wire restore, binding, and
+   * tool activation all complete), with its agent id. Unlike `onDidCreate`
+   * this fires at the *end* of creation, so a handler can safely touch the
+   * fully-restored handle (e.g. the subagent idle supervisor re-hanging a
+   * resumed resting instance's TTL).
+   */
+  readonly onDidRestore: Event<string>;
 
   /**
    * Create an agent from zero (empty context), ready to admit turns.

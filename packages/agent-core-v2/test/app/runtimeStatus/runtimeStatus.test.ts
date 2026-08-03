@@ -149,4 +149,24 @@ describe('RuntimeStatusService', () => {
     await expect(service.markWorking('coder', 'agent-1')).resolves.toBeUndefined();
     expect(warn).toHaveBeenCalled();
   });
+
+  it('list returns the current table and is a pure read', async () => {
+    const { service, storage } = buildRuntimeStatusService();
+    expect(await service.list()).toEqual({});
+
+    await service.markWorking('coder', 'agent-1');
+    await service.markResting('reviewer', 'agent-2', '2025-06-01T10:00:00.000Z');
+    const listed = await service.list();
+
+    expect(listed['coder']).toMatchObject({ state: 'working', agentId: 'agent-1' });
+    expect(listed['reviewer']).toMatchObject({
+      state: 'resting',
+      agentId: 'agent-2',
+      restExpiresAt: '2025-06-01T10:00:00.000Z',
+    });
+    // A read must not mutate the stored document.
+    const raw = await readRaw(storage);
+    expect(raw).toEqual(listed);
+    expect(Object.keys(listed)).toHaveLength(2);
+  });
 });

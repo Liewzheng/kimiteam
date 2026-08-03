@@ -23,6 +23,10 @@ import {
   IAgentPerformanceService,
   type ProfilePerformanceEntry,
 } from '#/app/agentPerformance/agentPerformance';
+import {
+  IRuntimeStatusService,
+  type RuntimeStatusEntry,
+} from '#/app/runtimeStatus/runtimeStatus';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { IAgentContextInjectorService } from '#/agent/contextInjector/contextInjector';
@@ -196,18 +200,20 @@ function profileCatalogWithPreference(
 }
 
 function modelCatalogResolving(...aliases: readonly string[]): IModelCatalog {
+  const resolve = (alias: string): Model => {
+    if (!aliases.includes(alias)) {
+      throw new Error2(
+        ErrorCodes.CONFIG_INVALID,
+        `Model "${alias}" is not configured in config.toml.`,
+        { details: { model: alias } },
+      );
+    }
+    return { id: alias } as Model;
+  };
   return {
     _serviceBrand: undefined,
-    get: (alias: string) => {
-      if (!aliases.includes(alias)) {
-        throw new Error2(
-          ErrorCodes.CONFIG_INVALID,
-          `Model "${alias}" is not configured in config.toml.`,
-          { details: { model: alias } },
-        );
-      }
-      return { id: alias } as Model;
-    },
+    get: resolve,
+    getRequester: (alias: string) => ({ model: resolve(alias) }),
     notifyConfigChanged: () => {},
   } as unknown as IModelCatalog;
 }
@@ -331,6 +337,7 @@ function createAgentLifecycleStub(options: AgentLifecycleStubOptions = {}): Agen
     onDidStopAgentTask: Event.None as KimiEvent<AgentTaskStopHookContext>,
     onDidCreate: Event.None as KimiEvent<IAgentScopeHandle>,
     onDidDispose: Event.None as KimiEvent<string>,
+    onDidRestore: Event.None as KimiEvent<string>,
     create: vi.fn(async (input = {}) => {
       if (options.createError !== undefined) throw options.createError;
       const agentId =
@@ -434,9 +441,29 @@ function sessionMetadataStub(agents: Readonly<Record<string, AgentMeta>>): ISess
   };
 }
 
-function subagentMeta(parentAgentId = 'main'): AgentMeta {
+function subagentMeta(parentAgentId = 'main', profileName?: string): AgentMeta {
   return {
-    labels: { parentAgentId },
+    labels: { parentAgentId, ...(profileName === undefined ? {} : { profileName }) },
+  };
+}
+
+function runtimeStatusStub(
+  entries: Readonly<Record<string, { readonly state: 'working' | 'resting'; readonly agentId: string }>>,
+): IRuntimeStatusService {
+  const table: Record<string, RuntimeStatusEntry> = {};
+  for (const [profileName, entry] of Object.entries(entries)) {
+    table[profileName] = {
+      state: entry.state,
+      agentId: entry.agentId,
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    };
+  }
+  return {
+    _serviceBrand: undefined,
+    markWorking: async () => {},
+    markResting: async () => {},
+    removeProfile: async () => {},
+    list: async () => table,
   };
 }
 
@@ -555,7 +582,22 @@ describe('Agent tool description', () => {
   it('renders global tool restrictions in subagent type descriptions', () => {
     ctx = createTestAgent(
       configServices(() => ({
-        providers: {},
+        providers: {
+          'test-provider': {
+            type: 'kimi',
+            apiKey: 'test-key',
+            baseUrl: 'https://api.example.test/v1',
+          },
+        },
+        models: {
+          'mock-model': {
+            provider: 'test-provider',
+            model: 'mock-model',
+            maxContextSize: 1_000_000,
+          },
+        },
+        defaultProvider: 'test-provider',
+        defaultModel: 'mock-model',
         tools: { disabled: ['Bash'] },
       })),
     );
@@ -1038,6 +1080,76 @@ describe('Agent tool execution contract', () => {
       }),
     );
     expect(result.output).toContain('actual_subagent_type: explore');
+  });
+
+  it('injects the spawned profile performance card into the child prompt', async () => {
+    const lifecycle = createAgentLifecycleStub({
+      createAgentIds: ['agent-child'],
+      runCompletion: async () => ({ summary: 'child result' }),
+    });
+    const perfService: IAgentPerformanceService = {
+      _serviceBrand: undefined,
+      record: async () => {},
+      recordShift: async () => {},
+      summary: async () => ({ count: 0 }),
+      list: async () => [
+        { profileName: 'explore', summary: { average: 92, count: 5, last: 95 } },
+        { profileName: 'coder', summary: { average: 84, count: 4, last: 88 } },
+      ],
+    };
+    const context = createAgentToolContext(
+      lifecycle,
+      appService(IAgentPerformanceService, perfService),
+      sessionService(ISessionAgentProfileCatalog, allowlistCatalog(['explore'])),
+    );
+
+    const result = await executeAgentTool(context, {
+      prompt: 'Investigate',
+      description: 'Find cause',
+      subagent_type: 'explore',
+    });
+
+    const prompt = (lifecycle.run.mock.calls[0]?.[1] as { prompt: string }).prompt;
+    expect(prompt).toContain('<performance_card>');
+    expect(prompt).toContain('profile: explore');
+    expect(prompt).toContain('average: 92 (last 5 scores)');
+    expect(prompt).toContain('rank: 1/2');
+    expect(prompt).toContain('Investigate');
+    // Privacy: the card only carries the holder's own data — no other member's
+    // name or score leaks into the child prompt.
+    expect(prompt).not.toContain('coder');
+    expect(prompt).not.toContain('84');
+    expect(result.output).toContain('child result');
+  });
+
+  it('leaves the child prompt untouched when the spawned profile has no scores', async () => {
+    const lifecycle = createAgentLifecycleStub({
+      createAgentIds: ['agent-child'],
+      runCompletion: async () => ({ summary: 'child result' }),
+    });
+    const perfService: IAgentPerformanceService = {
+      _serviceBrand: undefined,
+      record: async () => {},
+      recordShift: async () => {},
+      summary: async () => ({ count: 0 }),
+      list: async () => [],
+    };
+    const context = createAgentToolContext(
+      lifecycle,
+      appService(IAgentPerformanceService, perfService),
+      sessionService(ISessionAgentProfileCatalog, allowlistCatalog(['explore'])),
+    );
+
+    await executeAgentTool(context, {
+      prompt: 'Investigate',
+      description: 'Find cause',
+      subagent_type: 'explore',
+    });
+
+    const prompt = (lifecycle.run.mock.calls[0]?.[1] as { prompt: string }).prompt;
+    // explore has no promptPrefix and no scores → the prompt is passed through verbatim.
+    expect(prompt).toBe('Investigate');
+    expect(prompt).not.toContain('performance_card');
   });
 
   it('declares no resource accesses so concurrent Agent calls can run in parallel', async () => {
@@ -1634,6 +1746,275 @@ describe('Agent tool execution contract', () => {
     expect(result.output).toContain('agent_id: agent-parked');
     expect(result.output).toContain('actual_subagent_type: explore');
     expect(result.output).toContain('reused result');
+  });
+
+  it('does not cold-fallback when a parked instance is found in-process (team mode)', async () => {
+    const runtimeStatus = runtimeStatusStub({
+      explore: { state: 'resting', agentId: 'agent-parked' },
+    });
+    const lifecycle = createAgentLifecycleStub({
+      runCompletion: async () => ({ summary: 'reused result' }),
+    });
+    const context = createAgentToolContext(
+      lifecycle,
+      sessionService(
+        ISessionMetadata,
+        sessionMetadataStub({ 'agent-parked': subagentMeta('main', 'explore') }),
+      ),
+      appService(IRuntimeStatusService, runtimeStatus),
+      { initialConfig: { subagent: { teamMode: true } } },
+    );
+    lifecycle.addHandle('agent-parked', 'explore');
+    const listSpy = vi.spyOn(runtimeStatus, 'list');
+
+    const result = await executeAgentTool(context, {
+      prompt: 'Investigate',
+      description: 'Find cause',
+      subagent_type: 'explore',
+      run_in_background: false,
+    });
+
+    expect(lifecycle.create).not.toHaveBeenCalled();
+    expect(listSpy).not.toHaveBeenCalled(); // in-process hit short-circuits the cold fallback
+    expect(lifecycle.run).toHaveBeenCalledWith(
+      'agent-parked',
+      { kind: 'prompt', prompt: 'Investigate' },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    expect(result.output).toContain('agent_id: agent-parked');
+  });
+
+  it('cold-materializes a resting owned subagent after a process-internal miss (team mode)', async () => {
+    const lifecycle = createAgentLifecycleStub({
+      runCompletion: async () => ({ summary: 'cold reused result' }),
+      handleServices: new Map([
+        [
+          'agent-child',
+          new Map<unknown, unknown>([
+            [
+              IAgentProfileService,
+              {
+                _serviceBrand: undefined,
+                data: () => ({ profileName: 'explore' }),
+                update: () => {},
+                republishStatus: () => {},
+                isToolActive: () => false,
+              },
+            ],
+          ]),
+        ],
+      ]),
+    });
+    const context = createAgentToolContext(
+      lifecycle,
+      sessionService(
+        ISessionMetadata,
+        sessionMetadataStub({ 'agent-child': subagentMeta('main', 'explore') }),
+      ),
+      appService(
+        IRuntimeStatusService,
+        runtimeStatusStub({ explore: { state: 'resting', agentId: 'agent-child' } }),
+      ),
+      { initialConfig: { subagent: { teamMode: true } } },
+    );
+    // No addHandle: the in-process registry is empty (process restart), so the
+    // scan misses and the cold fallback must materialize the parked instance.
+
+    const result = await executeAgentTool(context, {
+      prompt: 'Investigate',
+      description: 'Find cause',
+      subagent_type: 'explore',
+      run_in_background: false,
+    });
+
+    expect(lifecycle.create).toHaveBeenCalledTimes(1);
+    expect(lifecycle.create).toHaveBeenCalledWith({ agentId: 'agent-child' });
+    expect(lifecycle.run).toHaveBeenCalledWith(
+      'agent-child',
+      { kind: 'prompt', prompt: 'Investigate' },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    expect(result.output).toContain('agent_id: agent-child');
+    expect(result.output).toContain('actual_subagent_type: explore');
+    expect(result.output).toContain('cold reused result');
+  });
+
+  it('falls back to a fresh creation when the metadata lacks the profileName label (team mode)', async () => {
+    const lifecycle = createAgentLifecycleStub({
+      createAgentIds: ['agent-child'],
+      runCompletion: async () => ({ summary: 'fresh result' }),
+    });
+    const context = createAgentToolContext(
+      lifecycle,
+      // Legacy session: the agent metadata predates the `profileName` label.
+      sessionService(ISessionMetadata, sessionMetadataStub({ 'agent-child': subagentMeta('main') })),
+      appService(
+        IRuntimeStatusService,
+        runtimeStatusStub({ explore: { state: 'resting', agentId: 'agent-child' } }),
+      ),
+      { initialConfig: { subagent: { teamMode: true } } },
+    );
+
+    await executeAgentTool(context, {
+      prompt: 'Investigate',
+      description: 'Find cause',
+      subagent_type: 'explore',
+      run_in_background: false,
+    });
+
+    expect(lifecycle.create).not.toHaveBeenCalledWith({ agentId: 'agent-child' });
+    expect(lifecycle.create).toHaveBeenCalledWith(
+      expect.objectContaining({ binding: expect.objectContaining({ profile: 'explore' }) }),
+    );
+    expect(lifecycle.run).toHaveBeenCalledWith(
+      'agent-child',
+      expect.objectContaining({
+        kind: 'prompt',
+        prompt: expect.stringContaining('Investigate'),
+      }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+  });
+
+  it('falls back to a fresh creation when the parked instance is not resting (team mode)', async () => {
+    const lifecycle = createAgentLifecycleStub({
+      createAgentIds: ['agent-child'],
+      runCompletion: async () => ({ summary: 'fresh result' }),
+    });
+    const context = createAgentToolContext(
+      lifecycle,
+      sessionService(
+        ISessionMetadata,
+        sessionMetadataStub({ 'agent-child': subagentMeta('main', 'explore') }),
+      ),
+      // Metadata matches, but the runtime-status table says working (or the
+      // entry points at a different instance) — not reusable.
+      appService(
+        IRuntimeStatusService,
+        runtimeStatusStub({ explore: { state: 'working', agentId: 'agent-child' } }),
+      ),
+      { initialConfig: { subagent: { teamMode: true } } },
+    );
+
+    await executeAgentTool(context, {
+      prompt: 'Investigate',
+      description: 'Find cause',
+      subagent_type: 'explore',
+      run_in_background: false,
+    });
+
+    expect(lifecycle.create).not.toHaveBeenCalledWith({ agentId: 'agent-child' });
+    expect(lifecycle.create).toHaveBeenCalledWith(
+      expect.objectContaining({ binding: expect.objectContaining({ profile: 'explore' }) }),
+    );
+  });
+
+  it('falls back to a fresh creation when the resting entry points at another instance (team mode)', async () => {
+    const lifecycle = createAgentLifecycleStub({
+      createAgentIds: ['agent-child'],
+      runCompletion: async () => ({ summary: 'fresh result' }),
+    });
+    const context = createAgentToolContext(
+      lifecycle,
+      sessionService(
+        ISessionMetadata,
+        sessionMetadataStub({ 'agent-child': subagentMeta('main', 'explore') }),
+      ),
+      appService(
+        IRuntimeStatusService,
+        runtimeStatusStub({ explore: { state: 'resting', agentId: 'some-other-agent' } }),
+      ),
+      { initialConfig: { subagent: { teamMode: true } } },
+    );
+
+    await executeAgentTool(context, {
+      prompt: 'Investigate',
+      description: 'Find cause',
+      subagent_type: 'explore',
+      run_in_background: false,
+    });
+
+    expect(lifecycle.create).not.toHaveBeenCalledWith({ agentId: 'agent-child' });
+    expect(lifecycle.create).toHaveBeenCalledWith(
+      expect.objectContaining({ binding: expect.objectContaining({ profile: 'explore' }) }),
+    );
+  });
+
+  it('materializes a cold resting instance only once across concurrent spawns (team mode)', async () => {
+    const lifecycle = createAgentLifecycleStub({
+      runCompletion: async () => ({ summary: 'cold reused result' }),
+      handleServices: new Map([
+        [
+          'agent-child',
+          new Map<unknown, unknown>([
+            [
+              IAgentProfileService,
+              {
+                _serviceBrand: undefined,
+                data: () => ({ profileName: 'explore' }),
+                update: () => {},
+                republishStatus: () => {},
+                isToolActive: () => false,
+              },
+            ],
+          ]),
+        ],
+      ]),
+    });
+    // Model the real create-or-get contract: an in-flight creation for an
+    // explicit id joins the existing one instead of duplicating the scope.
+    // `materialize` counts how many times the underlying creation actually ran.
+    const originalCreate = lifecycle.create.getMockImplementation()!;
+    const materialize = vi.fn(originalCreate);
+    const inflight = new Map<string, Promise<IAgentScopeHandle>>();
+    lifecycle.create.mockImplementation(async (input = {}) => {
+      if (input.agentId !== undefined) {
+        const existing = inflight.get(input.agentId);
+        if (existing !== undefined) return existing;
+        const created = materialize(input) as Promise<IAgentScopeHandle>;
+        inflight.set(input.agentId, created);
+        return created;
+      }
+      return materialize(input) as Promise<IAgentScopeHandle>;
+    });
+
+    const context = createAgentToolContext(
+      lifecycle,
+      sessionService(
+        ISessionMetadata,
+        sessionMetadataStub({ 'agent-child': subagentMeta('main', 'explore') }),
+      ),
+      appService(
+        IRuntimeStatusService,
+        runtimeStatusStub({ explore: { state: 'resting', agentId: 'agent-child' } }),
+      ),
+      { initialConfig: { subagent: { teamMode: true } } },
+    );
+
+    await Promise.all([
+      executeAgentTool(context, {
+        prompt: 'First',
+        description: 'Find cause',
+        subagent_type: 'explore',
+        run_in_background: false,
+      }),
+      executeAgentTool(context, {
+        prompt: 'Second',
+        description: 'Find cause',
+        subagent_type: 'explore',
+        run_in_background: false,
+      }),
+    ]);
+
+    // Both spawns converge on the same parked instance; the underlying
+    // materialization ran exactly once.
+    expect(materialize).toHaveBeenCalledTimes(1);
+    expect(materialize).toHaveBeenCalledWith({ agentId: 'agent-child' });
+    expect(lifecycle.run).toHaveBeenCalledWith(
+      'agent-child',
+      expect.objectContaining({ kind: 'prompt' }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
   });
 
   it('picks the most recently allocated instance when several idle ones match (team mode)', async () => {

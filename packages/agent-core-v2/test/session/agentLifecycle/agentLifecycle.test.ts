@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { SyncDescriptor } from '#/_base/di/descriptors';
 import { Disposable, DisposableStore } from '#/_base/di/lifecycle';
-import { type ISessionScopeHandle, LifecycleScope } from '#/_base/di/scope';
+import { type IAgentScopeHandle, type ISessionScopeHandle, LifecycleScope } from '#/_base/di/scope';
 import { TestInstantiationService } from '#/_base/di/test';
 import { Event } from '#/_base/event';
 import { type McpServerConfig } from '#/agent/mcp/config-schema';
@@ -811,6 +811,25 @@ describe('AgentLifecycleService', () => {
 
     await svc.remove(a.id);
     expect(disposed).toEqual([a.id]);
+  });
+
+  it('fires onDidRestore at the end of creation with the registered handle', async () => {
+    const svc = ix.get(IAgentLifecycleService);
+    const restored: string[] = [];
+    let visibleAtRestore: IAgentScopeHandle | undefined;
+    disposables.add(
+      svc.onDidRestore((id) => {
+        restored.push(id);
+        visibleAtRestore = svc.get(id);
+      }),
+    );
+
+    const main = await svc.create({ agentId: 'main' });
+    // The resume-reconcile hook depends on the event firing only after the
+    // handle is fully built and registered — an immediate-reap handler must
+    // never see a half-materialized agent.
+    expect(restored).toEqual(['main']);
+    expect(visibleAtRestore).toBe(main);
   });
 
   it('de-dupes concurrent create calls for the same agent id', async () => {

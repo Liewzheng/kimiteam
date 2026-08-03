@@ -1166,6 +1166,7 @@ export class AgentTestContext {
               _serviceBrand: undefined,
               onDidCreate: Event.None as Event<IAgentScopeHandle>,
               onDidDispose: Event.None as Event<string>,
+              onDidRestore: Event.None as Event<string>,
               create: () =>
                 Promise.reject(
                   new Error('IAgentLifecycleService.create is not supported in the test harness'),

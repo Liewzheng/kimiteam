@@ -11,7 +11,7 @@ import type { ServiceIdentifier, ServicesAccessor } from '#/_base/di/instantiati
 import { IInstantiationService } from '#/_base/di/instantiation';
 import { toDisposable, type IDisposable } from '#/_base/di/lifecycle';
 import { type IAgentScopeHandle, LifecycleScope } from '#/_base/di/scope';
-import { Emitter } from '#/_base/event';
+import { Emitter, Event } from '#/_base/event';
 import { IAgentContextInjectorService } from '#/agent/contextInjector/contextInjector';
 import { IAgentContextMemoryService } from '#/agent/contextMemory/contextMemory';
 import { IAgentProfileService } from '#/agent/profile/profile';
@@ -159,6 +159,7 @@ function makeLifecycleStub(handles: readonly IAgentScopeHandle[] = []): Lifecycl
     _serviceBrand: undefined,
     onDidCreate: onDidCreate.event,
     onDidDispose: onDidDispose.event,
+    onDidRestore: Event.None as Event<string>,
     get: (id: string) => byId.get(id),
     list: () => [...byId.values()],
     broadcastPermissionMode: () => {},

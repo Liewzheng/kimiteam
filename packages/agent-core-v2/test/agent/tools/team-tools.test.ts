@@ -19,6 +19,7 @@ import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { parseAgentFileText } from '#/app/agentFileCatalog/agentFile';
 import type { AgentFileDefinition } from '#/app/agentFileCatalog/types';
 import { TeamHireInputSchema, TEAM_HIRE_NAME_PATTERN as NAME_PAT } from '#/agent/tools/team-hire/team-hire';
+import { buildPerformanceCard } from '#/agent/tools/agent/agentTool';
 
 
 // ---------------------------------------------------------------------------
@@ -44,7 +45,7 @@ describe('TeamHire input schema', () => {
       name: 'code-reviewer', role: '后端工程师', description: '严格的代码审查',
       when_to_use: 'PR 检查', prompt: '你是严格的代码审查者。',
       model: 'primary', tools: ['Read', 'Grep'], disallowed_tools: ['Write'],
-      subagents: ['explore'], duty: true, scope: 'user' as const,
+      subagents: ['explore'], skills: ['commit', 'pdf'], duty: true, scope: 'user' as const,
     });
     expect(result.success).toBe(true);
   });
@@ -106,6 +107,7 @@ describe('TeamHire frontmatter → parse round-trip', () => {
       'tools:\n  - ' + q('Read') + '\n  - ' + q('Grep'),
       'disallowedTools:\n  - ' + q('Write'),
       'subagents:\n  - ' + q('explore'),
+      'skills:\n  - ' + q('commit') + '\n  - ' + q('pdf'),
       '---',
       '',
       '你是严格的代码审查者。',
@@ -122,6 +124,7 @@ describe('TeamHire frontmatter → parse round-trip', () => {
     expect(def.tools).toEqual(['Read', 'Grep']);
     expect(def.disallowedTools).toEqual(['Write']);
     expect(def.subagents).toEqual(['explore']);
+    expect(def.skills).toEqual(['commit', 'pdf']);
     expect(def.prompt).toBe('你是严格的代码审查者。');
   });
 
@@ -267,6 +270,34 @@ describe('Team* main-agent gate', () => {
     );
     expect(result.isError).toBeUndefined();
     expect(existsSync(path.join(tmpDir, 'agents', 'new-hire.md'))).toBe(true);
+  });
+
+  it('TeamHire writes a skills whitelist that the parser reads back identically', async () => {
+    const stubs = gateStubs(tmpDir, 'main', { main: {} });
+    const tool = new TeamHireTool(
+      {} as never,
+      stubs.sessionMeta as never,
+      stubs.bootstrap as never,
+      stubs.scopeContext as never,
+      gateLogStub() as never,
+    );
+    const result = await runResolution(
+      await tool.resolveExecution({
+        name: 'skill-hire',
+        description: 'd',
+        prompt: 'p',
+        skills: ['commit', 'pdf'],
+      }),
+    );
+    expect(result.isError).toBeUndefined();
+
+    const filePath = path.join(tmpDir, 'agents', 'skill-hire.md');
+    expect(existsSync(filePath)).toBe(true);
+    const content = fs.readFileSync(filePath, 'utf8');
+    expect(content).toContain('skills:\n  - \'commit\'\n  - \'pdf\'');
+
+    const def = parseAgentFileText({ path: filePath, source: 'user', text: content });
+    expect(def.skills).toEqual(['commit', 'pdf']);
   });
 
   it('TeamHire rejects a subagent caller without writing a file', async () => {
@@ -731,5 +762,88 @@ describe('TeamScore', () => {
       expect(trimmed.data.profile).toBe('coder');
       expect(trimmed.data.note).toBe('n');
     }
+  });
+});
+
+describe('buildPerformanceCard', () => {
+  function perf(entries: ReadonlyArray<[string, { readonly average?: number; readonly count: number; readonly last?: number }]>) {
+    return new Map(entries.map(([name, s]) => [name, s]));
+  }
+
+  it('renders a full card with average, score window and team rank', () => {
+    const card = buildPerformanceCard(
+      'explore',
+      perf([
+        ['explore', { average: 92, count: 5, last: 95 }],
+        ['coder', { average: 84, count: 4, last: 88 }],
+        ['reader', { average: 90, count: 6, last: 91 }],
+      ]),
+    );
+    expect(card).toContain('<performance_card>');
+    expect(card).toContain('profile: explore');
+    expect(card).toContain('average: 92 (last 5 scores)');
+    expect(card).toContain('rank: 1/3');
+    expect(card).toContain('</performance_card>');
+    // Privacy: the card only carries the holder's own data — no other member's
+    // name or score leaks into it.
+    expect(card).not.toContain('coder');
+    expect(card).not.toContain('reader');
+    expect(card).not.toContain('84');
+  });
+
+  it('returns undefined when the profile has no scored entries', () => {
+    expect(buildPerformanceCard('explore', perf([['explore', { count: 0 }]]))).toBeUndefined();
+    expect(buildPerformanceCard('explore', new Map())).toBeUndefined();
+  });
+
+  it('shows the average but flags the rank as insufficient data below the minimum score count', () => {
+    const card = buildPerformanceCard(
+      'explore',
+      perf([
+        ['explore', { average: 90, count: 2, last: 90 }],
+        ['coder', { average: 84, count: 4 }],
+      ]),
+    );
+    expect(card).toContain('average: 90 (last 2 scores)');
+    expect(card).toContain('rank: insufficient data (need at least 3 scores)');
+  });
+
+  it('marks the lowest scored member neutrally when at least two members are scored', () => {
+    const card = buildPerformanceCard(
+      'explore',
+      perf([
+        ['explore', { average: 60, count: 5, last: 62 }],
+        ['coder', { average: 84, count: 4 }],
+        ['reader', { average: 90, count: 6 }],
+      ]),
+    );
+    expect(card).toContain('rank: 3/3 — currently the lowest among 3 scored members (reference only)');
+  });
+
+  it('omits the lowest-member note when only one member is scored', () => {
+    const card = buildPerformanceCard(
+      'explore',
+      perf([
+        ['explore', { average: 60, count: 5, last: 62 }],
+        ['coder', { count: 0 }],
+      ]),
+    );
+    expect(card).toContain('rank: 1/1');
+    expect(card).not.toContain('lowest');
+  });
+
+  it('ranks by average and excludes profiles below the minimum score count', () => {
+    const card = buildPerformanceCard(
+      'reader',
+      perf([
+        ['explore', { average: 92, count: 5 }],
+        ['reader', { average: 85, count: 4 }],
+        ['coder', { average: 88, count: 6 }],
+        ['writer', { average: 70, count: 5 }],
+        ['one-shot', { average: 99, count: 1 }], // below the minimum — excluded from ranking
+      ]),
+    );
+    // 92 > 88 > 85 > 70; the 1-score outlier does not shift the rank.
+    expect(card).toContain('rank: 3/4');
   });
 });

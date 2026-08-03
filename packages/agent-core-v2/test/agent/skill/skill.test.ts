@@ -5,6 +5,7 @@ import { DisposableStore } from '#/_base/di/lifecycle';
 import { createServices, type TestInstantiationService } from '#/_base/di/test';
 import type { ContextMessage } from '#/agent/contextMemory/types';
 import { IAgentPromptService } from '#/agent/prompt/prompt';
+import { IAgentProfileService } from '#/agent/profile/profile';
 import { IAgentSkillService } from '#/agent/skill/skill';
 import { IAgentScopeContext, makeAgentScopeContext } from '#/agent/scopeContext/scopeContext';
 import { InMemorySkillCatalog } from '#/app/skillCatalog/registry';
@@ -203,11 +204,23 @@ describe('SkillTool', () => {
     };
   }
 
-  function makeTool(ix: TestInstantiationService, depth?: number): SkillTool {
+  function stubProfile(skills?: readonly string[]): IAgentProfileService {
+    return {
+      _serviceBrand: undefined,
+      data: () => ({ skills } as never),
+    } as unknown as IAgentProfileService;
+  }
+
+  function makeTool(
+    ix: TestInstantiationService,
+    depth?: number,
+    skills?: readonly string[],
+  ): SkillTool {
     const tool = new SkillTool(
       ix.get(ISessionSkillCatalog),
       stubSkillService(),
       stubSessionContext(),
+      stubProfile(skills),
     );
     return depth === undefined ? tool : tool.withInitialQueryDepth(depth);
   }
@@ -336,6 +349,64 @@ describe('SkillTool', () => {
         toolContext({ skill: 'commit' }),
       ),
     ).rejects.toBeInstanceOf(NestedSkillTooDeepError);
+    expect(prompted).toHaveLength(0);
+  });
+
+  it('allows a skill named in the profile skills allowlist', async () => {
+    const result = await executeTool(
+      makeTool(ix, undefined, ['commit']),
+      toolContext({ skill: 'commit' }),
+    );
+
+    expect(result).toMatchObject({
+      output: 'Skill "commit" loaded inline. Follow its instructions.',
+    });
+  });
+
+  it('rejects a skill outside the profile skills allowlist', async () => {
+    const result = await executeTool(
+      makeTool(ix, undefined, ['other-skill']),
+      toolContext({ skill: 'commit' }),
+    );
+
+    expect(result).toMatchObject({
+      isError: true,
+      output: 'Skill "commit" is not in this profile\'s skills allowlist.',
+    });
+  });
+
+  it('allows every skill when the profile declares no skills allowlist', async () => {
+    const result = await executeTool(
+      makeTool(ix),
+      toolContext({ skill: 'commit' }),
+    );
+
+    expect(result).toMatchObject({
+      output: expect.stringContaining('loaded inline'),
+    });
+  });
+
+  it('allows every skill when the allowlist is unrestricted (*)', async () => {
+    const result = await executeTool(
+      makeTool(ix, undefined, ['*']),
+      toolContext({ skill: 'commit' }),
+    );
+
+    expect(result).toMatchObject({
+      output: expect.stringContaining('loaded inline'),
+    });
+  });
+
+  it('applies the allowlist to nested skill invocations too', async () => {
+    const result = await executeTool(
+      makeTool(ix, 2, ['other-skill']),
+      toolContext({ skill: 'commit' }),
+    );
+
+    expect(result).toMatchObject({
+      isError: true,
+      output: 'Skill "commit" is not in this profile\'s skills allowlist.',
+    });
     expect(prompted).toHaveLength(0);
   });
 });

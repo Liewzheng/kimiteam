@@ -37,6 +37,7 @@ export function agentProfileFromFile(
     tools: definition.tools,
     disallowedTools: definition.disallowedTools,
     subagents: definition.subagents,
+    skills: definition.skills,
     modelPreference: definition.modelPreference,
     role: definition.role,
     duty: definition.duty,

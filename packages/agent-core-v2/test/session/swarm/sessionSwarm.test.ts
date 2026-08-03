@@ -51,6 +51,7 @@ import { ISessionSwarmService, type SessionSwarmSpawnTask, type SessionSwarmTask
 import { Error2 } from '#/_base/errors/errors';
 import { ConfigErrors } from '#/app/config/errors';
 import { SessionSwarmService } from '#/session/swarm/sessionSwarmService';
+import { IRuntimeStatusService } from '#/app/runtimeStatus/runtimeStatus';
 
 import { stubLog } from '../../_base/log/stubs';
 
@@ -909,6 +910,13 @@ describe('SessionSwarmService metadata compatibility', () => {
         throw new Error('unexpected process exec');
       },
     });
+    ix.stub(IRuntimeStatusService, {
+      _serviceBrand: undefined,
+      markWorking: async () => {},
+      markResting: async () => {},
+      removeProfile: async () => {},
+      list: async () => ({}),
+    });
     ix.stub(ILogService, stubLog());
     ix.stub(IModelCatalog, {
       _serviceBrand: undefined,
@@ -1019,7 +1027,7 @@ describe('SessionSwarmService metadata compatibility', () => {
           thinking: 'medium',
           cwd: '/repo',
         },
-        labels: { parentAgentId: 'main', swarmItem: 'src/a.ts' },
+        labels: { parentAgentId: 'main', swarmItem: 'src/a.ts', profileName: 'coder' },
       }),
     );
   });
@@ -1444,6 +1452,7 @@ function lifecycleStub(
     _serviceBrand: undefined,
     onDidCreate: Event.None,
     onDidDispose: Event.None,
+    onDidRestore: Event.None,
     create: vi.fn(async (opts: CreateAgentOptions = {}) => {
       if (opts.agentId !== undefined) {
         const existing = handles.get(opts.agentId);

@@ -24,6 +24,8 @@ export interface AgentFileDefinition {
   readonly tools?: readonly string[];
   readonly disallowedTools?: readonly string[];
   readonly subagents?: readonly string[];
+  /** Skill-name allowlist (`undefined` = every skill active, lone `*` = unrestricted). */
+  readonly skills?: readonly string[];
   readonly modelPreference?: AgentModelPreference;
   /** Short job title shown in tool listings and the TUI subagent card. */
   readonly role?: string;

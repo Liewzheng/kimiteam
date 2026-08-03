@@ -9,6 +9,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
+import { Emitter } from '#/_base/event';
 import type { IDisposable } from '#/_base/di/lifecycle';
 import type { IAgentScopeHandle } from '#/_base/di/scope';
 import { IAgentLoopService } from '#/agent/loop/loop';
@@ -28,7 +29,7 @@ import { SessionSubagentService } from '#/session/subagent/subagentService';
 import { runAgentTurn } from '#/session/subagent/runAgentTurn';
 import type { AgentRunHandle, AgentRunRequest, RunAgentOptions } from '#/session/subagent/subagent';
 import { MAIN_AGENT_ID } from '#/session/agentLifecycle/agentLifecycle';
-import { SUBAGENT_IDLE_TTL_MS } from '#/session/subagent/idleReaper';
+import { SUBAGENT_IDLE_TTL_MS, subagentRestExpiresAt } from '#/session/subagent/idleReaper';
 import { stubLog } from '../../_base/log/stubs';
 import type { ILogService } from '#/_base/log/log';
 
@@ -72,6 +73,8 @@ function deferredCompletion(): {
 
 interface ServiceStubs {
   agentLifecycle: IAgentLifecycleService & { remove: Mock };
+  /** Emitter backing `agentLifecycle.onDidRestore` — tests fire it to simulate a resume. */
+  onDidRestore: Emitter<string>;
   catalog: ISessionAgentProfileCatalog;
   pool: ISubagentPoolService;
   config: IConfigService;
@@ -83,6 +86,7 @@ interface ServiceStubs {
     markWorking: Mock;
     markResting: Mock;
     removeProfile: Mock;
+    list: Mock;
   };
   agentHandle: IAgentScopeHandle;
   /** Mutable loop state so tests can flip an instance to `running` mid-flight. */
@@ -96,12 +100,15 @@ function buildStubs(options: {
   poolActive?: number;
   /** The agent id the single handle is registered under (default AGENT_ID). */
   agentId?: string;
+  /** `[subagent] idle_ttl_ms`, when set; drives the idle-reaper TTL. */
+  idleTtlMs?: number;
   /** `[secondary_model]` config, when present; drives derived-secondary binding. */
   secondaryModel?: { model?: string; defaultEffort?: string };
   /** Whether the `secondary-model` experiment flag is enabled. */
   secondaryModelFlag?: boolean;
 } = {}): ServiceStubs {
   const teamMode = options.teamMode ?? false;
+  const idleTtlMs = options.idleTtlMs;
   const profileName = 'profileName' in options ? options.profileName : PROFILE_NAME;
   const modelAlias = options.modelAlias ?? MODEL_ALIAS;
   const poolActive = options.poolActive ?? 1;
@@ -135,10 +142,12 @@ function buildStubs(options: {
     dispose: () => {},
   } as unknown as IAgentScopeHandle;
 
+  const onDidRestore = new Emitter<string>();
   const agentLifecycle = {
     _serviceBrand: undefined,
     get: (id: string) => (id === agentId ? agentHandle : undefined),
     remove: vi.fn().mockResolvedValue(undefined),
+    onDidRestore: onDidRestore.event,
   } as unknown as IAgentLifecycleService & { remove: Mock };
 
   const catalog = {
@@ -157,7 +166,10 @@ function buildStubs(options: {
     _serviceBrand: undefined,
     get: (section: string) =>
       section === 'subagent'
-        ? { teamMode }
+        ? {
+            teamMode,
+            ...(idleTtlMs !== undefined ? { idleTtlMs } : {}),
+          }
         : section === SECONDARY_MODEL_SECTION
           ? secondaryModel
           : undefined,
@@ -183,10 +195,12 @@ function buildStubs(options: {
     markWorking: vi.fn().mockResolvedValue(undefined),
     markResting: vi.fn().mockResolvedValue(undefined),
     removeProfile: vi.fn().mockResolvedValue(undefined),
+    list: vi.fn().mockResolvedValue({}),
   } as unknown as IRuntimeStatusService & {
     markWorking: Mock;
     markResting: Mock;
     removeProfile: Mock;
+    list: Mock;
   };
 
   return {
@@ -201,6 +215,7 @@ function buildStubs(options: {
     status,
     agentHandle,
     loopState,
+    onDidRestore,
   };
 }
 
@@ -624,6 +639,60 @@ describe('SessionSubagentService — idle reaper & runtime status', () => {
     expect(stubs.status.removeProfile).toHaveBeenCalledWith(PROFILE_NAME);
   });
 
+  it('parks a subagent for the default 2h idle TTL when idle_ttl_ms is unset', async () => {
+    expect(SUBAGENT_IDLE_TTL_MS).toBe(2 * 60 * 60 * 1000);
+    const stubs = buildStubs({ teamMode: true });
+    const service = buildService(stubs);
+    const deferred = deferredCompletion();
+    mockedRun(deferred.promise);
+
+    await service.run(AGENT_ID, defaultRequest, defaultOpts);
+    deferred.resolve({ summary: 'done' });
+    await vi.advanceTimersByTimeAsync(0); // settle → countdown armed with the default TTL
+
+    // The 2h default horizon: not reaped just before it, reaped exactly at it.
+    await vi.advanceTimersByTimeAsync(SUBAGENT_IDLE_TTL_MS - 1);
+    expect(stubs.agentLifecycle.remove).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(0); // flush reap microtasks
+    expect(stubs.agentLifecycle.remove).toHaveBeenCalledWith(AGENT_ID);
+  });
+
+  it('honours a configured idle_ttl_ms instead of the default', async () => {
+    const stubs = buildStubs({ teamMode: true, idleTtlMs: 3_000 });
+    const service = buildService(stubs);
+    const deferred = deferredCompletion();
+    mockedRun(deferred.promise);
+
+    await service.run(AGENT_ID, defaultRequest, defaultOpts);
+    deferred.resolve({ summary: 'ok' });
+    await vi.advanceTimersByTimeAsync(0); // settle → countdown armed with the 3s TTL
+
+    await vi.advanceTimersByTimeAsync(2_999);
+    expect(stubs.agentLifecycle.remove).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(0); // flush reap microtasks
+    expect(stubs.agentLifecycle.remove).toHaveBeenCalledWith(AGENT_ID);
+    expect(stubs.status.removeProfile).toHaveBeenCalledWith(PROFILE_NAME);
+  });
+
+  it('writes the resting horizon from the configured idle TTL, not the default', async () => {
+    const stubs = buildStubs({ teamMode: true, idleTtlMs: 3_000 });
+    const service = buildService(stubs);
+    const deferred = deferredCompletion();
+    mockedRun(deferred.promise);
+
+    await service.run(AGENT_ID, defaultRequest, defaultOpts);
+    deferred.resolve({ summary: 'ok' });
+    await vi.advanceTimersByTimeAsync(0); // settle → resting entry written
+
+    const [, , restExpiresAt] = (stubs.status.markResting as Mock).mock.calls.at(-1)!;
+    const remainingMs = Date.parse(String(restExpiresAt)) - Date.now();
+    // The horizon mirrors the configured 3s TTL (a 2h default would be ~7.2e6).
+    expect(remainingMs).toBeGreaterThan(0);
+    expect(remainingMs).toBeLessThanOrEqual(3_000);
+  });
+
   it('skips the reap when the instance is running at expiry', async () => {
     const stubs = buildStubs({ teamMode: true });
     const service = buildService(stubs);
@@ -745,5 +814,82 @@ describe('SessionSubagentService — idle reaper & runtime status', () => {
 
     const handle = await service.run(AGENT_ID, defaultRequest, defaultOpts);
     await expect(handle.completion).resolves.toEqual({ summary: 'ok' });
+  });
+
+  // --- resume reconcile (cross-process TTL restore) --------------------------
+
+  it('reconcile re-arms a resumed resting instance with the remaining TTL', async () => {
+    const stubs = buildStubs({ teamMode: true });
+    buildService(stubs);
+    // The instance was parked 5 minutes ago; 5 minutes of the TTL remain.
+    const expiresAt = new Date(Date.now() + 5 * 60_000).toISOString();
+    (stubs.status.list as Mock).mockResolvedValue({
+      [PROFILE_NAME]: {
+        state: 'resting',
+        agentId: AGENT_ID,
+        updatedAt: '2025-01-01T00:00:00.000Z',
+        restExpiresAt: expiresAt,
+      },
+    });
+
+    // Simulate the resume path: lifecycle.create() cold-materialized the agent
+    // and fired onDidRestore → the reaper reconciles the resting entry.
+    stubs.onDidRestore.fire(AGENT_ID);
+    await vi.advanceTimersByTimeAsync(0); // reconcile reads status and arms
+
+    // Remaining TTL (5 min), not the full TTL — the countdown must not restart.
+    await vi.advanceTimersByTimeAsync(5 * 60_000 - 1);
+    expect(stubs.agentLifecycle.remove).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(0); // flush reap microtasks
+    expect(stubs.agentLifecycle.remove).toHaveBeenCalledWith(AGENT_ID);
+    expect(stubs.status.removeProfile).toHaveBeenCalledWith(PROFILE_NAME);
+  });
+
+  it('reconcile reaps an already-expired resting instance immediately and clears the entry', async () => {
+    const stubs = buildStubs({ teamMode: true });
+    buildService(stubs);
+    (stubs.status.list as Mock).mockResolvedValue({
+      [PROFILE_NAME]: {
+        state: 'resting',
+        agentId: AGENT_ID,
+        updatedAt: '2025-01-01T00:00:00.000Z',
+        restExpiresAt: new Date(Date.now() - 1_000).toISOString(),
+      },
+    });
+
+    stubs.onDidRestore.fire(AGENT_ID);
+    await vi.advanceTimersByTimeAsync(0); // reconcile reads status → expired → reap
+    expect(stubs.agentLifecycle.remove).toHaveBeenCalledWith(AGENT_ID);
+    expect(stubs.status.removeProfile).toHaveBeenCalledWith(PROFILE_NAME);
+  });
+
+  it('reconcile leaves entries whose agentId does not match untouched', async () => {
+    const stubs = buildStubs({ teamMode: true });
+    buildService(stubs);
+    (stubs.status.list as Mock).mockResolvedValue({
+      [PROFILE_NAME]: {
+        state: 'resting',
+        agentId: 'agent-9',
+        updatedAt: '2025-01-01T00:00:00.000Z',
+        restExpiresAt: new Date(Date.now() - 1_000).toISOString(),
+      },
+    });
+
+    stubs.onDidRestore.fire(AGENT_ID);
+    await vi.advanceTimersByTimeAsync(SUBAGENT_IDLE_TTL_MS);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(stubs.agentLifecycle.remove).not.toHaveBeenCalled();
+    expect(stubs.status.removeProfile).not.toHaveBeenCalled();
+  });
+
+  it('reconcile never reads status for the main agent', async () => {
+    const stubs = buildStubs({ teamMode: true });
+    buildService(stubs);
+
+    stubs.onDidRestore.fire(MAIN_AGENT_ID);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(stubs.status.list).not.toHaveBeenCalled();
+    expect(stubs.agentLifecycle.remove).not.toHaveBeenCalled();
   });
 });

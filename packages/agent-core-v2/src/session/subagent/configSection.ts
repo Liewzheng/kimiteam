@@ -76,6 +76,14 @@ export const SubagentConfigSchema = z.object({
    */
   teamMode: z.boolean().optional(),
   /**
+   * How long a parked (idle) subagent may stay before the reaper destroys it
+   * (`[subagent] idle_ttl_ms` on disk, default 2 hours). Inline models keep
+   * warm KV-caches (e.g. DeepSeek) for minutes to hours and parked instances
+   * hold no local resources, so the default horizon is long; the value is
+   * configurable per install.
+   */
+  idleTtlMs: z.number().int().min(1).optional(),
+  /**
    * Per-profile model override: `[subagent.model_overrides]` on disk
    * (`coder = "local/qwen3.6-35b-a3b"`). Binds newly spawned subagents of the
    * named profile to the given `[models.<id>]` id, taking precedence over the
@@ -90,6 +98,9 @@ export type SubagentConfig = z.infer<typeof SubagentConfigSchema>;
 
 /** Default per-run subagent timeout: 2 hours, same as v1. */
 export const DEFAULT_SUBAGENT_TIMEOUT_MS = 2 * 60 * 60 * 1000;
+
+/** Default idle TTL before a parked subagent is reaped: 2 hours. */
+export const DEFAULT_SUBAGENT_IDLE_TTL_MS = 2 * 60 * 60 * 1000;
 
 export const SUBAGENT_TIMEOUT_ENV = 'KIMI_SUBAGENT_TIMEOUT_MS';
 
@@ -123,6 +134,19 @@ export function resolveSubagentTimeoutMs(config: IConfigService): number {
   return (
     config.get<SubagentConfig | undefined>(SUBAGENT_SECTION)?.timeoutMs ??
     DEFAULT_SUBAGENT_TIMEOUT_MS
+  );
+}
+
+/**
+ * Resolve the effective idle TTL before a parked subagent is reaped. Governs
+ * `SubagentIdleReaper.arm` and the resting horizon written to the runtime
+ * status file. Falls back to {@link DEFAULT_SUBAGENT_IDLE_TTL_MS} when
+ * `[subagent] idle_ttl_ms` is unset.
+ */
+export function resolveSubagentIdleTtlMs(config: IConfigService): number {
+  return (
+    config.get<SubagentConfig | undefined>(SUBAGENT_SECTION)?.idleTtlMs ??
+    DEFAULT_SUBAGENT_IDLE_TTL_MS
   );
 }
 

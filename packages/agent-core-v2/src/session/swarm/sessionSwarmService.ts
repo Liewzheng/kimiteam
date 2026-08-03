@@ -31,6 +31,7 @@ import { IAgentLoopService } from '#/agent/loop/loop';
 import { IAgentUserToolService } from '#/agent/userTool/userTool';
 import { IEventBus } from '#/app/event/eventBus';
 import { IConfigService } from '#/app/config/config';
+import { IRuntimeStatusService } from '#/app/runtimeStatus/runtimeStatus';
 import { ISessionAgentProfileCatalog } from '#/session/sessionAgentProfileCatalog/sessionAgentProfileCatalog';
 import { applyProfilePromptPrefix } from '#/app/agentProfileCatalog/promptPrefix';
 import { IAgentLifecycleService } from '#/session/agentLifecycle/agentLifecycle';
@@ -100,6 +101,7 @@ export class SessionSwarmService implements ISessionSwarmService {
     @ILogService private readonly log: ILogService,
     @IModelCatalog private readonly modelCatalog: IModelCatalog,
     @IConfigService private readonly config: IConfigService,
+    @IRuntimeStatusService private readonly runtimeStatus: IRuntimeStatusService,
   ) {}
 
   async getSwarmItem(args: {
@@ -170,6 +172,7 @@ export class SessionSwarmService implements ISessionSwarmService {
       const reuseId = await findIdleOwnedSubagent({
         lifecycle: this.lifecycle,
         metadata: this.metadata,
+        runtimeStatus: this.runtimeStatus,
         callerAgentId,
         profileName: options.profileName,
         claimInto: this.reservedForReuse,
@@ -196,7 +199,10 @@ export class SessionSwarmService implements ISessionSwarmService {
           thinking: binding.thinking,
           cwd: callerData.cwd,
         },
-        labels: subagentLabels(callerAgentId, { swarmItem: options.swarmItem }),
+        labels: subagentLabels(callerAgentId, {
+          swarmItem: options.swarmItem,
+          profileName: profile.name,
+        }),
       });
     } catch (error) {
       throw wrapSubagentModelError(error, binding.model, callerData.modelAlias, binding.source);

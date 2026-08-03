@@ -111,6 +111,49 @@ describe('discoverAgentFiles', () => {
     expect(result.agents).toEqual([]);
   });
 
+  it('warns about a .yaml agent profile and does not load it', async () => {
+    await writeFile(join(root, 'reviewer.yaml'), agentMd('reviewer'));
+
+    const warnings: string[] = [];
+    const result = await discoverAgentFiles(hostFs, [fileRoot(root)], (message) =>
+      warnings.push(message),
+    );
+
+    expect(result.agents).toEqual([]);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('reviewer.yaml');
+    expect(warnings[0]).toContain('.md');
+    expect(warnings[0]).toContain('reviewer.md');
+  });
+
+  it('warns about .yml and still loads sibling .md files', async () => {
+    await writeFile(join(root, 'solo.md'), agentMd('solo'));
+    await writeFile(join(root, 'reviewer.yml'), agentMd('reviewer'));
+
+    const warnings: string[] = [];
+    const result = await discoverAgentFiles(hostFs, [fileRoot(root)], (message) =>
+      warnings.push(message),
+    );
+
+    expect(result.agents.map((a) => a.name)).toEqual(['solo']);
+    expect(warnings.some((w) => w.includes('reviewer.yml'))).toBe(true);
+  });
+
+  it('does not treat a .yaml directory as an agent file', async () => {
+    await mkdir(join(root, 'config.yaml'), { recursive: true });
+    await writeFile(join(root, 'config.yaml/inner.md'), agentMd('inner'));
+
+    const warnings: string[] = [];
+    const result = await discoverAgentFiles(hostFs, [fileRoot(root)], (message) =>
+      warnings.push(message),
+    );
+
+    // The yaml-named directory is walked like any other dir (no warn); only
+    // the .md file inside it is considered.
+    expect(result.agents.map((a) => a.name)).toEqual(['inner']);
+    expect(warnings).toHaveLength(0);
+  });
+
   it('rejects when a directory cannot be scanned so callers can keep stale contributions', async () => {
     const failingFs = {
       readdir: async () => {
