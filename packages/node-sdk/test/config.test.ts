@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createKimiConfigRpc, createKimiHarness, KimiError } from '#/index';
 
@@ -260,6 +260,18 @@ maxRunningTasks = 2
 });
 
 describe('KimiHarness config API', () => {
+  beforeEach(() => {
+    // Pin the experimental flags off so feature-metadata assertions are
+    // independent of the host environment (mirrors apps/kimi-code
+    // run-shell.test.ts). The metadata test stubs the master FLAG itself; the
+    // per-feature env vars are cleared here so a dev shell exporting e.g.
+    // KIMI_CODE_EXPERIMENTAL_SECONDARY_MODEL=1 cannot flip `enabled`/`source`
+    // on this suite. The top-level afterEach restores all env vars.
+    vi.stubEnv('KIMI_CODE_EXPERIMENTAL_FLAG', '');
+    vi.stubEnv('KIMI_CODE_EXPERIMENTAL_TOOL_SELECT', '');
+    vi.stubEnv('KIMI_CODE_EXPERIMENTAL_SECONDARY_MODEL', '');
+  });
+
   it('loads default config when missing and deep-merges setConfig patches from disk', async () => {
     const homeDir = await makeTempDir();
     const configPath = join(homeDir, 'config.toml');

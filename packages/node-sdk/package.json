@@ -50,6 +50,7 @@
     "build": "tsdown && pnpm run build:dts",
     "build:dts": "node scripts/build-dts.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
     "clean": "rm -rf dist .tmp-api-extractor"
   },
   "dependencies": {
