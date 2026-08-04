@@ -34,6 +34,10 @@ exports[`API surface snapshot > matches the documented v2 route table and meta e
     ],
     [
       "DELETE",
+      "/api/v1/teams/{session_id}/members/{name}",
+    ],
+    [
+      "DELETE",
       "/api/v1/workspaces/{workspace_id}",
     ],
     [
@@ -230,6 +234,10 @@ exports[`API surface snapshot > matches the documented v2 route table and meta e
     ],
     [
       "GET",
+      "/api/v1/teams/{session_id}/members",
+    ],
+    [
+      "GET",
       "/api/v1/tools",
     ],
     [
@@ -394,6 +402,22 @@ exports[`API surface snapshot > matches the documented v2 route table and meta e
     ],
     [
       "POST",
+      "/api/v1/teams/{session_id}/agents/{agent_id}/message",
+    ],
+    [
+      "POST",
+      "/api/v1/teams/{session_id}/concurrency",
+    ],
+    [
+      "POST",
+      "/api/v1/teams/{session_id}/members",
+    ],
+    [
+      "POST",
+      "/api/v1/teams/{session_id}/members/{name}/score",
+    ],
+    [
+      "POST",
       "/api/v1/workspace/fs:search",
     ],
     [
@@ -411,6 +435,10 @@ exports[`API surface snapshot > matches the documented v2 route table and meta e
     [
       "PUT",
       "/api/v1/providers/{provider_id}",
+    ],
+    [
+      "PUT",
+      "/api/v1/teams/{session_id}/members/{name}",
     ],
   ],
 }

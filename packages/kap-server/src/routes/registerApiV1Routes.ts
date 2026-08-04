@@ -41,6 +41,7 @@ import { registerShutdownRoutes } from './shutdown';
 import { registerSnapshotRoutes } from './snapshot';
 import { registerSkillsRoutes } from './skills';
 import { registerTasksRoutes } from './tasks';
+import { registerTeamsRoutes } from './teams';
 import { registerTerminalsRoutes } from './terminals';
 import { registerToolsRoutes } from './tools';
 import { registerTranscriptRoutes } from './transcript';
@@ -179,6 +180,7 @@ export async function registerApiV1Routes(
         broadcaster: opts.broadcaster,
         reader: opts.snapshotReader,
       });
+      registerTeamsRoutes(apiV1 as unknown as Parameters<typeof registerTeamsRoutes>[0], core);
       registerTranscriptRoutes(apiV1 as unknown as Parameters<typeof registerTranscriptRoutes>[0], {
         core,
         transcriptService: opts.transcriptService,
