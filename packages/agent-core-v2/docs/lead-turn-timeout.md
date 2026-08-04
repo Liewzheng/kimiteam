@@ -23,7 +23,7 @@
 
 ## 边界清单
 
-- **纯生成计入**:无工具调用的 step,其 LLM 生成时长(`turn.step.completed.llmStreamDurationMs`)计入预算——长生成计入;有工具调用的 step 不额外计生成(避免双计),只计执行类工具耗时。
+- **纯生成计入**:无工具调用的 step,其 LLM 生成时长(`turn.step.completed.llmStreamDurationMs`)计入预算——长生成计入;有工具调用的 step 不额外计生成(避免双计),只计执行类工具耗时。**TTFT(首 token 延迟,`firstTokenLatencyMs`)不计入预算**——只计自首 token 到流结束的生成时长;请求挂起无首 token 时累计为 0,不会误触发打断。
 - **TaskOutput 查岗不计**:后台任务快照等「查岗类」调用不计入。
 - **重试累计**:同一 step 的重试耗时累计计入,不因重试重置预算。
 - **ESC 去重不注入**:用户 ESC 打断后,若同一 turnId 已注入过提醒,不再重复注入。
