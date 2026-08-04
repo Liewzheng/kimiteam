@@ -15,6 +15,52 @@ type: flow
 
 ## 核心流程
 
+### 第〇步：工作区探测（可选，经同意）
+
+> 目的：新装环境组建团队时，先经用户同意看一眼**当前工作区的结构信息**，用于预填 Q1（使用场景）并让团队角色更贴合技术栈。探测是**辅助**，不替代问卷——Q1 仍照常询问，用户答案优先。
+
+#### ① 同意门（单选，一次 AskUserQuestion）
+
+用 `AskUserQuestion` 问一次（单选）：「是否允许查看当前工作区的结构信息来定制团队？」
+
+```
+选项：
+a) 允许（仅当前工作区结构信息）
+b) 仅本次
+c) 不用
+```
+
+- 选 a/b → 执行受控探测（见 ②）；选 c、跳过或关闭提问 → **直接进第一步，不卡流程**。
+- 拒绝/跳过绝不重试、绝不擅自探测。
+
+#### ② 探测内容（硬约束，写死）
+
+- **仅当前工作区**：会话 cwd 及其 git 仓库根（`git rev-parse --show-toplevel`，若存在）。
+- **只读结构信息**：目录清单（`ls`）、`git remote -v` + `git branch --show-current`、工作区根下**清单文件探测**（Glob 一层：`package.json` / `tsconfig.json`、`pyproject.toml` / `requirements.txt`、`Cargo.toml`、`pubspec.yaml`、`go.mod`、`build.gradle` 等）。
+- **禁止**：读取清单文件**以外的任何文件内容**；扫描 home 目录（`~` 下除当前工作区外的内容）；访问个人文档 / 凭证 / 其它项目。
+- 探测结果**只用本次团队定制**，不另存档案（项目 pipeline 播种另说）。
+
+#### ③ 技术栈→角色映射表（预填 Q1）
+
+| 探测到的清单 | 推断技术栈 | 建议角色（预填） |
+|---|---|---|
+| `package.json` + `tsconfig.json` | TypeScript | TS/前端工程师、代码探索员 |
+| `pubspec.yaml` | Flutter / 移动 | Flutter 工程师 |
+| `pyproject.toml` / `requirements.txt` | Python | Python/数据工程师 |
+| `Cargo.toml` | Rust | Rust 工程师 |
+| `go.mod` | Go | Go 工程师 |
+| `build.gradle` | Android | Android 工程师 |
+
+- 探测结果与用户 Q1 答案**合并使用**：Q1 用户答案优先；探测仅作预填提示与角色补充，不替代 Q1。
+- 多个清单并存时按探测到的全部技术栈取并集，再让 Q1 收敛。
+
+#### ④ 合规说明（设计依据，供维护）
+
+- **最小权限**：只读结构元数据，不读文件内容；
+- **显式同意**：探测前必须经 AskUserQuestion 同意，拒绝可退且不卡流程；
+- **结构元数据**：仅 cwd/git 根的结构信息，不越界到个人数据；
+- **拒绝可退**：任何拒绝/跳过都直接进问卷，现有 4 问流程不受影响。
+
 ### 第一步：说明意图
 
 向用户简要说明 onboarding 流程：
