@@ -805,6 +805,110 @@ describe('TeamScore', () => {
     // The warning is advisory — the success text is still present.
     expect(output).toContain('[TeamScore] Scored "coder"');
   });
+
+  it('penalty appends a negative entry and drags the average down', async () => {
+    const perf = new ScorePerfStub({ coder: { last: 85, average: 80, count: 4 } });
+    const tool = makeScoreTool(tmpDir, 'main', { main: {} }, perf);
+    const result = await runResolution(
+      await tool.resolveExecution({
+        action: 'penalty',
+        profile: 'coder',
+        points: 10,
+        reason: 'missed the review deadline',
+        model: 'provider/model-x',
+        agent_id: 'inst-7',
+      }),
+    );
+    expect(result.isError).toBeUndefined();
+    const output = String(result.output);
+    expect(output).toContain('[TeamScore] Penalized "coder"');
+    expect(output).toContain('deducted 10');
+
+    expect(perf.entries).toHaveLength(1);
+    const entry = perf.entries[0]!;
+    expect(entry.profileName).toBe('coder');
+    // score = max(0, round(80 - 10)) = 70 — a low entry that drags the average.
+    expect(entry.score).toBe(70);
+    expect(entry.note).toBe('[penalty] missed the review deadline');
+    expect(entry.model).toBe('provider/model-x');
+    expect(entry.agentId).toBe('inst-7');
+  });
+
+  it('penalty clamps the recorded score at 0 and carries the [penalty] note prefix', async () => {
+    const perf = new ScorePerfStub({ coder: { last: 25, average: 20, count: 3 } });
+    const tool = makeScoreTool(tmpDir, 'main', { main: {} }, perf);
+    const result = await runResolution(
+      await tool.resolveExecution({
+        action: 'penalty',
+        profile: 'coder',
+        points: 50,
+        reason: 'data loss incident',
+        model: 'provider/model-x',
+      }),
+    );
+    expect(result.isError).toBeUndefined();
+    expect(perf.entries).toHaveLength(1);
+    // round(20 - 50) = -30 → clamped to 0.
+    expect(perf.entries[0]!.score).toBe(0);
+    expect(perf.entries[0]!.note).toBe('[penalty] data loss incident');
+  });
+
+  it('penalty errors when the profile has no performance history', async () => {
+    const perf = new ScorePerfStub({ coder: { count: 0 } });
+    const tool = makeScoreTool(tmpDir, 'main', { main: {} }, perf);
+    const result = await runResolution(
+      await tool.resolveExecution({
+        action: 'penalty',
+        profile: 'coder',
+        points: 10,
+        reason: 'unpaid',
+        model: 'provider/model-x',
+      }),
+    );
+    expect(result.isError).toBe(true);
+    expect(String(result.output)).toContain('no performance history');
+    expect(perf.entries).toHaveLength(0);
+  });
+
+  it('penalty schema requires points, reason and model, with points in 1–100', () => {
+    // Valid penalty.
+    expect(TeamScoreToolInputSchema.safeParse({ action: 'penalty', profile: 'coder', points: 10, reason: 'x', model: 'm' }).success).toBe(true);
+    expect(TeamScoreToolInputSchema.safeParse({ action: 'penalty', profile: 'coder', points: 1, reason: 'x', model: 'm' }).success).toBe(true);
+    expect(TeamScoreToolInputSchema.safeParse({ action: 'penalty', profile: 'coder', points: 100, reason: 'x', model: 'm' }).success).toBe(true);
+    // Missing fields.
+    expect(TeamScoreToolInputSchema.safeParse({ action: 'penalty', profile: 'coder', reason: 'x', model: 'm' }).success).toBe(false);
+    expect(TeamScoreToolInputSchema.safeParse({ action: 'penalty', profile: 'coder', points: 10, model: 'm' }).success).toBe(false);
+    expect(TeamScoreToolInputSchema.safeParse({ action: 'penalty', profile: 'coder', points: 10, reason: 'x' }).success).toBe(false);
+    // Points out of range.
+    expect(TeamScoreToolInputSchema.safeParse({ action: 'penalty', profile: 'coder', points: 0, reason: 'x', model: 'm' }).success).toBe(false);
+    expect(TeamScoreToolInputSchema.safeParse({ action: 'penalty', profile: 'coder', points: 101, reason: 'x', model: 'm' }).success).toBe(false);
+    // A penalty must not smuggle in record-only fields.
+    expect(TeamScoreToolInputSchema.safeParse({ action: 'penalty', profile: 'coder', points: 10, reason: 'x', model: 'm', score: 99, note: 'n' }).success).toBe(true);
+  });
+
+  it('penalty coexists with record entries and deduces from the current average', async () => {
+    const perf = new ScorePerfStub({ coder: { last: 90, average: 85, count: 4 } });
+    const tool = makeScoreTool(tmpDir, 'main', { main: {} }, perf);
+    // A normal record first.
+    await runResolution(
+      await tool.resolveExecution({ profile: 'coder', score: 92, note: 'good turn', model: 'provider/model-x' }),
+    );
+    // Then a penalty: deducted from the (configured) current average 85 → 75.
+    await runResolution(
+      await tool.resolveExecution({
+        action: 'penalty',
+        profile: 'coder',
+        points: 10,
+        reason: 'regression introduced',
+        model: 'provider/model-x',
+      }),
+    );
+    expect(perf.entries).toHaveLength(2);
+    expect(perf.entries[0]!.score).toBe(92);
+    expect(perf.entries[0]!.note).toBe('good turn');
+    expect(perf.entries[1]!.score).toBe(75);
+    expect(perf.entries[1]!.note).toBe('[penalty] regression introduced');
+  });
 });
 
 describe('detectScoreInflation', () => {

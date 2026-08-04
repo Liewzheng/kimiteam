@@ -81,10 +81,16 @@ export class TeamScoreTool implements ITeamScoreTool {
       return { output: SUBAGENT_NOT_ALLOWED, isError: true };
     }
 
+    const isPenalty = args.action === 'penalty';
     return {
-      description: `Score ${args.profile} with ${args.score}: ${args.note}`,
+      description: isPenalty
+        ? `Penalize ${args.profile} with ${args.points} points: ${args.reason}`
+        : `Score ${args.profile} with ${args.score}: ${args.note}`,
       accesses: ToolAccesses.none(),
-      display: { kind: 'generic', summary: `${args.profile}: ${args.score}/100` },
+      display: {
+        kind: 'generic',
+        summary: isPenalty ? `${args.profile}: -${args.points} penalty` : `${args.profile}: ${args.score}/100`,
+      },
       approvalRule: this.name,
       execute: async (ctx) => this._execute(args, ctx),
     };
@@ -99,21 +105,27 @@ export class TeamScoreTool implements ITeamScoreTool {
     args: TeamScoreToolInput,
     _ctx: ExecutableToolContext,
   ): Promise<ExecutableToolResult> {
+    if (args.action === 'penalty') {
+      return this.executePenalty(args);
+    }
+    // ── record (default) ── schema guarantees `score` / `note` are present.
+    const score = args.score!;
+    const note = args.note!;
     await this.perf.record({
       profileName: args.profile,
       ts: new Date().toISOString(),
-      score: args.score,
-      note: args.note,
+      score,
+      note,
       model: args.model,
       agentId: args.agent_id,
     });
 
     const sum = await this.perf.summary(args.profile);
     if (sum.count === 0) {
-      return { output: `[TeamScore] Scored "${args.profile}" — \`${args.score}/100\`. No scores yet.` };
+      return { output: `[TeamScore] Scored "${args.profile}" — \`${score}/100\`. No scores yet.` };
     }
 
-    const parts: string[] = [`[TeamScore] Scored "${args.profile}" — \`${args.score}/100\`.`];
+    const parts: string[] = [`[TeamScore] Scored "${args.profile}" — \`${score}/100\`.`];
     if (sum.last !== undefined) {
       parts.push(`Last score: ${sum.last}.`);
     }
@@ -123,6 +135,50 @@ export class TeamScoreTool implements ITeamScoreTool {
     // Score-inflation calibration warning: advisory only — appended to the
     // normal result, never a rejection. Reads the profile's recent raw scores
     // (including the one just recorded) and flags a high-skew distribution.
+    const recentScores = await this.perf.recentScores(args.profile, INFLATION_WINDOW);
+    const inflationWarning = detectScoreInflation(args.profile, recentScores);
+    if (inflationWarning !== undefined) {
+      parts.push(inflationWarning);
+    }
+    return { output: parts.join(' ') };
+  }
+
+  /**
+   * Penalty: append a negative entry without rewriting history. The new score
+   * is `max(0, round(currentAverage - points))`, the note carries the
+   * `[penalty]` prefix (audit trail), and the entry counts into the average
+   * and count like any other score — the average naturally drifts down.
+   * Requires the profile to already have scored history and the caller to name
+   * the member's actual execution model.
+   */
+  private async executePenalty(args: TeamScoreToolInput): Promise<ExecutableToolResult> {
+    const points = args.points!;
+    const before = await this.perf.summary(args.profile);
+    if (before.count === 0 || before.average === undefined) {
+      return {
+        isError: true,
+        output: `[TeamScore] Cannot penalize "${args.profile}" — it has no performance history to deduct from.`,
+      };
+    }
+    const score = Math.max(0, Math.round(before.average - points));
+    await this.perf.record({
+      profileName: args.profile,
+      ts: new Date().toISOString(),
+      score,
+      note: `[penalty] ${args.reason}`,
+      model: args.model,
+      agentId: args.agent_id,
+    });
+
+    const parts: string[] = [
+      `[TeamScore] Penalized "${args.profile}" — deducted ${points} points (recorded \`${score}/100\`).`,
+    ];
+    const after = await this.perf.summary(args.profile);
+    if (after.average !== undefined) {
+      parts.push(`Average: ${after.average} (${after.count} total).`);
+    }
+    // Low scores cannot trip the inflation warning, but keep the same advisory
+    // check as record for symmetry.
     const recentScores = await this.perf.recentScores(args.profile, INFLATION_WINDOW);
     const inflationWarning = detectScoreInflation(args.profile, recentScores);
     if (inflationWarning !== undefined) {
