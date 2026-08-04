@@ -23,6 +23,8 @@ import { IAgentPerformanceService, type PerformanceShift } from '#/app/agentPerf
 import { IRuntimeStatusService } from '#/app/runtimeStatus/runtimeStatus';
 import { ISessionAgentProfileCatalog } from '#/session/sessionAgentProfileCatalog/sessionAgentProfileCatalog';
 import { IAgentProfileService } from '#/agent/profile/profile';
+import type { ContextMessage, SystemTriggerOrigin } from '#/agent/contextMemory/types';
+import { IAgentPromptService } from '#/agent/prompt/prompt';
 import { IConfigService } from '#/app/config/config';
 import { IFlagService } from '#/app/flag/flag';
 import { ISessionContext } from '#/session/sessionContext/sessionContext';
@@ -157,6 +159,22 @@ export class SessionSubagentService extends Disposable implements ISessionSubage
     const startedAt = recordShift ? new Date() : undefined;
     const sid = recordShift ? this.sessionContext.sessionId : undefined;
 
+    // Baseline TeamScore count for this dispatch, captured after the turn
+    // started (so a score from a prior dispatch that settled during the pool
+    // wait is already reflected and cannot suppress THIS dispatch's reminder).
+    // Compared again at settle: unchanged means no score was recorded for this
+    // dispatch, and the main agent is nudged to record one. Undefined when the
+    // profile is not supervised (main agent / non-team) or the baseline read
+    // failed — in both cases no reminder fires.
+    let scoreCountAtStart: number | undefined;
+    if (supervised) {
+      try {
+        scoreCountAtStart = (await this.performance.summary(profileName!)).count;
+      } catch {
+        scoreCountAtStart = undefined;
+      }
+    }
+
     // Record a PerformanceShift when team mode is on and the profile is known.
     // Attached before `.then(release, release)` so the concurrency snapshot
     // (read inside the callback) still includes this run.
@@ -199,8 +217,8 @@ export class SessionSubagentService extends Disposable implements ISessionSubage
     // with its expiry. The next run on this instance cancels it.
     if (supervised) {
       void run.completion.then(
-        () => this.onRunSettled(agentId, profileName!),
-        () => this.onRunSettled(agentId, profileName!),
+        () => this.onRunSettled(agentId, profileName!, scoreCountAtStart),
+        () => this.onRunSettled(agentId, profileName!, scoreCountAtStart),
       ).catch(() => { /* swallow — supervision must never block the run */ });
     }
 
@@ -221,7 +239,11 @@ export class SessionSubagentService extends Disposable implements ISessionSubage
   }
 
   /** A run settled: park the instance under the idle TTL. */
-  private onRunSettled(agentId: string, profileName: string): void {
+  private onRunSettled(
+    agentId: string,
+    profileName: string,
+    scoreCountAtStart: number | undefined,
+  ): void {
     this.idleReaper.arm(agentId, profileName);
     void this.runtimeStatus.markResting(
       profileName,
@@ -230,6 +252,53 @@ export class SessionSubagentService extends Disposable implements ISessionSubage
     ).catch(
       () => { /* swallow — status write never blocks the run */ },
     );
+    if (scoreCountAtStart !== undefined) {
+      void this.remindToScoreIfUnscored(profileName, scoreCountAtStart);
+    }
+  }
+
+  /**
+   * Team-score reminder: when a supervised dispatch settles with no new score
+   * recorded for the profile, nudge the main agent to score it. Injected as a
+   * non-user `system_trigger` message so it bypasses the UserPromptSubmit
+   * filter (same steer path as the cron fire messages). Fire-and-forget — a
+   * failed reminder or perf read must never break idle supervision.
+   */
+  private async remindToScoreIfUnscored(
+    profileName: string,
+    scoreCountAtStart: number,
+  ): Promise<void> {
+    let countAtSettle: number;
+    try {
+      countAtSettle = (await this.performance.summary(profileName)).count;
+    } catch {
+      return; // perf unavailable — skip rather than false-positive
+    }
+    if (countAtSettle !== scoreCountAtStart) return; // a score landed — nothing to remind
+
+    const mainHandle = this.agentLifecycle.get(MAIN_AGENT_ID);
+    if (mainHandle === undefined) return; // main not materialized — nothing to steer into
+    const origin: SystemTriggerOrigin = {
+      kind: 'system_trigger',
+      name: 'team_score_reminder',
+    };
+    const message: ContextMessage = {
+      role: 'user',
+      content: [
+        {
+          type: 'text',
+          text: `Member ${profileName} finished a dispatch but no TeamScore was recorded for it — review the delivery and score it with TeamScore (0-100, note, truthful model).`,
+        },
+      ],
+      toolCalls: [],
+      origin,
+    };
+    try {
+      const promptService = mainHandle.accessor.get(IAgentPromptService);
+      await promptService.inject(message);
+    } catch {
+      // swallow — a reminder must never break idle supervision
+    }
   }
 
   notifyAgentTaskStopped(context: AgentTaskStopHookContext): void {

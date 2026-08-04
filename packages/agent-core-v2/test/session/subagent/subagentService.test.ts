@@ -14,6 +14,7 @@ import type { IDisposable } from '#/_base/di/lifecycle';
 import type { IAgentScopeHandle } from '#/_base/di/scope';
 import { IAgentLoopService } from '#/agent/loop/loop';
 import { IAgentProfileService } from '#/agent/profile/profile';
+import { IAgentPromptService } from '#/agent/prompt/prompt';
 import type { IAgentPerformanceService } from '#/app/agentPerformance/agentPerformance';
 import type { IRuntimeStatusService } from '#/app/runtimeStatus/runtimeStatus';
 import type { IConfigService } from '#/app/config/config';
@@ -91,6 +92,8 @@ interface ServiceStubs {
   agentHandle: IAgentScopeHandle;
   /** Mutable loop state so tests can flip an instance to `running` mid-flight. */
   loopState: { state: 'idle' | 'running' };
+  /** Main agent's prompt-service stub — its `inject` records score reminders. */
+  mainPromptService: { inject: Mock };
 }
 
 function buildStubs(options: {
@@ -106,6 +109,8 @@ function buildStubs(options: {
   secondaryModel?: { model?: string; defaultEffort?: string };
   /** Whether the `secondary-model` experiment flag is enabled. */
   secondaryModelFlag?: boolean;
+  /** Whether the main agent is materialized in the lifecycle (default false). */
+  mainMaterialized?: boolean;
 } = {}): ServiceStubs {
   const teamMode = options.teamMode ?? false;
   const idleTtlMs = options.idleTtlMs;
@@ -115,6 +120,7 @@ function buildStubs(options: {
   const agentId = options.agentId ?? AGENT_ID;
   const secondaryModel = options.secondaryModel;
   const secondaryModelFlag = options.secondaryModelFlag ?? true;
+  const mainMaterialized = options.mainMaterialized ?? false;
 
   const loopState: { state: 'idle' | 'running' } = { state: 'idle' };
   const agentHandle = {
@@ -143,9 +149,38 @@ function buildStubs(options: {
   } as unknown as IAgentScopeHandle;
 
   const onDidRestore = new Emitter<string>();
+  const mainPromptService = {
+    _serviceBrand: undefined,
+    inject: vi.fn().mockResolvedValue(undefined),
+  } as unknown as IAgentPromptService & { inject: Mock };
+  const mainHandle = {
+    id: MAIN_AGENT_ID,
+    kind: 'agent' as const,
+    accessor: {
+      get: (serviceId: unknown) => {
+        if (serviceId === IAgentPromptService) return mainPromptService;
+        if (serviceId === IAgentProfileService) {
+          return { data: () => ({ profileName: 'main', modelAlias: undefined }) };
+        }
+        if (serviceId === IAgentLoopService) {
+          return {
+            status: () => ({ state: 'idle', pendingTurnIds: [], hasPendingRequests: false }),
+          };
+        }
+        throw new Error(`Unexpected main service: ${String(serviceId)}`);
+      },
+    },
+    dispose: () => {},
+  } as unknown as IAgentScopeHandle;
   const agentLifecycle = {
     _serviceBrand: undefined,
-    get: (id: string) => (id === agentId ? agentHandle : undefined),
+    get: (id: string) => {
+      // A handle explicitly registered under the run id wins; the materialized
+      // main handle is only served for `main` lookups.
+      if (id === agentId) return agentHandle;
+      if (id === MAIN_AGENT_ID && mainMaterialized) return mainHandle;
+      return undefined;
+    },
     remove: vi.fn().mockResolvedValue(undefined),
     onDidRestore: onDidRestore.event,
   } as unknown as IAgentLifecycleService & { remove: Mock };
@@ -183,7 +218,8 @@ function buildStubs(options: {
   const performance = {
     _serviceBrand: undefined,
     recordShift: vi.fn().mockResolvedValue(undefined),
-  } as unknown as IAgentPerformanceService & { recordShift: Mock };
+    summary: vi.fn().mockResolvedValue({ count: 0 }),
+  } as unknown as IAgentPerformanceService & { recordShift: Mock; summary: Mock };
 
   const sessionContext = {
     _serviceBrand: undefined,
@@ -216,6 +252,7 @@ function buildStubs(options: {
     agentHandle,
     loopState,
     onDidRestore,
+    mainPromptService,
   };
 }
 
@@ -891,5 +928,119 @@ describe('SessionSubagentService — idle reaper & runtime status', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(stubs.status.list).not.toHaveBeenCalled();
     expect(stubs.agentLifecycle.remove).not.toHaveBeenCalled();
+  });
+});
+
+describe('SessionSubagentService — TeamScore reminder', () => {
+  const request: AgentRunRequest = { kind: 'prompt', prompt: 'do something' };
+  const opts: RunAgentOptions = { signal: new AbortController().signal };
+
+  function mockRun(completion: Promise<{ summary: string }>): Promise<{ summary: string }> {
+    mockRunAgentTurn.mockResolvedValue({
+      agentId: AGENT_ID,
+      turn: {} as never,
+      completion,
+    });
+    return completion;
+  }
+
+  it('injects a TeamScore reminder to the main agent when a dispatch settles unscored (team mode)', async () => {
+    const stubs = buildStubs({ teamMode: true, mainMaterialized: true });
+    const service = buildService(stubs);
+    const deferred = deferredCompletion();
+    const completion = mockRun(deferred.promise);
+    // Baseline 3, settle 3 → unchanged → no score for this dispatch.
+    (stubs.performance.summary as Mock)
+      .mockResolvedValueOnce({ count: 3 })
+      .mockResolvedValueOnce({ count: 3 });
+
+    const handle = await service.run(AGENT_ID, request, opts);
+    deferred.resolve({ summary: 'ok' });
+    await handle.completion;
+    await completion.catch(() => {});
+
+    await vi.waitFor(() => {
+      expect(stubs.mainPromptService.inject).toHaveBeenCalledTimes(1);
+    });
+
+    const message = (stubs.mainPromptService.inject as Mock).mock.calls[0]?.[0] as {
+      content: readonly { readonly type: string; readonly text: string }[];
+      origin?: { readonly kind: string; readonly name: string };
+    };
+    expect(message.content.some((part) => part.text.includes(PROFILE_NAME))).toBe(true);
+    expect(message.content.some((part) => part.text.includes('TeamScore'))).toBe(true);
+    expect(message.origin).toEqual({ kind: 'system_trigger', name: 'team_score_reminder' });
+  });
+
+  it('does not inject a reminder when a score was recorded for the dispatch (team mode)', async () => {
+    const stubs = buildStubs({ teamMode: true, mainMaterialized: true });
+    const service = buildService(stubs);
+    const deferred = deferredCompletion();
+    const completion = mockRun(deferred.promise);
+    // Baseline 3, settle 4 → a score landed for this dispatch.
+    (stubs.performance.summary as Mock)
+      .mockResolvedValueOnce({ count: 3 })
+      .mockResolvedValueOnce({ count: 4 });
+
+    const handle = await service.run(AGENT_ID, request, opts);
+    deferred.resolve({ summary: 'ok' });
+    await handle.completion;
+    await completion.catch(() => {});
+
+    // The settle read ran (summary called twice) but the inject never fired.
+    await vi.waitFor(() => {
+      expect(stubs.performance.summary).toHaveBeenCalledTimes(2);
+    });
+    expect(stubs.mainPromptService.inject).not.toHaveBeenCalled();
+  });
+
+  it('does not inject a reminder outside team mode or for the main agent', async () => {
+    // (a) non-team mode: no baseline is captured, no reminder.
+    const nonTeam = buildStubs({ teamMode: false, mainMaterialized: true });
+    const serviceA = buildService(nonTeam);
+    const dA = deferredCompletion();
+    mockRunAgentTurn.mockResolvedValue({ agentId: AGENT_ID, turn: {} as never, completion: dA.promise });
+    const hA = await serviceA.run(AGENT_ID, request, opts);
+    dA.resolve({ summary: 'ok' });
+    await hA.completion;
+    await Promise.resolve();
+    expect(nonTeam.performance.summary).not.toHaveBeenCalled();
+    expect(nonTeam.mainPromptService.inject).not.toHaveBeenCalled();
+
+    // (b) the main agent itself: `supervised` excludes MAIN_AGENT_ID.
+    const mainStubs = buildStubs({ teamMode: true, mainMaterialized: true });
+    const serviceB = buildService(mainStubs);
+    const dB = deferredCompletion();
+    mockRunAgentTurn.mockResolvedValue({ agentId: MAIN_AGENT_ID, turn: {} as never, completion: dB.promise });
+    const hB = await serviceB.run(MAIN_AGENT_ID, request, opts);
+    dB.resolve({ summary: 'ok' });
+    await hB.completion;
+    await Promise.resolve();
+    expect(mainStubs.performance.summary).not.toHaveBeenCalled();
+    expect(mainStubs.mainPromptService.inject).not.toHaveBeenCalled();
+  });
+
+  it('skips the reminder safely when the main agent is not materialized', async () => {
+    const stubs = buildStubs({ teamMode: true }); // mainMaterialized: false
+    const service = buildService(stubs);
+    const deferred = deferredCompletion();
+    const completion = mockRun(deferred.promise);
+    // Unscored, but there is no main handle to steer into.
+    (stubs.performance.summary as Mock)
+      .mockResolvedValueOnce({ count: 0 })
+      .mockResolvedValueOnce({ count: 0 });
+
+    const handle = await service.run(AGENT_ID, request, opts);
+    deferred.resolve({ summary: 'ok' });
+    await handle.completion;
+    await completion.catch(() => {});
+
+    // Baseline + settle reads both ran (the reminder path executed) but the
+    // missing main handle short-circuits the inject — and the run itself is
+    // unaffected.
+    await vi.waitFor(() => {
+      expect(stubs.performance.summary).toHaveBeenCalledTimes(2);
+    });
+    expect(stubs.mainPromptService.inject).not.toHaveBeenCalled();
   });
 });
