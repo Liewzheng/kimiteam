@@ -15,6 +15,8 @@ import type { AgentTaskInfo } from '#/agent/task/task';
 import { IAgentBlobService } from '#/agent/blob/agentBlobService';
 import { AgentBlobServiceImpl } from '#/agent/blob/agentBlobServiceImpl';
 import { WorkspaceStateService } from '#/workspace/state/workspaceStateService';
+import { IAgentProfileFileService } from '#/workspace/agentProfileFile/agentProfileFile';
+import { AgentProfileFileService } from '#/workspace/agentProfileFile/agentProfileFileService';
 import { IHostEnvironment } from '#/os/interface/hostEnvironment';
 import { IAgentContextInjectorService } from '#/agent/contextInjector/contextInjector';
 import { CHECKPOINTED_MODELS, type Checkpointed } from '#/agent/contextMemory/conversationTime';
@@ -1218,6 +1220,14 @@ export class AgentTestContext {
             reg.defineInstance(
               IWorkspaceStateService,
               new WorkspaceStateService(this.root.accessor.get(IAppStateService)),
+            );
+            // Same no-Workspace-scope stand-in for the agent-profile file
+            // engine: TeamHire/TeamFire (and the Web tier) resolve the
+            // Workspace-scoped IAgentProfileFileService through this session
+            // seed in the harness.
+            reg.defineDescriptor(
+              IAgentProfileFileService,
+              new SyncDescriptor(AgentProfileFileService),
             );
             reg.defineInstance(IAgentLifecycleService, {
               _serviceBrand: undefined,

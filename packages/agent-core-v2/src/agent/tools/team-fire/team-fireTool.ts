@@ -1,56 +1,26 @@
 /**
  * `tools` domain (L7) — `ITeamFireTool` implementation (the `TeamFire` tool).
+ *
+ * Fronts `IAgentProfileFileService`: candidate-path resolution, deletion, and
+ * the available-profile listing all live in the service — this tool only
+ * applies the main-agent gate and maps the result to a tool message. The
+ * not-found case keeps its existing error semantics (lists available profiles).
  */
 
-import { join } from 'pathe';
-import fs from 'node:fs';
-
 import { ILogService } from '#/_base/log/log';
-import { unwrapErrorCause } from '#/_base/errors/errors';
 import { ToolAccesses, type ExecutableToolResult, type ToolExecution } from '#/tool/toolContract';
 import { toInputJsonSchema } from '#/tool/input-schema';
 import { registerAgentToolService } from '#/agent/toolRegistry/toolContribution';
 import { ISessionMetadata } from '#/session/sessionMetadata/sessionMetadata';
 import { isSubagentMeta } from '#/session/agentLifecycle/subagentMetadata';
-import { IBootstrapService } from '#/app/bootstrap/bootstrap';
 import { IAgentScopeContext } from '#/agent/scopeContext/scopeContext';
+import {
+  AgentProfileFileError,
+  IAgentProfileFileService,
+} from '#/workspace/agentProfileFile/agentProfileFile';
+import '#/workspace/agentProfileFile/agentProfileFileService'; // registers the workspace-scoped service
 
 import { ITeamFireTool, TeamFireInputSchema, TEAM_FIRE_DESCRIPTION, type TeamFireInput } from './team-fire';
-
-/** Candidate profile file paths for the requested scope, first match wins. */
-function candidateFilePaths(bootstrap: IBootstrapService, name: string, scope: 'user' | 'project'): string[] {
-  if (scope === 'user') {
-    return [
-      join(bootstrap.homeDir, 'agents', `${name}.md`),
-      join(bootstrap.osHomeDir, '.kimi-code/agents', `${name}.md`),
-    ];
-  }
-  return [
-    join(bootstrap.cwd, '.kimi-code/agents', `${name}.md`),
-    join(bootstrap.cwd, '.agents/agents', `${name}.md`),
-  ];
-}
-
-/** Scan known agent directories and return the set of discovered profile names. */
-function scanAvailableProfileNames(bootstrap: IBootstrapService): Set<string> {
-  const candidates = [
-    join(bootstrap.homeDir, 'agents'),
-    join(bootstrap.osHomeDir, '.kimi-code/agents'),
-    join(bootstrap.cwd, '.kimi-code/agents'),
-    join(bootstrap.cwd, '.agents/agents'),
-  ];
-  const names = new Set<string>();
-  for (const dir of candidates) {
-    try {
-      if (!fs.existsSync(dir)) continue;
-      const entries = fs.readdirSync(dir);
-      for (const entry of entries) {
-        if (/\.md$/.test(entry)) names.add(entry.slice(0, -3));
-      }
-    } catch { /* directory inaccessible */ }
-  }
-  return names;
-}
 
 export class TeamFireTool implements ITeamFireTool {
   declare readonly _serviceBrand: undefined;
@@ -62,9 +32,9 @@ export class TeamFireTool implements ITeamFireTool {
 
   constructor(
     @ISessionMetadata private readonly sessionMetadata: ISessionMetadata,
-    @IBootstrapService private readonly bootstrap: IBootstrapService,
     @IAgentScopeContext scopeContext: IAgentScopeContext,
     @ILogService private readonly log: ILogService,
+    @IAgentProfileFileService private readonly profileFile: IAgentProfileFileService,
   ) {
     this.callerAgentId = scopeContext.agentId;
   }
@@ -77,35 +47,30 @@ export class TeamFireTool implements ITeamFireTool {
       return { isError: true, output: 'TeamFire is only available to the main agent.' };
     }
 
-    const filePaths = candidateFilePaths(this.bootstrap, args.name, args.scope ?? 'user');
+    const filePaths = this.profileFile.resolveCandidatePaths(args.name, args.scope ?? 'user');
     return {
       accesses: filePaths.flatMap((p) => ToolAccesses.writeFile(p)),
       display: { kind: 'generic', summary: `fire "${args.name}"` },
       description: `Fire agent "${args.name}"`,
       approvalRule: this.name,
-      execute: () => this.execution(args, filePaths),
+      execute: () => this.execution(args),
     };
   }
 
-  private async execution(args: TeamFireInput, filePaths: string[]): Promise<ExecutableToolResult> {
-    let deletedPath: string | undefined;
-    for (const p of filePaths) {
-      if (!fs.existsSync(p)) continue;
-      try {
-        fs.unlinkSync(p);
-        deletedPath = p;
-        break;
-      } catch (e) {
-        return { isError: true, output: `Failed to delete ${p}: ${(unwrapErrorCause(e) as Error).message}` };
+  private async execution(args: TeamFireInput): Promise<ExecutableToolResult> {
+    try {
+      const result = await this.profileFile.remove(args.name, args.scope ?? 'user');
+      if (result.removed === true) {
+        return { output: `Fired "${args.name}".\nThe agent profile ${result.path} has been deleted and is no longer available for dispatch.` };
       }
+    } catch (error) {
+      if (error instanceof AgentProfileFileError) {
+        return { isError: true, output: error.message };
+      }
+      throw error;
     }
 
-    if (deletedPath !== undefined) {
-      return { output: `Fired "${args.name}".\nThe agent profile ${deletedPath} has been deleted and is no longer available for dispatch.` };
-    }
-
-    const allProfiles = scanAvailableProfileNames(this.bootstrap);
-    const names = [...allProfiles].sort().join(', ') || '(none)';
+    const names = (await this.profileFile.list()).join(', ') || '(none)';
     return {
       isError: true,
       output: `Agent "${args.name}" not found in any agents directory.\nAvailable profiles: ${names}`,
