@@ -22,6 +22,7 @@ import {
 } from '@moonshot-ai/pi-tui';
 import { currentTheme } from '#/tui/theme';
 import { getDataDir } from '#/utils/paths';
+import { LLM_NOT_SET_MESSAGE } from '../constant/kimi-tui';
 import { formatErrorMessage } from '../utils/event-payload';
 import type { SlashCommandHost } from './dispatch';
 
@@ -38,17 +39,38 @@ export async function handleTeamCommand(host: SlashCommandHost, args: string): P
     return;
   }
 
+  if (subcmd === 'init') {
+    // Same guard as the dispatch skill-activation path (dispatch.ts): the
+    // onboarding flow opens a new turn, so it needs a live session and a
+    // configured model — otherwise it would fail at the engine with a
+    // confusing "LLM not set" style error after the input is already gone.
+    const session = host.session;
+    if (host.state.appState.model.trim().length === 0 || session === undefined) {
+      host.showError(LLM_NOT_SET_MESSAGE);
+      return;
+    }
+    host.sendSkillActivation(session, 'team-onboarding', '');
+    return;
+  }
+
   if (subcmd.length === 0) {
     await showTeamPanel(host);
     return;
   }
 
-  host.showError('Usage: /team [on|off] — toggle team mode or open the team panel.');
+  host.showError('Usage: /team [on|off|init] — toggle team mode, run team onboarding, or open the team panel.');
 }
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
+
+/**
+ * Origin of an agent definition file. `global` = user-level
+ * `<dataDir>/agents/` (e.g. `~/.kimi-code/agents`); `project` =
+ * `<cwd>/.kimi-code/agents/`. Drives the panel's two-section split.
+ */
+export type AgentScope = 'global' | 'project';
 
 export interface AgentProfile {
   readonly name: string;
@@ -57,6 +79,12 @@ export interface AgentProfile {
   readonly modelPreference?: string;
   readonly duty?: string;
   readonly whenToUse?: string;
+  /**
+   * Which agents directory the definition came from. Only set by
+   * `readAgentProfiles`; hand-built profiles without a scope aggregate as
+   * `global` (see `aggregateMemberRows`).
+   */
+  readonly scope?: AgentScope;
 }
 
 export interface PerformanceEntry {
@@ -124,6 +152,12 @@ export interface TeamMemberRow {
   readonly scoreCount: number;
   readonly avgDurationMs: number | null;
   readonly shiftCount: number;
+  /**
+   * Agents-dir scope this member belongs to — splits the panel into
+   * 全局团队 / 项目团队 sections. `aggregateMemberRows` always sets it; rows
+   * built without one default to `global` at render time.
+   */
+  readonly scope?: AgentScope;
 }
 
 // ---------------------------------------------------------------------------
@@ -344,6 +378,7 @@ export function aggregateMemberRows(
       scoreCount,
       avgDurationMs,
       shiftCount,
+      scope: profile.scope ?? 'global',
     });
   }
 
@@ -377,6 +412,9 @@ export function aggregateMemberRows(
         scoreCount,
         avgDurationMs,
         shiftCount,
+        // Perf history is read from the user-level data dir only, so a
+        // profile-less archive is always a global-scope record.
+        scope: 'global',
       });
     }
   }
@@ -436,12 +474,19 @@ export function resolveModelForProfile(
 // File I/O wrappers
 // ---------------------------------------------------------------------------
 
-/** Discover agent `.md` files from both data-dir and cwd agent directories. */
+/**
+ * Discover agent `.md` files from both data-dir and cwd agent directories.
+ *
+ * Each returned profile carries its `scope` (global = `<dataDir>/agents/`,
+ * project = `<cwd>/.kimi-code/agents/`). Both scopes are kept side by side —
+ * a member can exist in both the user-level and the project-level directory,
+ * and the panel shows them in separate, individually-labelled sections. Only
+ * a *missing* directory is silently skipped; unreadable files are skipped too.
+ */
 export function readAgentProfiles(dataDir: string, cwd: string): AgentProfile[] {
-  // Keyed by file name; the cwd scan runs second so project-local files win.
-  const byFile = new Map<string, string>();
+  const profiles: AgentProfile[] = [];
 
-  const scanDir = (dir: string): void => {
+  const scanDir = (dir: string, scope: AgentScope): void => {
     let entries: string[];
     try {
       entries = readdirSync(dir);
@@ -451,23 +496,20 @@ export function readAgentProfiles(dataDir: string, cwd: string): AgentProfile[] 
     for (const entry of entries) {
       if (extname(entry) !== '.md') continue;
       try {
-        byFile.set(entry, readFileSync(join(dir, entry), 'utf-8'));
+        const content = readFileSync(join(dir, entry), 'utf-8');
+        const profile = parseAgentFrontmatter(content);
+        if (profile !== null) {
+          profiles.push({ ...profile, scope });
+        }
       } catch {
         // skip unreadable files
       }
     }
   };
 
-  scanDir(join(dataDir, 'agents'));
-  scanDir(join(cwd, '.kimi-code', 'agents'));
+  scanDir(join(dataDir, 'agents'), 'global');
+  scanDir(join(cwd, '.kimi-code', 'agents'), 'project');
 
-  const profiles: AgentProfile[] = [];
-  for (const content of byFile.values()) {
-    const profile = parseAgentFrontmatter(content);
-    if (profile !== null) {
-      profiles.push(profile);
-    }
-  }
   return profiles;
 }
 
@@ -524,6 +566,16 @@ export interface TeamPanelOptions {
   readonly members: readonly TeamMemberRow[];
   /** Error message if data loading failed entirely. */
   readonly loadError?: string;
+  /**
+   * Absolute path of the user-level agents dir (`<dataDir>/agents/`, e.g.
+   * `~/.kimi-code/agents`) — shown in the 全局团队 section title.
+   */
+  readonly globalAgentsDir?: string;
+  /**
+   * Absolute path of the project-level agents dir (`<cwd>/.kimi-code/agents/`)
+   * — shown in the 项目团队 section title.
+   */
+  readonly projectAgentsDir?: string;
   readonly onClose: () => void;
   /**
    * Invoked when the user presses Ctrl+C while the panel has focus. Wired (in
@@ -642,7 +694,8 @@ export class TeamPanelComponent extends Container implements Focusable {
       return lines.map((line) => truncateToWidth(line, width));
     }
 
-    // Table header
+    // Table header — shared by both scope sections. The section titles below
+    // carry the scope annotation (全局团队 / 项目团队 + its agents dir path).
     const hasDimmedModel = this.opts.members.some((m) => !m.modelFromLastUse);
     const colDefs = [
       { label: 'Name', width: 18 },
@@ -659,56 +712,79 @@ export class TeamPanelComponent extends Container implements Focusable {
     const header = colDefs
       .map((c) => bold(padToVisibleWidth(c.label, c.width)))
       .join(' ');
-    lines.push(`  ${dim('─'.repeat(width - 4))}`);
-    lines.push(`  ${header}`);
 
-    // Table rows
-    for (const member of this.opts.members) {
-      const scoreStr =
-        member.avgScore !== null ? member.avgScore.toFixed(1) : '—';
-      const durationStr =
-        member.avgDurationMs !== null
-          ? formatDuration(member.avgDurationMs)
-          : '—';
-      // Role is `职位·职能` (U+00B7 separator); split on the first separator so
-      // each column gets its own CJK-aligned width. Roles without a separator
-      // render entirely in the position column, leaving the focus column blank.
-      const sepIdx = member.role.indexOf('·');
-      const position = sepIdx === -1 ? member.role : member.role.slice(0, sepIdx);
-      const focus = sepIdx === -1 ? '' : member.role.slice(sepIdx + 1);
-      const positionDisplay = truncateToWidth(position, 10, '…');
-      const focusDisplay = truncateToWidth(focus, 14, '…');
-      const nameDisplay = truncateToWidth(member.name, 18, '…');
-      const modelText = truncateToWidth(member.model, 20, '…');
-      // Last-used model is shown directly; resolution-fallback gets a dim style
-      const modelDisplay = member.modelFromLastUse
-        ? modelText
-        : dim(modelText);
-      // Status colour: 工作 = primary (the "running badge" token), 休息 =
-      // warning (yellow, the rest window). 上班 / 下班 stay uncoloured — 上班
-      // inherits the row dim, 下班 rows are muted at row level (greyed archive).
-      const statusLabel = STATUS_LABELS[member.status];
-      const statusDisplay =
-        member.status === 'working'
-          ? accent(statusLabel)
-          : member.status === 'resting'
-            ? warning(statusLabel)
-            : statusLabel;
-      const cells = [
-        padToVisibleWidth(nameDisplay, 18),
-        padToVisibleWidth(positionDisplay, 10),
-        padToVisibleWidth(focusDisplay, 14),
-        padToVisibleWidth(statusDisplay, 6),
-        padToVisibleWidth(modelDisplay, 20),
-        padStartVisible(scoreStr, 6) + ' ',
-        padStartVisible(String(member.scoreCount), 3) + ' ',
-        padStartVisible(durationStr, 9) + ' ',
-        padStartVisible(String(member.shiftCount), 3),
-      ];
-      // Active rows render in the usual dim; archived (下班) rows drop a step
-      // fainter to textMuted so the whole line reads as a greyed-out record.
-      const rowStyle = member.status === 'off-duty' ? muted : dim;
-      lines.push(`  ${rowStyle(cells.join(' '))}`);
+    // Render one member row for a section. Active rows render in the usual
+    // dim; archived (下班) rows drop a step fainter to textMuted so the whole
+    // line reads as a greyed-out record.
+    const pushMemberRows = (members: readonly TeamMemberRow[]): void => {
+      for (const member of members) {
+        const scoreStr =
+          member.avgScore !== null ? member.avgScore.toFixed(1) : '—';
+        const durationStr =
+          member.avgDurationMs !== null
+            ? formatDuration(member.avgDurationMs)
+            : '—';
+        // Role is `职位·职能` (U+00B7 separator); split on the first separator so
+        // each column gets its own CJK-aligned width. Roles without a separator
+        // render entirely in the position column, leaving the focus column blank.
+        const sepIdx = member.role.indexOf('·');
+        const position = sepIdx === -1 ? member.role : member.role.slice(0, sepIdx);
+        const focus = sepIdx === -1 ? '' : member.role.slice(sepIdx + 1);
+        const positionDisplay = truncateToWidth(position, 10, '…');
+        const focusDisplay = truncateToWidth(focus, 14, '…');
+        const nameDisplay = truncateToWidth(member.name, 18, '…');
+        const modelText = truncateToWidth(member.model, 20, '…');
+        // Last-used model is shown directly; resolution-fallback gets a dim style
+        const modelDisplay = member.modelFromLastUse
+          ? modelText
+          : dim(modelText);
+        // Status colour: 工作 = primary (the "running badge" token), 休息 =
+        // warning (yellow, the rest window). 上班 / 下班 stay uncoloured — 上班
+        // inherits the row dim, 下班 rows are muted at row level (greyed archive).
+        const statusLabel = STATUS_LABELS[member.status];
+        const statusDisplay =
+          member.status === 'working'
+            ? accent(statusLabel)
+            : member.status === 'resting'
+              ? warning(statusLabel)
+              : statusLabel;
+        const cells = [
+          padToVisibleWidth(nameDisplay, 18),
+          padToVisibleWidth(positionDisplay, 10),
+          padToVisibleWidth(focusDisplay, 14),
+          padToVisibleWidth(statusDisplay, 6),
+          padToVisibleWidth(modelDisplay, 20),
+          padStartVisible(scoreStr, 6) + ' ',
+          padStartVisible(String(member.scoreCount), 3) + ' ',
+          padStartVisible(durationStr, 9) + ' ',
+          padStartVisible(String(member.shiftCount), 3),
+        ];
+        const rowStyle = member.status === 'off-duty' ? muted : dim;
+        lines.push(`  ${rowStyle(cells.join(' '))}`);
+      }
+    };
+
+    // Two labelled sections — 全局团队 (user-level ~/.kimi-code/agents) and
+    // 项目团队 (<cwd>/.kimi-code/agents). A scope with no members is omitted
+    // entirely, so the single-scope view stays identical to the pre-split panel.
+    const globalPath = this.opts.globalAgentsDir ?? '~/.kimi-code/agents';
+    const projectPath = this.opts.projectAgentsDir ?? '<cwd>/.kimi-code/agents';
+    const sections = [
+      { scope: 'global' as const, label: '全局团队', path: globalPath },
+      { scope: 'project' as const, label: '项目团队', path: projectPath },
+    ];
+
+    for (const section of sections) {
+      const sectionMembers = this.opts.members.filter(
+        (m) => (m.scope ?? 'global') === section.scope,
+      );
+      if (sectionMembers.length === 0) continue;
+
+      lines.push('');
+      lines.push(`  ${bold(section.label)} ${dim(section.path)}`);
+      lines.push(`  ${dim('─'.repeat(width - 4))}`);
+      lines.push(`  ${header}`);
+      pushMemberRows(sectionMembers);
     }
 
     lines.push('');
@@ -749,6 +825,10 @@ export interface TeamPanelData {
   readonly teamMode: boolean;
   readonly members: readonly TeamMemberRow[];
   readonly loadError?: string;
+  /** Absolute path of the user-level agents dir — 全局团队 section title. */
+  readonly globalAgentsDir: string;
+  /** Absolute path of the project-level agents dir — 项目团队 section title. */
+  readonly projectAgentsDir: string;
 }
 
 /**
@@ -761,6 +841,14 @@ async function loadTeamPanelData(host: SlashCommandHost): Promise<TeamPanelData>
   let teamMode = false;
   let loadError: string | undefined;
   let members: TeamMemberRow[] = [];
+
+  // Section-title paths — computed up front so a later read failure still
+  // leaves the panel able to label its (possibly empty) sections.
+  const dataDir = getDataDir();
+  // Use process.cwd() for the workspace — same as the TUI process
+  const cwd = process.cwd();
+  const globalAgentsDir = join(dataDir, 'agents');
+  const projectAgentsDir = join(cwd, '.kimi-code', 'agents');
 
   // Read full config — used for teamMode toggle AND model resolution
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -775,9 +863,6 @@ async function loadTeamPanelData(host: SlashCommandHost): Promise<TeamPanelData>
 
   // Read agent profiles and performance data
   try {
-    const dataDir = getDataDir();
-    // Use process.cwd() for the workspace — same as the TUI process
-    const cwd = process.cwd();
     const profiles = readAgentProfiles(dataDir, cwd);
     const perf = readPerformanceData(dataDir);
     // Live engine lifecycle state. Missing file → null → every profile with no
@@ -830,7 +915,7 @@ async function loadTeamPanelData(host: SlashCommandHost): Promise<TeamPanelData>
     loadError = `Could not load team data: ${formatErrorMessage(error)}`;
   }
 
-  return { teamMode, members, loadError };
+  return { teamMode, members, loadError, globalAgentsDir, projectAgentsDir };
 }
 
 async function showTeamPanel(host: SlashCommandHost): Promise<void> {
@@ -844,6 +929,8 @@ async function showTeamPanel(host: SlashCommandHost): Promise<void> {
     teamMode: initial.teamMode,
     members: initial.members,
     loadError: initial.loadError,
+    globalAgentsDir: initial.globalAgentsDir,
+    projectAgentsDir: initial.projectAgentsDir,
     onCancel: () => {
       // Same streaming-cancel path as the editor's Ctrl+C (editor-keyboard):
       // interrupt the in-flight agent turn through the session handle.

@@ -29,6 +29,7 @@ const SWARM_ARG_COMPLETIONS: readonly ArgCompletionSpec[] = [
 const TEAM_ARG_COMPLETIONS: readonly ArgCompletionSpec[] = [
   { value: 'on', description: 'Turn team mode on' },
   { value: 'off', description: 'Turn team mode off' },
+  { value: 'init', description: 'Run the team onboarding flow' },
 ];
 
 const ADD_DIR_ARG_COMPLETIONS: readonly ArgCompletionSpec[] = [
@@ -190,9 +191,9 @@ export const BUILTIN_SLASH_COMMANDS = [
   {
     name: 'team',
     aliases: [],
-    description: 'Open the team panel or toggle team mode',
+    description: 'Open the team panel, toggle team mode, or run team onboarding',
     priority: 100,
-    argumentHint: '[on|off]',
+    argumentHint: '[on|off|init]',
     completeArgs: teamArgumentCompletions,
     // Bare `/team` opens the read-only panel — safe to view while the agent is
     // streaming (the panel refreshes itself and Ctrl+C still cancels the turn).

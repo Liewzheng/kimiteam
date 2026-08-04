@@ -18,6 +18,7 @@ import { handleTeamCommand } from '#/tui/commands/index';
 import type { SlashCommandHost } from '#/tui/commands/dispatch';
 import { currentTheme } from '#/tui/theme';
 import { KIMI_CODE_HOME_ENV } from '#/constant/app';
+import { LLM_NOT_SET_MESSAGE } from '#/tui/constant/kimi-tui';
 
 import {
   parseAgentFrontmatter,
@@ -80,6 +81,7 @@ function makeHost() {
     showNotice: vi.fn(),
     mountEditorReplacement: vi.fn(),
     restoreEditor: vi.fn(),
+    sendSkillActivation: vi.fn(),
   } as unknown as SlashCommandHost;
   return { host, harness };
 }
@@ -696,6 +698,33 @@ describe('aggregateMemberRows runtime status + off-duty rows', () => {
 });
 
 // ===========================================================================
+// Pure function: aggregateMemberRows — scope tagging (global / project)
+// ===========================================================================
+
+describe('aggregateMemberRows scope', () => {
+  it('tags profile rows as global when the profile carries no scope', () => {
+    const rows = aggregateMemberRows([{ name: 'Alice', description: 'Dev' }], null);
+    expect(rows[0]!.scope).toBe('global');
+  });
+
+  it('preserves a project scope from the profile', () => {
+    const rows = aggregateMemberRows(
+      [{ name: 'Bob', description: 'Dev', scope: 'project' }],
+      null,
+    );
+    expect(rows[0]!.scope).toBe('project');
+  });
+
+  it('tags perf-only archive rows as global (perf is read from the user dir)', () => {
+    const perf = {
+      Dana: { entries: [{ profileName: 'Dana', ts: '2026-07-30T09:00:00.000Z', score: 6.5 }] },
+    };
+    const rows = aggregateMemberRows([], perf);
+    expect(rows.find((r) => r.name === 'Dana')!.scope).toBe('global');
+  });
+});
+
+// ===========================================================================
 // Command handling: handleTeamCommand
 // ===========================================================================
 
@@ -716,6 +745,42 @@ describe('handleTeamCommand', () => {
 
     expect(harness.setConfig).toHaveBeenCalledWith({ subagent: { teamMode: false } });
     expect(host.showNotice).toHaveBeenCalledWith('Team mode: OFF');
+  });
+
+  it('triggers the team-onboarding skill with /team init', async () => {
+    const { host } = makeHost();
+    host.session = { cancel: vi.fn() } as unknown as NonNullable<SlashCommandHost['session']>;
+
+    await handleTeamCommand(host, 'init');
+
+    expect(host.sendSkillActivation).toHaveBeenCalledWith(
+      host.session,
+      'team-onboarding',
+      '',
+    );
+    expect(host.showError).not.toHaveBeenCalled();
+  });
+
+  it('shows the LLM-not-set error for /team init when no model is set', async () => {
+    const { host } = makeHost();
+    host.session = { cancel: vi.fn() } as unknown as NonNullable<SlashCommandHost['session']>;
+    host.state.appState.model = '';
+
+    await handleTeamCommand(host, 'init');
+
+    expect(host.showError).toHaveBeenCalledWith(LLM_NOT_SET_MESSAGE);
+    expect(host.sendSkillActivation).not.toHaveBeenCalled();
+  });
+
+  it('shows the LLM-not-set error for /team init when no session exists', async () => {
+    const { host } = makeHost();
+    // Model is set, but the session is missing — onboarding cannot start.
+    expect(host.session).toBeUndefined();
+
+    await handleTeamCommand(host, 'init');
+
+    expect(host.showError).toHaveBeenCalledWith(LLM_NOT_SET_MESSAGE);
+    expect(host.sendSkillActivation).not.toHaveBeenCalled();
   });
 
   it('opens the team panel with no args', async () => {
@@ -1264,6 +1329,82 @@ describe('TeamPanelComponent CJK alignment', () => {
 });
 
 // ===========================================================================
+// TeamPanelComponent scope sections — 全局团队 / 项目团队
+// ===========================================================================
+
+describe('TeamPanelComponent scope sections', () => {
+  const member = (name: string, scope: 'global' | 'project') => ({
+    name,
+    status: 'on-duty' as const,
+    role: 'Dev',
+    model: 'gpt-4o',
+    avgScore: null,
+    scoreCount: 0,
+    avgDurationMs: null,
+    shiftCount: 0,
+    scope,
+  });
+
+  it('renders global and project sections with scope-labelled titles', () => {
+    const panel = new TeamPanelComponent({
+      teamMode: true,
+      members: [member('alice', 'global'), member('bob', 'project')],
+      onClose: () => {},
+    });
+
+    const joined = panel.render(120).join('\n');
+    expect(joined).toContain('全局团队');
+    expect(joined).toContain('项目团队');
+    // Default dir labels when no explicit paths are supplied
+    expect(joined).toContain('~/.kimi-code/agents');
+    expect(joined).toContain('<cwd>/.kimi-code/agents');
+    // Both members render, each inside its own section
+    expect(joined).toContain('alice');
+    expect(joined).toContain('bob');
+  });
+
+  it('renders only the global section when no project members exist', () => {
+    const panel = new TeamPanelComponent({
+      teamMode: true,
+      members: [member('alice', 'global')],
+      onClose: () => {},
+    });
+
+    const joined = panel.render(120).join('\n');
+    expect(joined).toContain('全局团队');
+    expect(joined).not.toContain('项目团队');
+    expect(joined).toContain('alice');
+  });
+
+  it('renders only the project section when no global members exist', () => {
+    const panel = new TeamPanelComponent({
+      teamMode: true,
+      members: [member('bob', 'project')],
+      onClose: () => {},
+    });
+
+    const joined = panel.render(120).join('\n');
+    expect(joined).not.toContain('全局团队');
+    expect(joined).toContain('项目团队');
+    expect(joined).toContain('bob');
+  });
+
+  it('shows the custom agents-dir paths supplied by the data layer', () => {
+    const panel = new TeamPanelComponent({
+      teamMode: true,
+      members: [member('alice', 'global'), member('bob', 'project')],
+      globalAgentsDir: '/home/user/.kimi-code/agents',
+      projectAgentsDir: '/home/user/proj/.kimi-code/agents',
+      onClose: () => {},
+    });
+
+    const joined = panel.render(120).join('\n');
+    expect(joined).toContain('/home/user/.kimi-code/agents');
+    expect(joined).toContain('/home/user/proj/.kimi-code/agents');
+  });
+});
+
+// ===========================================================================
 // TeamPanelComponent status column — four states + off-duty archive styling
 // ===========================================================================
 //
@@ -1398,6 +1539,7 @@ describe('TeamPanelComponent status column', () => {
 
 describe('team panel runtime-status integration', () => {
   const realHome = process.env[KIMI_CODE_HOME_ENV];
+  const realCwd = process.cwd();
   let tmp: string;
 
   beforeEach(() => {
@@ -1411,9 +1553,13 @@ describe('team panel runtime-status integration', () => {
     // No runtime-status.json by default — the absent-file case.
     writeFileSync(join(agentsDir, 'performance.json'), JSON.stringify({}));
     process.env[KIMI_CODE_HOME_ENV] = tmp;
+    // Project scope resolves to <cwd>/.kimi-code/agents, so point cwd at the
+    // temp dir to keep project-dir fixtures out of the repo working tree.
+    process.chdir(tmp);
   });
 
   afterEach(() => {
+    process.chdir(realCwd);
     rmSync(tmp, { recursive: true, force: true });
     if (realHome === undefined) delete process.env[KIMI_CODE_HOME_ENV];
     else process.env[KIMI_CODE_HOME_ENV] = realHome;
@@ -1432,6 +1578,30 @@ describe('team panel runtime-status integration', () => {
     expect(joined).toContain('上班');
     expect(joined).not.toContain('工作');
     expect(joined).not.toContain('休息');
+    // No project agents dir → only the 全局团队 section is shown.
+    expect(joined).toContain('全局团队');
+    expect(joined).not.toContain('项目团队');
+  });
+
+  it('shows global and project sections when a project agents dir exists under cwd', async () => {
+    // Project scope: <cwd>/.kimi-code/agents with a distinct member.
+    const projectAgentsDir = join(tmp, '.kimi-code', 'agents');
+    mkdirSync(projectAgentsDir, { recursive: true });
+    writeFileSync(
+      join(projectAgentsDir, 'bob.md'),
+      '---\nname: Bob\ndescription: Project dev\nrole: Developer\n---\n',
+    );
+
+    const { host } = makeHost();
+    await handleTeamCommand(host, '');
+
+    const joined = mountedPanel(host).render(120).join('\n');
+    // Both ends render, each labelled with its own scope title.
+    expect(joined).toContain('全局团队');
+    expect(joined).toContain('项目团队');
+    // Alice lives in the user-level dir, Bob in the project-level dir.
+    expect(joined).toContain('Alice');
+    expect(joined).toContain('Bob');
   });
 
   it('flips 工作 → 休息 after a 2.5s refresh re-reads runtime-status.json', async () => {
