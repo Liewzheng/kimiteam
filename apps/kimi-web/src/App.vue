@@ -18,6 +18,7 @@ import SettingsDialog from './components/settings/SettingsDialog.vue';
 import AddWorkspaceDialog from './components/dialogs/AddWorkspaceDialog.vue';
 import ConfirmDialogHost from './components/dialogs/ConfirmDialogHost.vue';
 import StatusPanel from './components/chat/StatusPanel.vue';
+import TeamPanel from './components/team/TeamPanel.vue';
 import WarningToasts from './components/WarningToasts.vue';
 import MobileTopBar from './components/mobile/MobileTopBar.vue';
 import MobileSwitcherSheet from './components/mobile/MobileSwitcherSheet.vue';
@@ -318,6 +319,7 @@ const showProviders = ref(false);
 const showLogin = ref(false);
 const showAddWorkspace = ref(false);
 const showStatusPanel = ref(false);
+const showTeamPanel = ref(false);
 const showSettings = ref(false);
 
 type SubmitPayload = {
@@ -342,6 +344,7 @@ const anyOverlayOpen = computed<boolean>(
     showLogin.value ||
     showAddWorkspace.value ||
     showStatusPanel.value ||
+    showTeamPanel.value ||
     showSettings.value ||
     showOnboarding.value ||
     showMobileSwitcher.value ||
@@ -568,6 +571,10 @@ function handleCommand(cmd: string): void {
       break;
     case '/status':
       showStatusPanel.value = true;
+      break;
+    case '/team':
+      // The team is session-scoped — /team without an active session is a no-op.
+      if (client.activeSessionId.value) showTeamPanel.value = true;
       break;
     case '/login':
       openLogin();
@@ -1041,6 +1048,14 @@ function openPr(url: string): void {
       :swarm-mode="client.swarmMode.value"
       :cost-usd="client.sessionCost.value"
       @close="showStatusPanel = false"
+    />
+
+    <!-- Team panel overlay (/team) — subagent roster + management for the
+         active session. Polls the team members endpoint at 2.5s. -->
+    <TeamPanel
+      v-if="showTeamPanel"
+      :session-id="client.activeSessionId.value ?? ''"
+      @close="showTeamPanel = false"
     />
 
     <!-- Add Workspace overlay (daemon folder browser + paste-path fallback) -->

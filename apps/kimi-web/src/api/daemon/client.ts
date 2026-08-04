@@ -19,6 +19,9 @@ import type {
   AppSessionSnapshot,
   AppTask,
   AppTaskStatus,
+  AppTeamActionResult,
+  AppTeamMember,
+  AppTeamMembers,
   AppTerminal,
   AppWorkspace,
   ApprovalResponse,
@@ -48,6 +51,8 @@ import {
   toAppQuestionRequest,
   toAppSession,
   toAppTask,
+  toAppTeamActionResult,
+  toAppTeamMember,
   toWireApprovalResponse,
   toWirePromptSubmission,
   toWireQuestionResponse,
@@ -81,6 +86,9 @@ import type {
   WireSessionWarningsResponse,
   WireSessionRuntimeStatus,
   WireSessionSnapshot,
+  WireTeamActionResult,
+  WireTeamMember,
+  WireTeamMembersResponse,
   WireWorkspace,
   WireLogoutResult,
 } from './wire';
@@ -1288,6 +1296,132 @@ export class DaemonKimiWebApi implements KimiWebApi {
       }
     }
     const data = await this.http.post<WireConfig>('/config', wirePatch);
+    return toAppConfig(data);
+  }
+
+  // -------------------------------------------------------------------------
+  // Team (subagent team management) — C 档第一期 endpoints
+  // -------------------------------------------------------------------------
+
+  async getTeamMembers(sessionId: string): Promise<AppTeamMembers> {
+    const data = await this.http.get<WireTeamMembersResponse>(
+      `/teams/${encodeURIComponent(sessionId)}/members`,
+    );
+    return {
+      teamMode: data.team_mode,
+      members: (data.members ?? []).map(toAppTeamMember),
+    };
+  }
+
+  async hireTeamMember(
+    sessionId: string,
+    input: {
+      name: string;
+      role: string;
+      description: string;
+      whenToUse: string;
+      model?: string;
+      tools?: string[];
+      skills?: string[];
+      duty?: boolean;
+      prompt: string;
+    },
+  ): Promise<AppTeamMember> {
+    const body: Record<string, unknown> = {
+      name: input.name,
+      role: input.role,
+      description: input.description,
+      when_to_use: input.whenToUse,
+      prompt: input.prompt,
+    };
+    if (input.model !== undefined) body['model'] = input.model;
+    if (input.tools !== undefined) body['tools'] = input.tools;
+    if (input.skills !== undefined) body['skills'] = input.skills;
+    if (input.duty !== undefined) body['duty'] = input.duty;
+    const data = await this.http.post<WireTeamMember>(
+      `/teams/${encodeURIComponent(sessionId)}/members`,
+      body,
+    );
+    return toAppTeamMember(data);
+  }
+
+  async fireTeamMember(sessionId: string, name: string): Promise<AppTeamActionResult> {
+    const data = await this.http.delete<WireTeamActionResult>(
+      `/teams/${encodeURIComponent(sessionId)}/members/${encodeURIComponent(name)}`,
+    );
+    return toAppTeamActionResult(data);
+  }
+
+  async updateTeamMember(
+    sessionId: string,
+    name: string,
+    input: {
+      model?: string;
+      tools?: string[];
+      skills?: string[];
+      role?: string;
+      description?: string;
+      whenToUse?: string;
+    },
+  ): Promise<AppTeamMember> {
+    const body: Record<string, unknown> = {};
+    if (input.model !== undefined) body['model'] = input.model;
+    if (input.tools !== undefined) body['tools'] = input.tools;
+    if (input.skills !== undefined) body['skills'] = input.skills;
+    if (input.role !== undefined) body['role'] = input.role;
+    if (input.description !== undefined) body['description'] = input.description;
+    if (input.whenToUse !== undefined) body['when_to_use'] = input.whenToUse;
+    const data = await this.http.put<WireTeamMember>(
+      `/teams/${encodeURIComponent(sessionId)}/members/${encodeURIComponent(name)}`,
+      body,
+    );
+    return toAppTeamMember(data);
+  }
+
+  async scoreTeamMember(
+    sessionId: string,
+    name: string,
+    input: { score: number; note: string; model?: string },
+  ): Promise<AppTeamActionResult> {
+    const body: Record<string, unknown> = { score: input.score, note: input.note };
+    if (input.model !== undefined) body['model'] = input.model;
+    const data = await this.http.post<WireTeamActionResult>(
+      `/teams/${encodeURIComponent(sessionId)}/members/${encodeURIComponent(name)}/score`,
+      body,
+    );
+    return toAppTeamActionResult(data);
+  }
+
+  async messageTeamAgent(
+    sessionId: string,
+    agentId: string,
+    input: { message: string; interrupt?: boolean },
+  ): Promise<AppTeamActionResult> {
+    const body: Record<string, unknown> = { message: input.message };
+    if (input.interrupt !== undefined) body['interrupt'] = input.interrupt;
+    const data = await this.http.post<WireTeamActionResult>(
+      `/teams/${encodeURIComponent(sessionId)}/agents/${encodeURIComponent(agentId)}/message`,
+      body,
+    );
+    return toAppTeamActionResult(data);
+  }
+
+  async setTeamConcurrency(sessionId: string, limit?: number): Promise<AppTeamActionResult> {
+    const body: Record<string, unknown> = {};
+    if (limit !== undefined) body['limit'] = limit;
+    const data = await this.http.post<WireTeamActionResult>(
+      `/teams/${encodeURIComponent(sessionId)}/concurrency`,
+      body,
+    );
+    return toAppTeamActionResult(data);
+  }
+
+  /** Toggle team mode via the shared config endpoint (POST /config { subagent:
+   *  { team_mode: bool } }) — same channel the TUI uses. */
+  async setTeamMode(teamMode: boolean): Promise<AppConfig> {
+    const data = await this.http.post<WireConfig>('/config', {
+      subagent: { team_mode: teamMode },
+    });
     return toAppConfig(data);
   }
 

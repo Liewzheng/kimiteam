@@ -423,6 +423,51 @@ export interface WireConfig {
 }
 
 // ---------------------------------------------------------------------------
+// Team (subagent team management) wire DTOs
+// GET    /teams/{session_id}/members
+// POST   /teams/{session_id}/members
+// DELETE /teams/{session_id}/members/{name}
+// PUT    /teams/{session_id}/members/{name}
+// POST   /teams/{session_id}/members/{name}/score
+// POST   /teams/{session_id}/agents/{agent_id}/message
+// POST   /teams/{session_id}/concurrency
+// teamMode reuses POST /config { subagent: { team_mode: bool } }.
+// ---------------------------------------------------------------------------
+
+/** Four-state member lifecycle status, aligned with the TUI
+ *  (apps/kimi-code/src/tui/commands/team.ts): working / resting / on-duty /
+ *  off-duty. 工作 · 休息 · 上班 · 下班. */
+export type WireTeamMemberStatus = 'working' | 'resting' | 'on-duty' | 'off-duty';
+
+export interface WireTeamMember {
+  name: string;
+  role: string;
+  description: string;
+  when_to_use: string;
+  model: string;
+  tools: string[];
+  skills?: string[];
+  duty?: boolean;
+  status: WireTeamMemberStatus;
+  score: {
+    average: number | null;
+    count: number;
+  };
+}
+
+export interface WireTeamMembersResponse {
+  team_mode: boolean;
+  members: WireTeamMember[];
+}
+
+/** Mutation endpoints return an action result. `ok` may be absent on success
+ *  envelopes; `warning` carries the optional score-inflation notice. */
+export interface WireTeamActionResult {
+  ok?: boolean;
+  warning?: string;
+}
+
+// ---------------------------------------------------------------------------
 // Auth wire DTOs — REAL endpoints (GET /api/v1/auth, POST/GET/DELETE /api/v1/oauth/login, POST /api/v1/oauth/logout)
 // ---------------------------------------------------------------------------
 

@@ -688,6 +688,39 @@ export interface AppSkill {
 }
 
 // ---------------------------------------------------------------------------
+// Team (subagent team management)
+// ---------------------------------------------------------------------------
+
+/** Four-state member lifecycle status, aligned with the TUI:
+ *  working / resting / on-duty / off-duty (工作 · 休息 · 上班 · 下班). */
+export type AppTeamMemberStatus = 'working' | 'resting' | 'on-duty' | 'off-duty';
+
+export interface AppTeamMember {
+  name: string;
+  role: string;
+  description: string;
+  whenToUse: string;
+  model: string;
+  tools: string[];
+  skills?: string[];
+  duty?: boolean;
+  status: AppTeamMemberStatus;
+  score: { average: number | null; count: number };
+}
+
+export interface AppTeamMembers {
+  teamMode: boolean;
+  members: AppTeamMember[];
+}
+
+/** Mutation endpoints return an action result; `warning` carries the optional
+ *  score-inflation notice from scoring. */
+export interface AppTeamActionResult {
+  ok: boolean;
+  warning?: string;
+}
+
+// ---------------------------------------------------------------------------
 // KimiWebApi — the app-facing interface
 // ---------------------------------------------------------------------------
 
@@ -786,6 +819,42 @@ export interface KimiWebApi {
   // Config — REAL endpoints
   getConfig(): Promise<AppConfig>;
   setConfig(patch: Partial<AppConfig>): Promise<AppConfig>;
+
+  // Team (subagent team management) — C 档第一期 endpoints. sessionId is the
+  // active session; agent_id on messageTeamAgent is the member's name (the
+  // wire roster carries no separate agent id).
+  getTeamMembers(sessionId: string): Promise<AppTeamMembers>;
+  hireTeamMember(sessionId: string, input: {
+    name: string;
+    role: string;
+    description: string;
+    whenToUse: string;
+    model?: string;
+    tools?: string[];
+    skills?: string[];
+    duty?: boolean;
+    prompt: string;
+  }): Promise<AppTeamMember>;
+  fireTeamMember(sessionId: string, name: string): Promise<AppTeamActionResult>;
+  updateTeamMember(sessionId: string, name: string, input: {
+    model?: string;
+    tools?: string[];
+    skills?: string[];
+    role?: string;
+    description?: string;
+    whenToUse?: string;
+  }): Promise<AppTeamMember>;
+  scoreTeamMember(sessionId: string, name: string, input: {
+    score: number;
+    note: string;
+    model?: string;
+  }): Promise<AppTeamActionResult>;
+  messageTeamAgent(sessionId: string, agentId: string, input: {
+    message: string;
+    interrupt?: boolean;
+  }): Promise<AppTeamActionResult>;
+  setTeamConcurrency(sessionId: string, limit?: number): Promise<AppTeamActionResult>;
+  setTeamMode(teamMode: boolean): Promise<AppConfig>;
 
   // Auth — REAL endpoints
   getAuth(): Promise<{

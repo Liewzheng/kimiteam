@@ -16,5 +16,6 @@ export default {
     noSession: 'Open a session before exporting it.',
   },
   status: { desc: 'View session status' },
+  team: { desc: 'Manage the subagent team' },
   undo: { desc: 'Undo the last message' },
 } as const;

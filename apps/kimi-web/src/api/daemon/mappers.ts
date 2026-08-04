@@ -9,6 +9,8 @@ import type {
   AppGoal,
   AppModel,
   AppProvider,
+  AppTeamActionResult,
+  AppTeamMember,
   FsEntry,
   AppMessage,
   AppMessageContent,
@@ -46,6 +48,8 @@ import type {
   WireQuestionResponse,
   WireSession,
   WireSessionUsage,
+  WireTeamActionResult,
+  WireTeamMember,
   WireWorkspace,
   WireEvent,
   WireConfig,
@@ -790,4 +794,30 @@ export function wireEventSessionId(wire: WireEvent): string {
 
 export function wireEventSeq(wire: WireEvent): number {
   return wire.seq;
+}
+
+// ---------------------------------------------------------------------------
+// Team mappers
+// ---------------------------------------------------------------------------
+
+export function toAppTeamMember(wire: WireTeamMember): AppTeamMember {
+  return {
+    name: wire.name,
+    role: wire.role,
+    description: wire.description,
+    whenToUse: wire.when_to_use,
+    model: wire.model,
+    tools: wire.tools ?? [],
+    skills: wire.skills,
+    duty: wire.duty,
+    status: wire.status,
+    score: {
+      average: wire.score.average,
+      count: wire.score.count,
+    },
+  };
+}
+
+export function toAppTeamActionResult(wire: WireTeamActionResult): AppTeamActionResult {
+  return { ok: wire.ok !== false, warning: wire.warning };
 }
