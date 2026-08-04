@@ -88,6 +88,13 @@ export class AgentPerformanceServiceImpl implements IAgentPerformanceService {
     return this._computeSummary(bucket.entries, bucket.shifts);
   }
 
+  async recentScores(profileName: string, limit: number): Promise<number[]> {
+    const raw = (await this._readOrCreate()) as PerformanceRaw;
+    const bucket = raw[profileName];
+    if (bucket === undefined) return [];
+    return bucket.entries.slice(-limit).map((entry) => entry.score);
+  }
+
   async list(): Promise<ProfilePerformanceEntry[]> {
     const raw = (await this._readOrCreate()) as PerformanceRaw;
     const keys = Object.keys(raw);

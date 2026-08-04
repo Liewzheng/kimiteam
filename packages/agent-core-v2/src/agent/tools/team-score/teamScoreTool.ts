@@ -23,6 +23,40 @@ const TOOL_DESCRIPTION =
   'An offline→online upgrade incurs new costs and requires AskUserQuestion to the user first (attach the member\'s score history and time-on-task evidence). ' +
   'The [subagent] allow_cost_upgrade = true config key indicates the user has pre-authorized such upgrades.';
 
+/**
+ * Minimum sample size before a distribution is judged at all — a fresh member
+ * with one or two scores is not inflation, it is a ramp-up.
+ */
+export const INFLATION_MIN_SAMPLE = 5;
+/** A score at or above this is a "high" grade for inflation purposes. */
+export const INFLATION_HIGH_SCORE = 90;
+/** How many recent scores the inflation check considers (including the new one). */
+export const INFLATION_WINDOW = 10;
+
+/**
+ * Detect score inflation for a profile from its recent raw scores (newest
+ * last, already capped at {@link INFLATION_WINDOW}). Returns a neutral
+ * calibration warning when the sample is large enough and the distribution is
+ * skewed high — every score ≥ 90, or an average ≥ 90 — and `undefined`
+ * otherwise. Advisory only: the caller decides whether to surface it; this
+ * never rejects a score.
+ */
+export function detectScoreInflation(
+  profileName: string,
+  recentScores: readonly number[],
+): string | undefined {
+  const window = recentScores.slice(-INFLATION_WINDOW);
+  if (window.length < INFLATION_MIN_SAMPLE) return undefined;
+  const allHigh = window.every((score) => score >= INFLATION_HIGH_SCORE);
+  const average = window.reduce((a, b) => a + b, 0) / window.length;
+  if (!allHigh && average < INFLATION_HIGH_SCORE) return undefined;
+  const n = window.length;
+  return allHigh
+    ? `Score inflation detected: the last ${n} scores for ${profileName} are all >= 90. Recalibrate against the rubric — 90s are passing grades, 95+ reserved for exceptional work.`
+    : `Score inflation detected: the average of the last ${n} scores for ${profileName} is >= 90. Recalibrate against the rubric — 90s are passing grades, 95+ reserved for exceptional work.`;
+}
+
+
 export class TeamScoreTool implements ITeamScoreTool {
   declare readonly _serviceBrand: undefined;
   readonly name = 'TeamScore';
@@ -85,6 +119,14 @@ export class TeamScoreTool implements ITeamScoreTool {
     }
     if (sum.average !== undefined) {
       parts.push(`Average: ${sum.average} (${sum.count} total).`);
+    }
+    // Score-inflation calibration warning: advisory only — appended to the
+    // normal result, never a rejection. Reads the profile's recent raw scores
+    // (including the one just recorded) and flags a high-skew distribution.
+    const recentScores = await this.perf.recentScores(args.profile, INFLATION_WINDOW);
+    const inflationWarning = detectScoreInflation(args.profile, recentScores);
+    if (inflationWarning !== undefined) {
+      parts.push(inflationWarning);
     }
     return { output: parts.join(' ') };
   }

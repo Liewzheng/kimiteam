@@ -843,6 +843,7 @@ describe('Agent tool description', () => {
       record: async () => {},
       recordShift: async () => {},
       summary: async () => ({ count: 0 }),
+      recentScores: async () => [],
       list: async () => mockPerformances,
     };
     ctx = createTestAgent(
@@ -871,6 +872,7 @@ describe('Agent tool description', () => {
       record: async () => {},
       recordShift: async () => {},
       summary: async () => ({ count: 0 }),
+      recentScores: async () => [],
       list: async () => mockPerformances,
     };
     ctx = createTestAgent(
@@ -888,6 +890,7 @@ describe('Agent tool description', () => {
       record: async () => {},
       recordShift: async () => {},
       summary: async () => ({ count: 0 }),
+      recentScores: async () => [],
       list: listSpy,
     };
     ctx = createTestAgent(
@@ -920,6 +923,7 @@ describe('Agent tool description', () => {
       record: async () => {},
       recordShift: async () => {},
       summary: async () => ({ count: 0 }),
+      recentScores: async () => [],
       list: listSpy,
     };
     ctx = createTestAgent(
@@ -1123,6 +1127,7 @@ describe('Agent tool execution contract', () => {
       record: async () => {},
       recordShift: async () => {},
       summary: async () => ({ count: 0 }),
+      recentScores: async () => [],
       list: async () => [
         { profileName: 'explore', summary: { average: 92, count: 5, last: 95 } },
         { profileName: 'coder', summary: { average: 84, count: 4, last: 88 } },
@@ -1163,6 +1168,7 @@ describe('Agent tool execution contract', () => {
       record: async () => {},
       recordShift: async () => {},
       summary: async () => ({ count: 0 }),
+      recentScores: async () => [],
       list: async () => [],
     };
     const context = createAgentToolContext(

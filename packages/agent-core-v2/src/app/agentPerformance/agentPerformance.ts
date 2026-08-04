@@ -59,6 +59,12 @@ export interface IAgentPerformanceService {
   recordShift(profileName: string, shift: PerformanceShift): Promise<void>;
   /** Read-only summary for one profile. */
   summary(profileName: string): Promise<PerformanceSummary>;
+  /**
+   * The most recent raw scores for a profile, newest last, capped at `limit`.
+   * `summary()` only exposes aggregates, so distribution checks (e.g. score
+   * inflation) read the raw FIFO bucket through this.
+   */
+  recentScores(profileName: string, limit: number): Promise<number[]>;
   /** Every stored profile's summary. */
   list(): Promise<ProfilePerformanceEntry[]>;
 }

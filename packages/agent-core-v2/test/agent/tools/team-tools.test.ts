@@ -20,6 +20,7 @@ import { parseAgentFileText } from '#/workspace/workspaceAgentProfileLoader/inte
 import type { AgentFileDefinition } from '#/workspace/workspaceAgentProfileLoader/internal/types';
 import { TeamHireInputSchema, TEAM_HIRE_NAME_PATTERN as NAME_PAT } from '#/agent/tools/team-hire/team-hire';
 import { buildPerformanceCard } from '#/agent/tools/agent/agentTool';
+import { detectScoreInflation } from '#/agent/tools/team-score/teamScoreTool';
 
 
 // ---------------------------------------------------------------------------
@@ -215,8 +216,18 @@ import { TeamHireTool } from '#/agent/tools/team-hire/team-hireTool';
 import { TeamFireTool } from '#/agent/tools/team-fire/team-fireTool';
 import { TeamFireInputSchema } from '#/agent/tools/team-fire/team-fire';
 import type { ExecutableToolResult, RunnableToolExecution, ToolExecution } from '#/tool/toolContract';
+import { AgentProfileFileService } from '#/workspace/agentProfileFile/agentProfileFileService';
+import { HostFileSystem } from '#/os/backends/node-local/hostFsService';
 
 const EXEC_CTX = { signal: new AbortController().signal } as never;
+
+/** Real agent-profile-file service writing into a temp bootstrap dir. */
+function profileFileService(tmpDir: string): AgentProfileFileService {
+  return new AgentProfileFileService(
+    { homeDir: tmpDir, osHomeDir: tmpDir, cwd: tmpDir } as never,
+    new HostFileSystem(),
+  );
+}
 
 function gateLogStub(): unknown {
   const stub: Record<string, unknown> = {
@@ -261,9 +272,9 @@ describe('Team* main-agent gate', () => {
     const tool = new TeamHireTool(
       {} as never,
       stubs.sessionMeta as never,
-      stubs.bootstrap as never,
       stubs.scopeContext as never,
       gateLogStub() as never,
+      profileFileService(tmpDir) as never,
     );
     const result = await runResolution(
       await tool.resolveExecution({ name: 'new-hire', description: 'd', prompt: 'p' }),
@@ -277,9 +288,9 @@ describe('Team* main-agent gate', () => {
     const tool = new TeamHireTool(
       {} as never,
       stubs.sessionMeta as never,
-      stubs.bootstrap as never,
       stubs.scopeContext as never,
       gateLogStub() as never,
+      profileFileService(tmpDir) as never,
     );
     const result = await runResolution(
       await tool.resolveExecution({
@@ -305,9 +316,9 @@ describe('Team* main-agent gate', () => {
     const tool = new TeamHireTool(
       {} as never,
       stubs.sessionMeta as never,
-      stubs.bootstrap as never,
       stubs.scopeContext as never,
       gateLogStub() as never,
+      profileFileService(tmpDir) as never,
     );
     const result = await runResolution(
       await tool.resolveExecution({ name: 'sneaky', description: 'd', prompt: 'p' }),
@@ -323,9 +334,9 @@ describe('Team* main-agent gate', () => {
     const stubs = gateStubs(tmpDir, 'main', { main: {}, 'agent-0': { type: 'sub' } });
     const tool = new TeamFireTool(
       stubs.sessionMeta as never,
-      stubs.bootstrap as never,
       stubs.scopeContext as never,
       gateLogStub() as never,
+      profileFileService(tmpDir) as never,
     );
     const result = await runResolution(await tool.resolveExecution({ name: 'old-hand' }));
     expect(result.isError).toBeUndefined();
@@ -339,9 +350,9 @@ describe('Team* main-agent gate', () => {
     const stubs = gateStubs(tmpDir, 'agent-0', { 'agent-0': { type: 'sub' } });
     const tool = new TeamFireTool(
       stubs.sessionMeta as never,
-      stubs.bootstrap as never,
       stubs.scopeContext as never,
       gateLogStub() as never,
+      profileFileService(tmpDir) as never,
     );
     const result = await runResolution(await tool.resolveExecution({ name: 'victim' }));
     expect(result.isError).toBe(true);
@@ -632,6 +643,13 @@ class ScorePerfStub {
     return this.summaries[profileName] ?? { count: 0 };
   }
 
+  async recentScores(profileName: string, limit: number): Promise<number[]> {
+    return this.entries
+      .filter((entry) => entry.profileName === profileName)
+      .slice(-limit)
+      .map((entry) => entry.score);
+  }
+
   async list(): Promise<ProfilePerformanceEntry[]> {
     return [];
   }
@@ -762,6 +780,165 @@ describe('TeamScore', () => {
       expect(trimmed.data.profile).toBe('coder');
       expect(trimmed.data.note).toBe('n');
     }
+  });
+
+  it('appends a score-inflation warning when the recent distribution is skewed high', async () => {
+    const perf = new ScorePerfStub({ coder: { last: 95, average: 96, count: 6 } });
+    // Seed 4 prior 95s — plus the new 96 → 5 recent scores, all >= 90.
+    for (let i = 0; i < 4; i++) {
+      perf.entries.push({
+        profileName: 'coder',
+        ts: '2026-01-01T00:00:00.000Z',
+        score: 95,
+        note: 'prior',
+      });
+    }
+    const tool = makeScoreTool(tmpDir, 'main', { main: {} }, perf);
+    const result = await runResolution(
+      await tool.resolveExecution({ profile: 'coder', score: 96, note: 'stellar' }),
+    );
+    expect(result.isError).toBeUndefined();
+    const output = String(result.output);
+    expect(output).toContain('Score inflation detected');
+    expect(output).toContain('all >= 90');
+    expect(output).toContain('coder');
+    // The warning is advisory — the success text is still present.
+    expect(output).toContain('[TeamScore] Scored "coder"');
+  });
+});
+
+describe('detectScoreInflation', () => {
+  it('flags a window where every score is >= 90', () => {
+    const warning = detectScoreInflation('coder', [92, 95, 91, 96, 90]);
+    expect(warning).toContain('Score inflation detected');
+    expect(warning).toContain('coder');
+    expect(warning).toContain('all >= 90');
+  });
+
+  it('returns undefined for a healthy distribution', () => {
+    expect(detectScoreInflation('coder', [70, 80, 85, 88, 82])).toBeUndefined();
+  });
+
+  it('returns undefined when the sample is below the minimum', () => {
+    expect(detectScoreInflation('coder', [95, 96, 98])).toBeUndefined();
+    // Boundary: exactly 4 high scores do not trigger either.
+    expect(detectScoreInflation('coder', [90, 90, 90, 90])).toBeUndefined();
+  });
+
+  it('flags exactly 5 scores at 90 (boundary)', () => {
+    const warning = detectScoreInflation('coder', [90, 90, 90, 90, 90]);
+    expect(warning).toContain('all >= 90');
+    expect(warning).toContain('last 5 scores');
+  });
+
+  it('flags a >= 90 average even when not every score is high', () => {
+    const warning = detectScoreInflation('coder', [95, 95, 95, 95, 80]);
+    expect(warning).toContain('average of the last 5 scores');
+    expect(warning).toContain('is >= 90');
+  });
+
+  it('considers only the last 10 scores', () => {
+    // Two low scores at the head fall outside the window; the last 10 are 95.
+    const scores = [50, 55, ...Array.from({ length: 10 }, () => 95)];
+    const warning = detectScoreInflation('coder', scores);
+    expect(warning).toContain('all >= 90');
+    expect(warning).toContain('last 10 scores');
+  });
+});
+
+describe('AgentProfileFileService', () => {
+  let tmpDir: string;
+  beforeEach(() => { tmpDir = mkTempDir(); });
+  afterEach(() => { cleanup(tmpDir); });
+
+  it('creates a parseable agent file for a valid input', async () => {
+    const svc = profileFileService(tmpDir);
+    const result = await svc.create({
+      name: 'code-reviewer',
+      description: 'Reviews code',
+      prompt: 'You review code.',
+      role: 'reviewer',
+      whenToUse: 'code review',
+      modelPreference: 'primary',
+      tools: ['Read', 'Grep'],
+      skills: ['commit'],
+      scope: 'user',
+    });
+    expect(result.created).toBe(true);
+    expect(result.path).toBe(path.join(tmpDir, 'agents', 'code-reviewer.md'));
+    expect(existsSync(result.path)).toBe(true);
+
+    const content = fs.readFileSync(result.path, 'utf8');
+    const def = parseAgentFileText({ path: result.path, source: 'user', text: content });
+    expect(def.name).toBe('code-reviewer');
+    expect(def.description).toBe('Reviews code');
+    expect(def.role).toBe('reviewer');
+    expect(def.whenToUse).toBe('code review');
+    expect(def.modelPreference).toBe('primary');
+    expect(def.tools).toEqual(['Read', 'Grep']);
+    expect(def.skills).toEqual(['commit']);
+    expect(def.prompt).toBe('You review code.');
+  });
+
+  it('refuses to overwrite an existing file', async () => {
+    const svc = profileFileService(tmpDir);
+    await svc.create({ name: 'dup', description: 'd', prompt: 'p' });
+    await expect(
+      svc.create({ name: 'dup', description: 'other', prompt: 'other' }),
+    ).rejects.toMatchObject({ code: 'already_exists' });
+    // The original file is untouched.
+    expect(fs.readFileSync(path.join(tmpDir, 'agents', 'dup.md'), 'utf8')).toContain(
+      "description: 'd'",
+    );
+  });
+
+  it('rejects non-kebab-case names without writing anything', async () => {
+    const svc = profileFileService(tmpDir);
+    await expect(
+      svc.create({ name: 'Bad_Name', description: 'd', prompt: 'p' }),
+    ).rejects.toMatchObject({ code: 'invalid_name' });
+    expect(existsSync(path.join(tmpDir, 'agents', 'Bad_Name.md'))).toBe(false);
+  });
+
+  it('removes an existing file and reports the deleted path', async () => {
+    const svc = profileFileService(tmpDir);
+    await svc.create({ name: 'old-hand', description: 'd', prompt: 'p' });
+    const result = await svc.remove('old-hand', 'user');
+    expect(result.removed).toBe(true);
+    expect(existsSync(result.path)).toBe(false);
+  });
+
+  it('silently skips removal when the file does not exist', async () => {
+    const svc = profileFileService(tmpDir);
+    const result = await svc.remove('ghost', 'user');
+    expect(result.removed).toBe(false);
+  });
+
+  it('updates frontmatter fields while preserving the body', async () => {
+    const svc = profileFileService(tmpDir);
+    await svc.create({
+      name: 'coder',
+      description: 'Coder',
+      prompt: 'Write code.',
+      modelPreference: 'primary',
+      tools: ['Read'],
+      role: 'coder',
+    });
+    const result = await svc.update('coder', 'user', {
+      modelPreference: 'secondary',
+      tools: ['Read', 'Bash'],
+      role: 'senior-coder',
+      skills: ['commit'],
+    });
+    expect(result.updated).toBe(true);
+
+    const content = fs.readFileSync(path.join(tmpDir, 'agents', 'coder.md'), 'utf8');
+    const def = parseAgentFileText({ path: result.path, source: 'user', text: content });
+    expect(def.modelPreference).toBe('secondary');
+    expect(def.tools).toEqual(['Read', 'Bash']);
+    expect(def.role).toBe('senior-coder');
+    expect(def.skills).toEqual(['commit']);
+    expect(def.prompt).toBe('Write code.'); // body preserved
   });
 });
 
