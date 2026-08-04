@@ -5,17 +5,21 @@
  * performance scores, runtime status, the concurrency pool) as a flat,
  * snake_case wire contract consumed by the Web TeamPanel:
  *
- *   GET    /teams/{session_id}/members                          data: { team_mode, members[] }
- *   POST   /teams/{session_id}/members                          body: hire      data: { ok, member }
+ *   GET    /teams/{session_id}/members                          data: { team_mode, global[], project[] }
+ *   POST   /teams/{session_id}/members                          body: hire(+scope)  data: { ok, member }
  *   DELETE /teams/{session_id}/members/{name}                   data: { ok }
  *   PUT    /teams/{session_id}/members/{name}                   body: patch     data: { ok, member }
  *   POST   /teams/{session_id}/members/{name}/score             body: score     data: { ok, warning? }
  *   POST   /teams/{session_id}/agents/{agent_id}/message        body: message   data: { ok }
  *   POST   /teams/{session_id}/concurrency                      body: limit?    data: { ok }
  *
- * Members come from the file-defined agent roster (`IAgentProfileFileService`),
- * read + parsed per file; hire / fire / update go through the same service
- * (single write channel shared with TeamHire/TeamFire). Score comes from
+ * Members are split by team scope: `global` = the user-level team
+ * (`~/.kimi-code/agents`), `project` = the session's project team
+ * (`<session cwd>/.kimi-code/agents`; missing project root → empty list).
+ * Profile files are read + parsed per file; `hire` takes an optional `scope`
+ * (`global` default, `project` writes to the session project root); fire /
+ * update match by name across scopes (project root first, then global —
+ * first-come-first-served on cross-scope name collisions). Score comes from
  * `IAgentPerformanceService` and status from `IRuntimeStatusService`; team mode
  * is read from the `[subagent]` config section.
  *
@@ -34,16 +38,26 @@ import {
   IAgentPerformanceService,
   IAgentPromptService,
   IAgentProfileFileService,
+  IBootstrapService,
   IConfigService,
   IHostFileSystem,
   IRuntimeStatusService,
+  ISessionContext,
   ISubagentPoolService,
   parseAgentFileText,
+  type AgentProfileCreateInput,
   type Scope,
   type RuntimeStatusEntry,
   type RuntimeStatusRaw,
 } from '@moonshot-ai/agent-core-v2';
+import {
+  AGENT_NAME_PATTERN,
+  renderFrontmatter,
+} from '@moonshot-ai/agent-core-v2/workspace/agentProfileFile/agentProfileFileService';
+import { parseFrontmatter } from '@moonshot-ai/agent-core-v2/_base/text/frontmatter';
 import { detectScoreInflation } from '@moonshot-ai/agent-core-v2/agent/tools/team-score/teamScoreTool';
+import { dump as dumpYaml } from 'js-yaml';
+import { join } from 'node:path';
 import { z } from 'zod';
 
 import { defineRoute } from '../middleware/defineRoute';
@@ -72,6 +86,8 @@ const hireBodySchema = z.object({
   skills: z.array(z.string()).optional(),
   duty: z.boolean().optional(),
   prompt: z.string().min(1),
+  /** Team scope: 'global' (user-level ~/.kimi-code/agents, default) or 'project' (session project root). */
+  scope: z.enum(['global', 'project']).optional(),
 });
 
 const updateBodySchema = z.object({
@@ -128,7 +144,8 @@ const membersResponseSchema = {
   type: 'object',
   properties: {
     team_mode: { type: 'boolean' },
-    members: { type: 'array', items: memberWireSchema },
+    global: { type: 'array', items: memberWireSchema },
+    project: { type: 'array', items: memberWireSchema },
   },
 } as const;
 
@@ -193,24 +210,32 @@ function sendProfileError(reply: FlatReply, err: unknown): void {
 }
 
 /**
- * Read + parse the first existing agent file for a profile across both scopes'
- * candidate paths (the file could live in a legacy directory). Returns
- * `undefined` when the profile is gone or unreadable.
+ * Scope roots. `global` = the user-level team (`~/.kimi-code/agents` via the
+ * server home + legacy os-home fallback); `project` = the session's project
+ * root (`<session cwd>/.kimi-code/agents`, using the live session's cwd — not
+ * the server process cwd). A missing project root simply yields an empty list.
  */
-async function readMemberFile(
-  profileFile: IAgentProfileFileService,
+type MemberScope = 'global' | 'project';
+
+function memberRoots(core: Scope, sessionCwd: string, scope: MemberScope): string[] {
+  const bootstrap = core.accessor.get(IBootstrapService);
+  return scope === 'global'
+    ? [join(bootstrap.homeDir, 'agents'), join(bootstrap.osHomeDir, '.kimi-code', 'agents')]
+    : [join(sessionCwd, '.kimi-code', 'agents')];
+}
+
+/** Read + parse the first existing `<name>.md` under `roots`. */
+async function readMemberDef(
   hostFs: IHostFileSystem,
+  roots: readonly string[],
   name: string,
 ): Promise<ReturnType<typeof parseAgentFileText> | undefined> {
-  const candidates = [
-    ...profileFile.resolveCandidatePaths(name, 'user'),
-    ...profileFile.resolveCandidatePaths(name, 'project'),
-  ];
-  for (const path of candidates) {
+  for (const root of roots) {
+    const path = join(root, `${name}.md`);
     try {
       return parseAgentFileText({ path, source: 'user', text: await hostFs.readText(path) });
     } catch {
-      // not present here or malformed — try the next candidate
+      // not present here or malformed — try the next root
     }
   }
   return undefined;
@@ -237,13 +262,13 @@ function memberStatus(entry: RuntimeStatusEntry | undefined, now: number = Date.
 }
 
 async function buildMemberWire(
-  profileFile: IAgentProfileFileService,
   hostFs: IHostFileSystem,
   perf: IAgentPerformanceService,
   statuses: RuntimeStatusRaw,
+  roots: readonly string[],
   name: string,
 ): Promise<TeamMemberWire | undefined> {
-  const def = await readMemberFile(profileFile, hostFs, name);
+  const def = await readMemberDef(hostFs, roots, name);
   if (def === undefined) return undefined;
   const summary = await perf.summary(def.name);
   const entry = statuses[def.name];
@@ -262,8 +287,176 @@ async function buildMemberWire(
   };
 }
 
+/** Member names (basename without `.md`) present under `roots` (missing dir → []). */
+async function listMemberNames(hostFs: IHostFileSystem, roots: readonly string[]): Promise<Set<string>> {
+  const names = new Set<string>();
+  for (const root of roots) {
+    try {
+      for (const entry of await hostFs.readdir(root)) {
+        if (entry.isFile && /\.md$/.test(entry.name)) names.add(entry.name.slice(0, -3));
+      }
+    } catch {
+      // directory inaccessible — skip
+    }
+  }
+  return names;
+}
+
+async function listMembersInScope(
+  hostFs: IHostFileSystem,
+  perf: IAgentPerformanceService,
+  statuses: RuntimeStatusRaw,
+  roots: readonly string[],
+): Promise<TeamMemberWire[]> {
+  const members: TeamMemberWire[] = [];
+  for (const name of await listMemberNames(hostFs, roots)) {
+    const member = await buildMemberWire(hostFs, perf, statuses, roots, name);
+    if (member !== undefined) members.push(member);
+  }
+  return members;
+}
+
+/** First existing `<name>.md` path across `roots`, in order. */
+async function findMemberFile(
+  hostFs: IHostFileSystem,
+  roots: readonly string[],
+  name: string,
+): Promise<string | undefined> {
+  for (const root of roots) {
+    const path = join(root, `${name}.md`);
+    try {
+      await hostFs.stat(path);
+      return path;
+    } catch {
+      // missing — try next
+    }
+  }
+  return undefined;
+}
+
+function hireCreateInput(body: z.infer<typeof hireBodySchema>): AgentProfileCreateInput {
+  return {
+    name: body.name,
+    role: body.role,
+    description: body.description,
+    whenToUse: body.when_to_use,
+    modelPreference: body.model,
+    tools: body.tools,
+    skills: body.skills,
+    duty: body.duty,
+    prompt: body.prompt,
+    scope: 'user',
+  };
+}
+
+/**
+ * Route-side project hire: `IAgentProfileFileService` resolves the project
+ * root from the server bootstrap cwd, but the API's project scope is the live
+ * session's cwd — so the Web write path renders the frontmatter itself (same
+ * serializer the engine uses) and writes atomically via `IHostFileSystem`.
+ */
+async function hireProjectMember(
+  hostFs: IHostFileSystem,
+  sessionCwd: string,
+  body: z.infer<typeof hireBodySchema>,
+): Promise<string> {
+  const name = body.name;
+  if (!AGENT_NAME_PATTERN.test(name)) {
+    throw new AgentProfileFileError(
+      'invalid_name',
+      `Invalid agent name "${name}": must be kebab-case (e.g. "code-reviewer") — lowercase letters, digits and hyphens only; no underscores or capitals`,
+    );
+  }
+  const root = join(sessionCwd, '.kimi-code', 'agents');
+  const path = join(root, `${name}.md`);
+  try {
+    await hostFs.mkdir(root, { recursive: true });
+  } catch (error) {
+    throw new AgentProfileFileError('io', `Failed to create directory ${root}: ${errorMessage(error)}`, root);
+  }
+  const content = renderFrontmatter(hireCreateInput(body)) + '\n\n' + body.prompt;
+  let created: boolean;
+  try {
+    created = await hostFs.createExclusive(path, new TextEncoder().encode(content));
+  } catch (error) {
+    throw new AgentProfileFileError('io', `Failed to write ${path}: ${errorMessage(error)}`, path);
+  }
+  if (!created) {
+    throw new AgentProfileFileError(
+      'already_exists',
+      `Agent "${name}" already exists at ${path} — cannot overwrite. Fire it first with TeamFire before re-hiring.`,
+      path,
+    );
+  }
+  return path;
+}
+
+/** Frontmatter key each patch field maps to (mirrors the engine's update). */
+type MemberPatch = {
+  modelPreference?: string;
+  tools?: string[];
+  skills?: string[];
+  role?: string;
+  description?: string;
+  whenToUse?: string;
+};
+
+const PATCH_KEY_TO_FRONTMATTER: Record<keyof MemberPatch, string> = {
+  modelPreference: 'model_preference',
+  tools: 'tools',
+  skills: 'skills',
+  role: 'role',
+  description: 'description',
+  whenToUse: 'whenToUse',
+};
+
+/**
+ * Route-side project-member update: read → patch frontmatter → re-serialize
+ * (js-yaml dump) → write back, preserving the body and unknown fields. Only
+ * used when the member file lives under the session project root — global
+ * members update through `IAgentProfileFileService`.
+ */
+async function updateMemberFile(
+  hostFs: IHostFileSystem,
+  path: string,
+  name: string,
+  patch: MemberPatch,
+): Promise<void> {
+  let text: string;
+  try {
+    text = await hostFs.readText(path);
+  } catch {
+    throw new AgentProfileFileError('not_found', `Agent profile "${name}" not found at ${path}`, path);
+  }
+  const parsed = parseFrontmatter(text);
+  if (parsed.data === null || typeof parsed.data !== 'object' || Array.isArray(parsed.data)) {
+    throw new AgentProfileFileError('io', `Agent profile "${name}" has no frontmatter to update at ${path}`, path);
+  }
+  const data = parsed.data as Record<string, unknown>;
+  for (const key of Object.keys(patch) as Array<keyof MemberPatch>) {
+    const value = patch[key];
+    const frontmatterKey = PATCH_KEY_TO_FRONTMATTER[key];
+    if (value === undefined) {
+      delete data[frontmatterKey];
+    } else {
+      data[frontmatterKey] = value;
+    }
+  }
+  const body = parsed.body.replace(/^\n+/, '');
+  const content = `---\n${dumpYaml(data)}\n---\n\n${body}`;
+  try {
+    await hostFs.writeText(path, content);
+  } catch (error) {
+    throw new AgentProfileFileError('io', `Failed to write ${path}: ${errorMessage(error)}`, path);
+  }
+}
+
 function teamMode(core: Scope): boolean {
   return core.accessor.get(IConfigService).get<{ teamMode?: boolean }>('subagent')?.teamMode ?? false;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 // ---------------------------------------------------------------------------
@@ -315,25 +508,26 @@ export function registerTeamsRoutes(app: TeamsRouteHost, core: Scope): void {
         sendError(reply as unknown as FlatReply, 404, `session ${session_id} not found`);
         return;
       }
-      const profileFile = session.accessor.get(IAgentProfileFileService);
+      const sessionCwd = session.accessor.get(ISessionContext).cwd;
       const hostFs = core.accessor.get(IHostFileSystem);
       const perf = core.accessor.get(IAgentPerformanceService);
       const statuses = await core.accessor.get(IRuntimeStatusService).list();
-      const listedNames = await profileFile.list();
-      const members: TeamMemberWire[] = [];
-      for (const name of listedNames) {
-        const member = await buildMemberWire(profileFile, hostFs, perf, statuses, name);
-        if (member !== undefined) members.push(member);
-      }
+      const globalRoots = memberRoots(core, sessionCwd, 'global');
+      const projectRoots = memberRoots(core, sessionCwd, 'project');
+      const global = await listMembersInScope(hostFs, perf, statuses, globalRoots);
+      const project = await listMembersInScope(hostFs, perf, statuses, projectRoots);
       // Archived (fired) members: performance history but no profile file →
-      // listed as `off-duty`, same as the TUI panel's dimmed archive rows.
-      const listed = new Set(listedNames);
+      // listed as `off-duty` in the global team, same as the TUI's dimmed
+      // archive rows. Perf history is per-profile and scope-independent.
+      const globalNames = await listMemberNames(hostFs, globalRoots);
+      const projectNames = await listMemberNames(hostFs, projectRoots);
+      const listed = new Set([...globalNames, ...projectNames]);
       for (const entry of await perf.list()) {
         if (listed.has(entry.profileName)) continue;
         // A profile with neither score entries nor shifts carries no history —
         // not a member (TUI parity).
         if (entry.summary.count === 0 && entry.summary.avgDurationMs === undefined) continue;
-        members.push({
+        global.push({
           name: entry.profileName,
           description: '',
           tools: [],
@@ -341,7 +535,7 @@ export function registerTeamsRoutes(app: TeamsRouteHost, core: Scope): void {
           score: { average: entry.summary.average ?? null, count: entry.summary.count },
         });
       }
-      reply.send({ team_mode: teamMode(core), members });
+      reply.send({ team_mode: teamMode(core), global, project });
     },
   );
   app.get(listRoute.path, listRoute.options, listRoute.handler as never);
@@ -365,25 +559,21 @@ export function registerTeamsRoutes(app: TeamsRouteHost, core: Scope): void {
         sendError(reply as unknown as FlatReply, 404, `session ${session_id} not found`);
         return;
       }
-      const profileFile = session.accessor.get(IAgentProfileFileService);
+      const scope = body.scope ?? 'global';
+      const hostFs = core.accessor.get(IHostFileSystem);
+      const sessionCwd = session.accessor.get(ISessionContext).cwd;
       try {
-        await profileFile.create({
-          name: body.name,
-          role: body.role,
-          description: body.description,
-          whenToUse: body.when_to_use,
-          modelPreference: body.model,
-          tools: body.tools,
-          skills: body.skills,
-          duty: body.duty,
-          prompt: body.prompt,
-          scope: 'user',
-        });
+        if (scope === 'project') {
+          await hireProjectMember(hostFs, sessionCwd, body);
+        } else {
+          await session.accessor.get(IAgentProfileFileService).create(hireCreateInput(body));
+        }
+        const roots = memberRoots(core, sessionCwd, scope);
         const member = await buildMemberWire(
-          profileFile,
-          core.accessor.get(IHostFileSystem),
+          hostFs,
           core.accessor.get(IAgentPerformanceService),
           await core.accessor.get(IRuntimeStatusService).list(),
+          roots,
           body.name,
         );
         reply.send({ ok: true, member });
@@ -411,8 +601,16 @@ export function registerTeamsRoutes(app: TeamsRouteHost, core: Scope): void {
         sendError(reply as unknown as FlatReply, 404, `session ${session_id} not found`);
         return;
       }
+      const sessionCwd = session.accessor.get(ISessionContext).cwd;
+      const hostFs = core.accessor.get(IHostFileSystem);
       try {
-        await session.accessor.get(IAgentProfileFileService).remove(name, 'user');
+        // Match by name across scopes (project root first, then global —
+        // first-come-first-served on cross-scope name collisions).
+        const roots = [...memberRoots(core, sessionCwd, 'project'), ...memberRoots(core, sessionCwd, 'global')];
+        const path = await findMemberFile(hostFs, roots, name);
+        if (path !== undefined) {
+          await hostFs.remove(path);
+        }
         reply.send({ ok: true });
       } catch (err) {
         sendProfileError(reply as unknown as FlatReply, err);
@@ -440,24 +638,35 @@ export function registerTeamsRoutes(app: TeamsRouteHost, core: Scope): void {
         sendError(reply as unknown as FlatReply, 404, `session ${session_id} not found`);
         return;
       }
-      const profileFile = session.accessor.get(IAgentProfileFileService);
       // Only the fields actually present in the body are patched — omitted
-      // fields stay untouched (the service deletes a field only when the patch
-      // key is present with an `undefined` value, which we never send here).
-      const patch: { modelPreference?: string; tools?: string[]; skills?: string[]; role?: string; description?: string; whenToUse?: string } = {};
+      // fields stay untouched.
+      const patch: MemberPatch = {};
       if (body.model !== undefined) patch.modelPreference = body.model;
       if (body.tools !== undefined) patch.tools = body.tools;
       if (body.skills !== undefined) patch.skills = body.skills;
       if (body.role !== undefined) patch.role = body.role;
       if (body.description !== undefined) patch.description = body.description;
       if (body.when_to_use !== undefined) patch.whenToUse = body.when_to_use;
+      const sessionCwd = session.accessor.get(ISessionContext).cwd;
+      const hostFs = core.accessor.get(IHostFileSystem);
       try {
-        await profileFile.update(name, 'user', patch);
+        // Match by name across scopes (project root first, then global).
+        const projectRoots = memberRoots(core, sessionCwd, 'project');
+        const globalRoots = memberRoots(core, sessionCwd, 'global');
+        const path = await findMemberFile(hostFs, [...projectRoots, ...globalRoots], name);
+        if (path === undefined) {
+          throw new AgentProfileFileError('not_found', `Agent profile "${name}" not found`);
+        }
+        if (projectRoots.some((root) => path.startsWith(root))) {
+          await updateMemberFile(hostFs, path, name, patch);
+        } else {
+          await session.accessor.get(IAgentProfileFileService).update(name, 'user', patch);
+        }
         const member = await buildMemberWire(
-          profileFile,
-          core.accessor.get(IHostFileSystem),
+          hostFs,
           core.accessor.get(IAgentPerformanceService),
           await core.accessor.get(IRuntimeStatusService).list(),
+          [...globalRoots, ...projectRoots],
           name,
         );
         reply.send({ ok: true, member });

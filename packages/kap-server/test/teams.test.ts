@@ -9,7 +9,7 @@
  * member agent), and concurrency.
  */
 
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -41,7 +41,8 @@ interface MemberWire {
 
 interface MembersBody {
   team_mode: boolean;
-  members: MemberWire[];
+  global: MemberWire[];
+  project: MemberWire[];
 }
 
 interface OkBody<T = unknown> {
@@ -103,14 +104,24 @@ describe('server-v2 /api/v1/teams/{session_id}', () => {
   });
 
   async function createSession(): Promise<string> {
+    // The session cwd is the project root: use a dedicated `<home>/project` so
+    // the project team root (`<home>/project/.kimi-code/agents`) stays distinct
+    // from the global roots (`<home>/agents`, `<home>/.kimi-code/agents`).
+    await mkdir(join(home as string, 'project'), { recursive: true });
     const res = await fetch(`${base}/api/v1/sessions`, {
       method: 'POST',
       headers: authHeaders(server as RunningServer, { 'content-type': 'application/json' }),
-      body: JSON.stringify({ metadata: { cwd: home } }),
+      body: JSON.stringify({ metadata: { cwd: join(home as string, 'project') } }),
     } as never);
     const body = (await res.json()) as { code: number; data: { id: string } };
     expect(body.code).toBe(0);
     return body.data.id;
+  }
+
+  /** All members across both scopes, for status/archive lookups. */
+  function allMembers(body: unknown): MemberWire[] {
+    const m = body as MembersBody;
+    return [...m.global, ...m.project];
   }
 
   async function teamFetch(
@@ -132,10 +143,11 @@ describe('server-v2 /api/v1/teams/{session_id}', () => {
     const { status, body } = await teamFetch(`/api/v1/teams/${id}/members`);
     expect(status).toBe(200);
     expect(body['team_mode']).toBe(false);
-    expect((body as unknown as MembersBody).members).toEqual([]);
+    expect((body as unknown as MembersBody).global).toEqual([]);
+    expect((body as unknown as MembersBody).project).toEqual([]);
   });
 
-  it('hires a member and lists it with parsed frontmatter', async () => {
+  it('hires a member and lists it in the global team with parsed frontmatter', async () => {
     const id = await createSession();
     const hire = await teamFetch(`/api/v1/teams/${id}/members`, {
       method: 'POST',
@@ -167,9 +179,27 @@ describe('server-v2 /api/v1/teams/{session_id}', () => {
     });
 
     const list = await teamFetch(`/api/v1/teams/${id}/members`);
-    const members = (list.body as unknown as MembersBody).members;
-    expect(members).toHaveLength(1);
-    expect(members[0]!.name).toBe('code-reviewer');
+    const members = list.body as unknown as MembersBody;
+    expect(members.global).toHaveLength(1);
+    expect(members.global[0]!.name).toBe('code-reviewer');
+    expect(members.project).toEqual([]);
+  });
+
+  it('hires a member into the project team when scope=project', async () => {
+    const id = await createSession();
+    const hire = await teamFetch(`/api/v1/teams/${id}/members`, {
+      method: 'POST',
+      body: { name: 'proj-dev', description: 'Project dev', prompt: 'Do project work.', scope: 'project' },
+    });
+    expect(hire.status).toBe(200);
+    expect(hire.body.ok).toBe(true);
+
+    const list = await teamFetch(`/api/v1/teams/${id}/members`);
+    const members = list.body as unknown as MembersBody;
+    expect(members.project).toHaveLength(1);
+    expect(members.project[0]!.name).toBe('proj-dev');
+    // The global team stays empty — scope is respected.
+    expect(members.global).toEqual([]);
   });
 
   it('rejects a duplicate hire without overwriting (409)', async () => {
@@ -207,7 +237,9 @@ describe('server-v2 /api/v1/teams/{session_id}', () => {
     expect(fire.body.ok).toBe(true);
 
     const list = await teamFetch(`/api/v1/teams/${id}/members`);
-    expect((list.body as unknown as MembersBody).members).toEqual([]);
+    const members = list.body as unknown as MembersBody;
+    expect(members.global).toEqual([]);
+    expect(members.project).toEqual([]);
   });
 
   it('maps member status to the TUI four-state semantics (working/resting/on-duty)', async () => {
@@ -221,22 +253,22 @@ describe('server-v2 /api/v1/teams/{session_id}', () => {
     const status = live!.accessor.get(IRuntimeStatusService);
 
     // Default (no live engine entry) → on-duty.
-    let members = ((await teamFetch(`/api/v1/teams/${id}/members`)).body as unknown as MembersBody).members;
+    let members = allMembers((await teamFetch(`/api/v1/teams/${id}/members`)).body);
     expect(members.find((m) => m.name === 'duty-cycle')?.status).toBe('on-duty');
 
     // Working.
     await status.markWorking('duty-cycle', 'agent-1');
-    members = ((await teamFetch(`/api/v1/teams/${id}/members`)).body as unknown as MembersBody).members;
+    members = allMembers((await teamFetch(`/api/v1/teams/${id}/members`)).body);
     expect(members.find((m) => m.name === 'duty-cycle')?.status).toBe('working');
 
     // Resting with a live rest window → resting.
     await status.markResting('duty-cycle', 'agent-1', new Date(Date.now() + 60_000).toISOString());
-    members = ((await teamFetch(`/api/v1/teams/${id}/members`)).body as unknown as MembersBody).members;
+    members = allMembers((await teamFetch(`/api/v1/teams/${id}/members`)).body);
     expect(members.find((m) => m.name === 'duty-cycle')?.status).toBe('resting');
 
     // Resting with an expired rest window → on-duty (TUI treats expired as on-duty).
     await status.markResting('duty-cycle', 'agent-1', new Date(Date.now() - 1_000).toISOString());
-    members = ((await teamFetch(`/api/v1/teams/${id}/members`)).body as unknown as MembersBody).members;
+    members = allMembers((await teamFetch(`/api/v1/teams/${id}/members`)).body);
     expect(members.find((m) => m.name === 'duty-cycle')?.status).toBe('on-duty');
   });
 
@@ -253,7 +285,7 @@ describe('server-v2 /api/v1/teams/{session_id}', () => {
     const fire = await teamFetch(`/api/v1/teams/${id}/members/archive-me`, { method: 'DELETE' });
     expect(fire.status).toBe(200);
 
-    const members = ((await teamFetch(`/api/v1/teams/${id}/members`)).body as unknown as MembersBody).members;
+    const members = allMembers((await teamFetch(`/api/v1/teams/${id}/members`)).body);
     const archived = members.find((m) => m.name === 'archive-me');
     expect(archived).toBeDefined();
     expect(archived!.status).toBe('off-duty');
