@@ -455,9 +455,13 @@ export interface WireTeamMember {
   };
 }
 
+/** GET /teams/{session_id}/members — members grouped by scope: user-level
+ *  ("global", lives in ~/.kimi-code/agents) and project-level ("project",
+ *  lives in <cwd>/.kimi-code/agents). */
 export interface WireTeamMembersResponse {
   team_mode: boolean;
-  members: WireTeamMember[];
+  global: WireTeamMember[];
+  project: WireTeamMember[];
 }
 
 /** Mutation endpoints return an action result. `ok` may be absent on success

@@ -28,6 +28,7 @@ import Field from '../ui/Field.vue';
 import Input from '../ui/Input.vue';
 import Textarea from '../ui/Textarea.vue';
 import Switch from '../ui/Switch.vue';
+import Select from '../ui/Select.vue';
 import EmptyState from '../ui/EmptyState.vue';
 import Spinner from '../ui/Spinner.vue';
 
@@ -50,7 +51,8 @@ const open = ref(true);
 // ---------------------------------------------------------------------------
 // Roster state + polling
 // ---------------------------------------------------------------------------
-const members = ref<AppTeamMember[]>([]);
+const globalMembers = ref<AppTeamMember[]>([]);
+const projectMembers = ref<AppTeamMember[]>([]);
 const teamMode = ref(false);
 const loading = ref(true);
 /** Persistent first-load failure (e.g. the backend route isn't shipped yet).
@@ -76,12 +78,15 @@ async function refresh(): Promise<void> {
   pollInFlight = true;
   try {
     const data = await api.getTeamMembers(props.sessionId);
-    members.value = data.members;
+    globalMembers.value = data.global;
+    projectMembers.value = data.project;
     teamMode.value = data.teamMode;
     loadError.value = null;
   } catch (err) {
     // Keep the last-known roster; surface the error only when nothing is shown.
-    if (members.value.length === 0) loadError.value = errorMessage(err);
+    if (globalMembers.value.length === 0 && projectMembers.value.length === 0) {
+      loadError.value = errorMessage(err);
+    }
   } finally {
     pollInFlight = false;
     loading.value = false;
@@ -100,8 +105,39 @@ onUnmounted(() => {
 // ---------------------------------------------------------------------------
 // Roster derivations (pure helpers from lib/teamRows)
 // ---------------------------------------------------------------------------
-const rows = computed(() => sortTeamMembers(members.value));
-const summary = computed(() => summarizeTeam(members.value));
+// Dual-scope aggregation happens HERE (component side), one section at a time;
+// the pure helpers in lib/teamRows keep their single-array semantics so the
+// unit tests stay meaningful. The overall summary is the sum of the two.
+const globalRows = computed(() => sortTeamMembers(globalMembers.value));
+const projectRows = computed(() => sortTeamMembers(projectMembers.value));
+const summaryGlobal = computed(() => summarizeTeam(globalMembers.value));
+const summaryProject = computed(() => summarizeTeam(projectMembers.value));
+const summary = computed(() => ({
+  total: summaryGlobal.value.total + summaryProject.value.total,
+  working: summaryGlobal.value.working + summaryProject.value.working,
+  onDuty: summaryGlobal.value.onDuty + summaryProject.value.onDuty,
+  resting: summaryGlobal.value.resting + summaryProject.value.resting,
+  offDuty: summaryGlobal.value.offDuty + summaryProject.value.offDuty,
+}));
+
+/** The two roster sections rendered by the panel — title/path resolved via
+ *  i18n keys in the template (keeps `t()` reactive and this computed pure). */
+const sections = computed(() => [
+  {
+    key: 'global',
+    titleKey: 'globalTeam',
+    pathKey: 'globalScopePath',
+    rows: globalRows.value,
+    summary: summaryGlobal.value,
+  },
+  {
+    key: 'project',
+    titleKey: 'projectTeam',
+    pathKey: 'projectScopePath',
+    rows: projectRows.value,
+    summary: summaryProject.value,
+  },
+]);
 
 function scoreLabel(member: AppTeamMember): string | null {
   return averageScoreLabel(member.score);
@@ -236,6 +272,7 @@ const hireForm = ref({
   skills: '',
   duty: false,
   prompt: '',
+  scope: 'user' as 'user' | 'project',
 });
 
 function openHire(): void {
@@ -249,6 +286,7 @@ function openHire(): void {
     skills: '',
     duty: false,
     prompt: '',
+    scope: 'user',
   };
   actionError.value = null;
   notice.value = null;
@@ -280,6 +318,7 @@ async function submitHire(): Promise<void> {
       skills: skills.length > 0 ? skills : undefined,
       duty: f.duty,
       prompt: f.prompt,
+      scope: f.scope,
     });
     view.value = { kind: 'roster' };
     await refresh();
@@ -491,96 +530,118 @@ async function submitMessage(): Promise<void> {
           <EmptyState :title="t('team.loadFailed', { error: loadError })" />
         </div>
 
-        <div v-else-if="rows.length === 0" class="tp-empty">
+        <div v-else-if="summary.total === 0" class="tp-empty">
           <EmptyState :title="t('team.empty')" :hint="t('team.emptyHint')" />
         </div>
 
-        <div v-else class="tp-list">
-          <Card v-for="member in rows" :key="member.name" class="tp-card">
-            <template #head>
-              <div class="tp-card-head">
-                <span class="tp-name" :title="member.name">{{ member.name }}</span>
-                <Badge
-                  :variant="teamStatusMeta(member.status).variant"
-                  size="sm"
-                  dot
-                >{{ t('team.status.' + member.status) }}</Badge>
-                <Badge v-if="member.duty" variant="warning" size="sm">{{ t('team.dutyBadge') }}</Badge>
-                <span class="tp-spacer" />
-                <IconButton
-                  size="sm"
-                  :label="t('team.message')"
-                  :disabled="busy"
-                  @click="openMessage(member)"
-                >
-                  <Icon name="message" size="md" />
-                </IconButton>
-                <IconButton
-                  size="sm"
-                  :label="t('team.model')"
-                  :disabled="busy"
-                  @click="openModel(member)"
-                >
-                  <Icon name="pencil" size="md" />
-                </IconButton>
-                <IconButton
-                  size="sm"
-                  :label="t('team.score')"
-                  :disabled="busy"
-                  @click="openScore(member)"
-                >
-                  <Icon name="star" size="md" />
-                </IconButton>
-              </div>
-            </template>
-
-            <div class="tp-card-body">
-              <div class="tp-meta">
-                <span class="tp-role">{{ member.role }}</span>
-                <span class="tp-model">{{ member.model }}</span>
-                <Badge v-if="scoreLabel(member)" size="sm" variant="neutral" class="tp-score">
-                  <Icon name="star" size="sm" />
-                  {{ scoreLabel(member) }}
-                </Badge>
-                <span v-else class="tp-score-none">{{ t('team.scoreNone') }}</span>
-              </div>
-              <div v-if="member.whenToUse" class="tp-line">
-                <span class="tp-k">{{ t('team.whenToUse') }}</span>
-                <span class="tp-v">{{ member.whenToUse }}</span>
-              </div>
-              <div v-if="member.description" class="tp-line">
-                <span class="tp-k">{{ t('team.descriptionLabel') }}</span>
-                <span class="tp-v">{{ member.description }}</span>
-              </div>
-              <div v-if="member.tools.length > 0" class="tp-line">
-                <span class="tp-k">{{ t('team.tools') }}</span>
-                <span class="tp-v tp-tools">{{ member.tools.join(', ') }}</span>
-              </div>
-
-              <div class="tp-fire">
-                <template v-if="confirmingFire === member.name">
-                  <span class="tp-fire-text">
-                    {{ t('team.fireConfirm', { name: member.name }) }}
-                  </span>
-                  <Button size="sm" variant="danger" :disabled="busy" @click="doFire(member.name)">
-                    {{ t('team.fire') }}
-                  </Button>
-                  <Button size="sm" variant="ghost" :disabled="busy" @click="confirmingFire = null">
-                    {{ t('team.cancel') }}
-                  </Button>
-                </template>
-                <Button
-                  v-else
-                  size="sm"
-                  variant="danger-soft"
-                  :disabled="busy"
-                  @click="confirmingFire = member.name"
-                >
-                  {{ t('team.fire') }}
-                </Button>
-              </div>
+        <div v-else class="tp-roster">
+          <section
+            v-for="sec in sections"
+            :key="sec.key"
+            class="tp-scope"
+            :data-scope="sec.key"
+          >
+            <header class="tp-scope-head">
+              <span class="tp-scope-title">{{ t('team.' + sec.titleKey) }}</span>
+              <span class="tp-scope-count">{{ t('team.membersCount', { count: sec.summary.total }) }}</span>
+              <span class="tp-spacer" />
+              <span class="tp-scope-path">{{ t('team.' + sec.pathKey) }}</span>
+            </header>
+            <div v-if="sec.rows.length === 0" class="tp-scope-empty">
+              {{ t('team.noMembers') }}
             </div>
-          </Card>
+            <div v-else class="tp-list">
+              <Card
+                v-for="member in sec.rows"
+                :key="`${sec.key}-${member.name}`"
+                class="tp-card"
+              >
+                <template #head>
+                  <div class="tp-card-head">
+                    <span class="tp-name" :title="member.name">{{ member.name }}</span>
+                    <Badge
+                      :variant="teamStatusMeta(member.status).variant"
+                      size="sm"
+                      dot
+                    >{{ t('team.status.' + member.status) }}</Badge>
+                    <Badge v-if="member.duty" variant="warning" size="sm">{{ t('team.dutyBadge') }}</Badge>
+                    <span class="tp-spacer" />
+                    <IconButton
+                      size="sm"
+                      :label="t('team.message')"
+                      :disabled="busy"
+                      @click="openMessage(member)"
+                    >
+                      <Icon name="message" size="md" />
+                    </IconButton>
+                    <IconButton
+                      size="sm"
+                      :label="t('team.model')"
+                      :disabled="busy"
+                      @click="openModel(member)"
+                    >
+                      <Icon name="pencil" size="md" />
+                    </IconButton>
+                    <IconButton
+                      size="sm"
+                      :label="t('team.score')"
+                      :disabled="busy"
+                      @click="openScore(member)"
+                    >
+                      <Icon name="star" size="md" />
+                    </IconButton>
+                  </div>
+                </template>
+
+                <div class="tp-card-body">
+                  <div class="tp-meta">
+                    <span class="tp-role">{{ member.role }}</span>
+                    <span class="tp-model">{{ member.model }}</span>
+                    <Badge v-if="scoreLabel(member)" size="sm" variant="neutral" class="tp-score">
+                      <Icon name="star" size="sm" />
+                      {{ scoreLabel(member) }}
+                    </Badge>
+                    <span v-else class="tp-score-none">{{ t('team.scoreNone') }}</span>
+                  </div>
+                  <div v-if="member.whenToUse" class="tp-line">
+                    <span class="tp-k">{{ t('team.whenToUse') }}</span>
+                    <span class="tp-v">{{ member.whenToUse }}</span>
+                  </div>
+                  <div v-if="member.description" class="tp-line">
+                    <span class="tp-k">{{ t('team.descriptionLabel') }}</span>
+                    <span class="tp-v">{{ member.description }}</span>
+                  </div>
+                  <div v-if="member.tools.length > 0" class="tp-line">
+                    <span class="tp-k">{{ t('team.tools') }}</span>
+                    <span class="tp-v tp-tools">{{ member.tools.join(', ') }}</span>
+                  </div>
+
+                  <div class="tp-fire">
+                    <template v-if="confirmingFire === member.name">
+                      <span class="tp-fire-text">
+                        {{ t('team.fireConfirm', { name: member.name }) }}
+                      </span>
+                      <Button size="sm" variant="danger" :disabled="busy" @click="doFire(member.name)">
+                        {{ t('team.fire') }}
+                      </Button>
+                      <Button size="sm" variant="ghost" :disabled="busy" @click="confirmingFire = null">
+                        {{ t('team.cancel') }}
+                      </Button>
+                    </template>
+                    <Button
+                      v-else
+                      size="sm"
+                      variant="danger-soft"
+                      :disabled="busy"
+                      @click="confirmingFire = member.name"
+                    >
+                      {{ t('team.fire') }}
+                    </Button>
+                  </div>
+                </div>
+              </Card>
+            </div>
+          </section>
         </div>
       </template>
 
@@ -599,6 +660,12 @@ async function submitMessage(): Promise<void> {
           </Field>
           <Field :label="t('team.hireWhenToUse')">
             <Textarea v-model="hireForm.whenToUse" :rows="2" />
+          </Field>
+          <Field :label="t('team.scopeLabel')" :hint="t('team.scopeHint')">
+            <Select v-model="hireForm.scope">
+              <option value="user">{{ t('team.scopeGlobal') }}</option>
+              <option value="project">{{ t('team.scopeProject') }}</option>
+            </Select>
           </Field>
           <Field :label="t('team.hireModel')" :hint="t('team.optional')">
             <Input v-model="hireForm.model" />
@@ -789,11 +856,60 @@ async function submitMessage(): Promise<void> {
 }
 .tp-empty { padding: var(--space-2) 0; }
 
+.tp-roster {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-1) 0 var(--space-2);
+}
+.tp-scope {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.tp-scope-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  padding-bottom: var(--space-1);
+  border-bottom: 1px solid var(--color-line);
+}
+.tp-scope-title {
+  flex: none;
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  color: var(--color-text);
+}
+.tp-scope-count {
+  flex: none;
+  font-size: var(--text-xs);
+  color: var(--color-text-faint);
+}
+.tp-scope-path {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tp-scope-empty {
+  padding: var(--space-3);
+  border: 1px dashed var(--color-line-strong);
+  border-radius: var(--radius-md);
+  color: var(--color-text-faint);
+  font-size: var(--text-sm);
+  text-align: center;
+}
+
 .tp-list {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  padding: var(--space-2) 0 var(--space-1);
 }
 .tp-card { flex: none; }
 .tp-card-head {

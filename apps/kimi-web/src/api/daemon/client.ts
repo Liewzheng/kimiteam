@@ -1309,7 +1309,8 @@ export class DaemonKimiWebApi implements KimiWebApi {
     );
     return {
       teamMode: data.team_mode,
-      members: (data.members ?? []).map(toAppTeamMember),
+      global: (data.global ?? []).map(toAppTeamMember),
+      project: (data.project ?? []).map(toAppTeamMember),
     };
   }
 
@@ -1325,6 +1326,7 @@ export class DaemonKimiWebApi implements KimiWebApi {
       skills?: string[];
       duty?: boolean;
       prompt: string;
+      scope?: 'user' | 'project';
     },
   ): Promise<AppTeamMember> {
     const body: Record<string, unknown> = {
@@ -1338,6 +1340,7 @@ export class DaemonKimiWebApi implements KimiWebApi {
     if (input.tools !== undefined) body['tools'] = input.tools;
     if (input.skills !== undefined) body['skills'] = input.skills;
     if (input.duty !== undefined) body['duty'] = input.duty;
+    if (input.scope !== undefined) body['scope'] = input.scope;
     const data = await this.http.post<WireTeamMember>(
       `/teams/${encodeURIComponent(sessionId)}/members`,
       body,

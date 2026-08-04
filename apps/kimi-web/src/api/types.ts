@@ -710,7 +710,10 @@ export interface AppTeamMember {
 
 export interface AppTeamMembers {
   teamMode: boolean;
-  members: AppTeamMember[];
+  /** User-level roster (~/.kimi-code/agents). */
+  global: AppTeamMember[];
+  /** Project-level roster (<cwd>/.kimi-code/agents). */
+  project: AppTeamMember[];
 }
 
 /** Mutation endpoints return an action result; `warning` carries the optional
@@ -834,6 +837,9 @@ export interface KimiWebApi {
     skills?: string[];
     duty?: boolean;
     prompt: string;
+    /** Target roster scope — 'user' = global (~/.kimi-code/agents),
+     *  'project' = <cwd>/.kimi-code/agents. Omitted ⇒ daemon defaults to 'user'. */
+    scope?: 'user' | 'project';
   }): Promise<AppTeamMember>;
   fireTeamMember(sessionId: string, name: string): Promise<AppTeamActionResult>;
   updateTeamMember(sessionId: string, name: string, input: {
