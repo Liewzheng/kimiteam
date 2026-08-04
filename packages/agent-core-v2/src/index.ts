@@ -184,6 +184,8 @@ export * from '#/app/plugin/plugin';
 export * from '#/app/plugin/pluginService';
 export * from '#/workspace/workspaceAgentProfileLoader/pluginAgentProfileLoader';
 export * from '#/workspace/workspaceAgentProfileLoader/pluginAgentProfileLoaderService';
+export * from '#/workspace/agentProfileFile/agentProfileFile';
+export * from '#/workspace/agentProfileFile/agentProfileFileService';
 
 export type { SkillSource } from '#/app/skillCatalog/types';
 export * from '#/agent/tools/skill/skill';
@@ -534,6 +536,8 @@ export * from '#/agent/loop/loopContinuationService';
 export * from '#/agent/interruptionReminder/interruptionReminder';
 export * from '#/agent/interruptionReminder/interruptionReminderService';
 export * from '#/agent/interruptionReminder/interruptionReminderOps';
+export * from '#/agent/leadTurnTimeout/leadTurnTimeout';
+export * from '#/agent/leadTurnTimeout/leadTurnTimeoutService';
 export * from '#/agent/mcp/mcp';
 export * from '#/agent/mcp/mcpService';
 export * from '#/agent/mcp/mcpDiscoveryOps';

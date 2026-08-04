@@ -77,13 +77,19 @@ export const SubagentConfigSchema = z.object({
    */
   teamMode: z.boolean().optional(),
   /**
-   * How long a parked (idle) subagent may stay before the reaper destroys it
-   * (`[subagent] idle_ttl_ms` on disk, default 2 hours). Inline models keep
-   * warm KV-caches (e.g. DeepSeek) for minutes to hours and parked instances
-   * hold no local resources, so the default horizon is long; the value is
-   * configurable per install.
+   * Team-mode idle TTL (`[subagent] idle_ttl_ms` on disk, default 2 hours).
+   * Inline models keep warm KV-caches for minutes to hours and parked
+   * instances hold no local resources, so the default horizon is long; the
+   * value is configurable per install.
    */
   idleTtlMs: z.number().int().min(1).optional(),
+  /**
+   * Lead-turn timeout (`[subagent] lead_turn_timeout_ms` on disk, default
+   * 30_000; `0` disables). In team mode the main agent's user turn is
+   * interrupted once its active time exceeds this budget, nudging the
+   * tech-lead to dispatch work to team members instead of doing it itself.
+   */
+  leadTurnTimeoutMs: z.number().int().min(0).optional(),
   /**
    * Per-profile model override: `[subagent.model_overrides]` on disk
    * (`coder = "local/qwen3.6-35b-a3b"`). Binds newly spawned subagents of the
@@ -101,6 +107,9 @@ export const DEFAULT_SUBAGENT_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 
 /** Default idle TTL before a parked subagent is reaped: 2 hours. */
 export const DEFAULT_SUBAGENT_IDLE_TTL_MS = 2 * 60 * 60 * 1000;
+
+/** Default lead-turn timeout for the main agent in team mode: 30s (0 disables). */
+export const DEFAULT_LEAD_TURN_TIMEOUT_MS = 30_000;
 
 export const SUBAGENT_TIMEOUT_ENV = 'KIMI_SUBAGENT_TIMEOUT_MS';
 
@@ -141,6 +150,20 @@ export function resolveSubagentIdleTtlMs(config: IConfigService): number {
   return (
     config.get<SubagentConfig | undefined>(SUBAGENT_SECTION)?.idleTtlMs ??
     DEFAULT_SUBAGENT_IDLE_TTL_MS
+  );
+}
+
+/**
+ * Resolve the lead-turn timeout for the main agent's user turn in team mode
+ * (`[subagent] lead_turn_timeout_ms`, default 30s; `0` disables the
+ * interrupt). The budget applies to the *active* time of a displayable user
+ * turn — interaction-pending windows (approval / question / user-tool) pause
+ * the clock.
+ */
+export function resolveLeadTurnTimeoutMs(config: IConfigService): number {
+  return (
+    config.get<SubagentConfig | undefined>(SUBAGENT_SECTION)?.leadTurnTimeoutMs ??
+    DEFAULT_LEAD_TURN_TIMEOUT_MS
   );
 }
 
