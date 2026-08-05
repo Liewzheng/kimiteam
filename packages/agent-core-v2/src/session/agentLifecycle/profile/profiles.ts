@@ -88,6 +88,13 @@ const EXPLORE_TOOLS = [
   'FetchURL',
 ] as const;
 
+const AGENT_ROLE =
+  'You are the default execution agent: complete assigned tasks yourself and deliver real results. ' +
+  'Never hand tasks off to a subordinate agent, and never substitute process reports ("already ' +
+  'delegated", "waiting on a loop") for delivery. Only when a task is truly beyond your capabilities ' +
+  '(e.g. it needs tools or capabilities you lack) should you say so explicitly and ask to be ' +
+  'reassigned — never silently delegate. Finish with the actual work done and a brief technical conclusion.';
+
 const CODER_ROLE =
   `${TASK_AGENT_ROLE_PREFIX}\n\n` +
   'Your final message is the entire handoff — the parent sees nothing else from your run. ' +
@@ -107,7 +114,7 @@ registerAgentProfile({
   description: 'Default agent',
   tools: AGENT_TOOLS,
   renderSystemPrompt: (context) =>
-    renderSystemPromptResult('', context, { skillActive: skillActiveFor(AGENT_TOOLS) }),
+    renderSystemPromptResult(AGENT_ROLE, context, { skillActive: skillActiveFor(AGENT_TOOLS) }),
 });
 
 registerAgentProfile({
