@@ -16,6 +16,8 @@ import { type AgentTool } from '#/tool/toolContract';
 
 export const PROMPT_TEMPLATE_PLACEHOLDER = '{{item}}';
 export const MAX_AGENT_SWARM_SUBAGENTS = 128;
+export const SWARM_BACKGROUND_UNAVAILABLE =
+  'Background swarm execution is not available for this agent because TaskList, TaskOutput, and TaskStop are not enabled.';
 
 export const AgentSwarmToolInputSchema = z
   .object({
@@ -64,6 +66,12 @@ export const AgentSwarmToolInputSchema = z
       .optional()
       .describe(
         'Map of item string to the model for that item-spawned subagent ("primary" / "secondary" / any [models] id). Every key must exactly match one of the items. Items not listed here use the model parameter / agent type preference / defaults.',
+      ),
+    run_in_background: z
+      .boolean()
+      .optional()
+      .describe(
+        'If true, return immediately without waiting for the swarm to finish: the whole batch is registered as one background task and its completion arrives via automatic notification in a later turn. When false (default), block until every subagent finishes and render the full result.',
       ),
   })
   .strict();

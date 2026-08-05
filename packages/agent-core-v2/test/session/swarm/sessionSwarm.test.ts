@@ -52,6 +52,7 @@ import { Error2 } from '#/_base/errors/errors';
 import { ConfigErrors } from '#/app/config/errors';
 import { SessionSwarmService } from '#/session/swarm/sessionSwarmService';
 import { IRuntimeStatusService } from '#/app/runtimeStatus/runtimeStatus';
+import { IDutySchedulerService } from '#/session/duty/duty';
 
 import { stubLog } from '../../_base/log/stubs';
 
@@ -918,6 +919,39 @@ describe('SessionSwarmService metadata compatibility', () => {
       list: async () => ({}),
     });
     ix.stub(ILogService, stubLog());
+    // Standby scheduler stub that mirrors the pre-DutyScheduler reuse scan:
+    // picks the highest-`agent-<n>` idle owned subagent of the profile and
+    // claims it atomically — keeps the team-mode reuse tests meaningful now
+    // that the swarm service routes the pick through IDutySchedulerService.
+    ix.stub(IDutySchedulerService, {
+      _serviceBrand: undefined,
+      enterStandby: () => {},
+      observeSettle: () => {},
+      pick: async ({ callerAgentId, profileName, claimInto }) => {
+        let best: string | undefined;
+        let bestOrdinal = Number.NEGATIVE_INFINITY;
+        for (const handle of lifecycle.list()) {
+          if (claimInto?.has(handle.id) === true) continue;
+          const loop = handle.accessor.get(IAgentLoopService);
+          if (loop.status().state === 'running') continue;
+          const meta = agents[handle.id];
+          if (meta === undefined) continue;
+          const parent = meta.labels?.['parentAgentId'] ?? meta.parentAgentId;
+          if (parent !== callerAgentId) continue;
+          if (handle.accessor.get(IAgentProfileService).data().profileName !== profileName) {
+            continue;
+          }
+          const match = /^agent-(\d+)$/.exec(handle.id);
+          const ordinal = match === null ? -1 : Number(match[1]);
+          if (ordinal > bestOrdinal) {
+            best = handle.id;
+            bestOrdinal = ordinal;
+          }
+        }
+        if (best !== undefined) claimInto?.add(best);
+        return best;
+      },
+    });
     ix.stub(IModelCatalog, {
       _serviceBrand: undefined,
       get: (alias: string) => {

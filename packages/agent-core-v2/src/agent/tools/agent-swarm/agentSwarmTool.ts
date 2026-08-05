@@ -30,9 +30,18 @@ import { registerAgentToolService } from '#/agent/toolRegistry/toolContribution'
 import { toInputJsonSchema } from '#/tool/input-schema';
 import { IConfigService } from '#/app/config/config';
 import { IFlagService } from '#/app/flag/flag';
-import { ISessionSwarmService, type SessionSwarmTask } from '#/session/swarm/sessionSwarm';
+import { ISessionSwarmService, type SessionSwarmRunResult, type SessionSwarmTask } from '#/session/swarm/sessionSwarm';
 import { ISessionAgentProfileCatalog } from '#/session/sessionAgentProfileCatalog/sessionAgentProfileCatalog';
 import { IAgentProfileService } from '#/agent/profile/profile';
+import { IAgentTaskService } from '#/agent/task/task';
+import { IAgentToolPolicyService } from '#/agent/toolPolicy/toolPolicy';
+import { isAbortError } from '#/_base/utils/abort';
+import {
+  type AgentTask,
+  type AgentTaskInfoBase,
+  type AgentTaskSink,
+} from '#/agent/task/types';
+import type { SubagentTaskInfo } from '#/agent/tools/agent/subagent-task';
 import {
   subagentAllowlistFor,
   subagentTypeNotAllowedMessage,
@@ -53,6 +62,7 @@ import {
   IAgentSwarmTool,
   MAX_AGENT_SWARM_SUBAGENTS,
   PROMPT_TEMPLATE_PLACEHOLDER,
+  SWARM_BACKGROUND_UNAVAILABLE,
   type AgentSwarmToolInput,
 } from './agent-swarm';
 import AGENT_SWARM_DESCRIPTION from './agent-swarm.md?raw';
@@ -89,6 +99,55 @@ interface SwarmRunResult {
   readonly error?: string;
 }
 
+/**
+ * Detached background task for a whole swarm batch. `start` drives the batch
+ * through the session swarm service (per-subagent concurrency acquires happen
+ * inside this task — never on the supervisor's turn), renders the batch result
+ * as output, and settles; TaskStop aborts the batch via the sink signal.
+ */
+class SwarmTask implements AgentTask {
+  readonly kind = 'agent' as const;
+  readonly idPrefix = 'agent' as const;
+  readonly subagentType = 'swarm' as const;
+
+  constructor(
+    private readonly launch: (
+      signal: AbortSignal,
+    ) => Promise<readonly SessionSwarmRunResult<AgentSwarmSpec>[]>,
+    private readonly render: (
+      results: readonly SessionSwarmRunResult<AgentSwarmSpec>[],
+    ) => string,
+    readonly description: string,
+    private readonly subagentCount: number,
+  ) {}
+
+  async start(sink: AgentTaskSink): Promise<void> {
+    try {
+      const results = await this.launch(sink.signal);
+      sink.appendOutput(this.render(results));
+      await sink.settle({ status: 'completed' });
+    } catch (error) {
+      if (sink.signal.aborted && (isAbortError(error) || error === sink.signal.reason)) {
+        await sink.settle({ status: 'killed' });
+        return;
+      }
+      await sink.settle({
+        status: 'failed',
+        stopReason: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  toInfo(base: AgentTaskInfoBase): SubagentTaskInfo {
+    return {
+      ...base,
+      kind: 'agent',
+      agentId: undefined,
+      subagentType: this.subagentType,
+    };
+  }
+}
+
 export class AgentSwarmTool implements IAgentSwarmTool {
   declare readonly _serviceBrand: undefined;
   readonly name = 'AgentSwarm' as const;
@@ -114,8 +173,20 @@ export class AgentSwarmTool implements IAgentSwarmTool {
     @IFlagService private readonly flags: IFlagService,
     @ISessionAgentProfileCatalog private readonly catalog: ISessionAgentProfileCatalog,
     @IAgentProfileService private readonly profile: IAgentProfileService,
+    @IAgentTaskService private readonly tasks: IAgentTaskService,
+    @IAgentToolPolicyService private readonly toolPolicy: IAgentToolPolicyService,
   ) {
     this.callerAgentId = scopeContext.agentId;
+  }
+
+  /** Background swarm needs the task-management tools so the LLM can list,
+   *  read and stop the detached batch. */
+  private canRunInBackground(): boolean {
+    return (
+      this.toolPolicy.isToolActive('TaskList') &&
+      this.toolPolicy.isToolActive('TaskOutput') &&
+      this.toolPolicy.isToolActive('TaskStop')
+    );
   }
 
   get description(): string {
@@ -155,6 +226,13 @@ export class AgentSwarmTool implements IAgentSwarmTool {
   ): Promise<ExecutableToolResult> {
     try {
       this.swarmMode.enter('tool');
+      if (args.run_in_background === true) {
+        if (!this.canRunInBackground()) {
+          return { output: SWARM_BACKGROUND_UNAVAILABLE, isError: true };
+        }
+        const taskId = await this.enqueueSwarm(args, context.toolCallId);
+        return { output: taskId };
+      }
       const result = await this.runSwarm(args, context.signal, context.toolCallId);
       return {
         output: result,
@@ -167,11 +245,59 @@ export class AgentSwarmTool implements IAgentSwarmTool {
     }
   }
 
+  /**
+   * Background swarm: validate + build the batch up front (so bad input errors
+   * surface in this turn), then register one detached task whose start drives
+   * the whole batch. The tool returns immediately with a task id — the
+   * supervisor turn is never pinned on a concurrency acquire; the batch starts
+   * as slots free up and its completion arrives via the task's automatic
+   * notification.
+   */
+  private async enqueueSwarm(
+    args: AgentSwarmToolInput,
+    toolCallId: string,
+  ): Promise<string> {
+    const { tasks, count } = await this.prepareSwarm(args, toolCallId, undefined);
+    const launch = (signal: AbortSignal): Promise<readonly SessionSwarmRunResult<AgentSwarmSpec>[]> =>
+      this.swarmService.run({
+        callerAgentId: this.callerAgentId,
+        tasks: tasks.map((task) => ({ ...task, signal })),
+      });
+    const render = (results: readonly SessionSwarmRunResult<AgentSwarmSpec>[]): string =>
+      renderSwarmResults(
+        results.map(({ task, ...result }) => ({ spec: task.data as AgentSwarmSpec, ...result })),
+      );
+    const taskId = this.tasks.registerTask(
+      new SwarmTask(launch, render, args.description, count),
+      { detached: true },
+    );
+    return formatSwarmBackgroundResult(taskId, args.description, count);
+  }
+
   private async runSwarm(
     args: AgentSwarmToolInput,
     signal: AbortSignal,
     toolCallId: string,
   ): Promise<string> {
+    const { tasks } = await this.prepareSwarm(args, toolCallId, signal);
+    const results = await this.swarmService.run({
+      callerAgentId: this.callerAgentId,
+      tasks,
+    });
+    return renderSwarmResults(
+      results.map(({ task, ...result }) => ({ spec: task.data as AgentSwarmSpec, ...result })),
+    );
+  }
+
+  /** Shared validation + task-building for foreground and background swarms.
+   *  `signal` is linked into the spawn tasks (foreground: the tool's abort
+   *  signal; background: the detached task's sink signal, re-linked in the
+   *  launch closure). */
+  private async prepareSwarm(
+    args: AgentSwarmToolInput,
+    toolCallId: string,
+    signal: AbortSignal | undefined,
+  ): Promise<{ readonly tasks: SessionSwarmTask<AgentSwarmSpec>[]; readonly count: number }> {
     const profileName = normalizeOptionalString(args.subagent_type) ?? DEFAULT_SUBAGENT_TYPE;
     let spawnDuty = false;
     let resolveBindingFor: (item: string) => SubagentSpawnBinding | undefined =
@@ -220,6 +346,7 @@ export class AgentSwarmTool implements IAgentSwarmTool {
     const specs = await createAgentSwarmSpecs(args, (agentId) =>
       this.swarmService.getSwarmItem({ callerAgentId: this.callerAgentId, agentId }),
     );
+    const runInBackground = args.run_in_background ?? false;
     const tasks: SessionSwarmTask<AgentSwarmSpec>[] = specs.map((spec) => {
       const descriptionName = spec.kind === 'resume' ? 'resume' : profileName;
       const common = {
@@ -229,7 +356,7 @@ export class AgentSwarmTool implements IAgentSwarmTool {
         prompt: spec.prompt,
         description: childDescription(args.description, spec.index, descriptionName),
         swarmIndex: spec.index,
-        runInBackground: false,
+        runInBackground,
         swarmItem: spec.item,
         signal,
       };
@@ -248,13 +375,7 @@ export class AgentSwarmTool implements IAgentSwarmTool {
         timeout: spawnDuty ? undefined : timeoutMs,
       };
     });
-    const results = await this.swarmService.run({
-      callerAgentId: this.callerAgentId,
-      tasks,
-    });
-    return renderSwarmResults(
-      results.map(({ task, ...result }) => ({ spec: task.data as AgentSwarmSpec, ...result })),
-    );
+    return { tasks, count: specs.length };
   }
 }
 
@@ -374,6 +495,26 @@ function renderSwarmSummary(completed: number, failed: number, aborted = 0): str
   if (failed > 0) parts.push(`failed: ${String(failed)}`);
   if (aborted > 0) parts.push(`aborted: ${String(aborted)}`);
   return parts.join(', ');
+}
+
+/** Immediate result of a background swarm dispatch — one detached task wraps
+ *  the whole batch; completion arrives via automatic notification. */
+function formatSwarmBackgroundResult(
+  taskId: string,
+  description: string,
+  subagentCount: number,
+): string {
+  return [
+    `task_id: ${taskId}`,
+    'status: running',
+    `subagents: ${String(subagentCount)}`,
+    'automatic_notification: true',
+    '',
+    `description: ${description}`,
+    '',
+    'next_step: The swarm is enqueued (已入队) — subagents start as concurrency slots free up, and the completion arrives automatically in a later turn. Do NOT wait, poll, or call TaskOutput on it; continue with other work or hand back to the user.',
+    'resume_hint: When the completion notification arrives, continue unfinished subagents with AgentSwarm(resume_agent_ids=...) using the agent_id values in the result.',
+  ].join('\n');
 }
 
 function escapeXmlAttribute(value: string): string {

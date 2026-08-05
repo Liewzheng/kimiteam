@@ -112,3 +112,61 @@ export class SubagentTask implements AgentTask {
     };
   }
 }
+
+/**
+ * Detached task that defers the entire launch into `start`: used when a
+ * foreground dispatch hits the full concurrency pool, so the supervisor turn
+ * is never pinned on `pool.acquire` — the run is enqueued (已入队) and starts
+ * automatically once a slot frees, with the completion arriving via the task's
+ * automatic notification. `agentId` is unknown until the deferred launch
+ * resolves (hence mutable, `undefined` in `toInfo` before then).
+ */
+export class QueuedSubagentTask implements AgentTask {
+  readonly kind = 'agent' as const;
+  readonly idPrefix: string = 'agent';
+  agentId?: string;
+  subagentType?: string;
+
+  constructor(
+    private readonly launcher: (signal: AbortSignal) => Promise<SubagentHandle>,
+    readonly description: string,
+    private readonly abortController: AbortController,
+  ) {}
+
+  async start(sink: AgentTaskSink): Promise<void> {
+    const requestAbort = (): void => {
+      this.abortController.abort(sink.signal.reason);
+    };
+    if (sink.signal.aborted) {
+      requestAbort();
+    } else {
+      sink.signal.addEventListener('abort', requestAbort, { once: true });
+    }
+
+    try {
+      const handle = await this.launcher(sink.signal);
+      this.agentId = handle.agentId;
+      this.subagentType = handle.profileName;
+      const outcome = await handle.completion;
+      sink.appendOutput(outcome.result);
+      await sink.settle({ status: 'completed' });
+    } catch (error: unknown) {
+      if (sink.signal.aborted && (isAbortError(error) || error === sink.signal.reason)) {
+        await sink.settle({ status: 'killed' });
+        return;
+      }
+      await sink.settle({ status: 'failed', stopReason: errorMessage(error) });
+    } finally {
+      sink.signal.removeEventListener('abort', requestAbort);
+    }
+  }
+
+  toInfo(base: AgentTaskInfoBase): SubagentTaskInfo {
+    return {
+      ...base,
+      kind: 'agent',
+      agentId: this.agentId,
+      subagentType: this.subagentType,
+    };
+  }
+}

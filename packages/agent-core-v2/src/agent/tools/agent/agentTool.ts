@@ -74,13 +74,13 @@ import {
   IAgentPerformanceService,
   type PerformanceSummary,
 } from '#/app/agentPerformance/agentPerformance';
-import { IRuntimeStatusService } from '#/app/runtimeStatus/runtimeStatus';
 import { IAgentLifecycleService } from '#/session/agentLifecycle/agentLifecycle';
 import { isSubagentMeta, subagentLabels, subagentParentAgentId } from '#/session/agentLifecycle/subagentMetadata';
-import { findIdleOwnedSubagent } from '#/session/agentLifecycle/subagentReuse';
+import { IDutySchedulerService } from '#/session/duty/duty';
 import { ISessionProcessRunner } from '#/session/process/processRunner';
 import { ISessionMetadata } from '#/session/sessionMetadata/sessionMetadata';
 import { ISessionWorkspaceContext } from '#/session/workspaceContext/workspaceContext';
+import { ISubagentPoolService } from '#/session/subagentPool/subagentPool';
 
 import { emitAgentRunSpawned, mirrorAgentRun } from '#/session/subagent/mirrorAgentRun';
 import { ISessionSubagentService } from '#/session/subagent/subagent';
@@ -105,7 +105,7 @@ import {
   USER_INTERRUPTED_SUBAGENT_MESSAGE,
   type SubagentToolInput,
 } from './agent';
-import { SubagentTask, type SubagentHandle } from './subagent-task';
+import { SubagentTask, QueuedSubagentTask, type SubagentHandle } from './subagent-task';
 
 import AGENT_BACKGROUND_DISABLED_DESCRIPTION from './agent-background-disabled.md?raw';
 import AGENT_BACKGROUND_DESCRIPTION from './agent-background-enabled.md?raw';
@@ -161,7 +161,8 @@ export class SubagentTool implements ISubagentTool {
     @IFlagService private readonly flags: IFlagService,
     @IModelCatalog private readonly modelCatalog: IModelCatalog,
     @IAgentPerformanceService private readonly performance: IAgentPerformanceService,
-    @IRuntimeStatusService private readonly runtimeStatus: IRuntimeStatusService,
+    @IDutySchedulerService private readonly duty: IDutySchedulerService,
+    @ISubagentPoolService private readonly pool: ISubagentPoolService,
   ) {
     this.callerAgentId = scopeContext.agentId;
     this.canRunInBackground = () =>
@@ -401,14 +402,12 @@ export class SubagentTool implements ISubagentTool {
       }
       // Team mode: reuse a parked idle subagent of the same profile (resume
       // semantics — context preserved) instead of always creating a fresh
-      // one. Explicit `resume` is unaffected; when team mode is off this
-      // block is skipped and behavior is identical to a plain spawn.
+      // one. The pick goes through the DutyScheduler (LRU standby pool).
+      // Explicit `resume` is unaffected; when team mode is off this block is
+      // skipped and behavior is identical to a plain spawn.
       let reused: IAgentScopeHandle | undefined;
       if (resolveTeamMode(this.config)) {
-        const reuseId = await findIdleOwnedSubagent({
-          lifecycle: this.lifecycle,
-          metadata: this.sessionMetadata,
-          runtimeStatus: this.runtimeStatus,
+        const reuseId = await this.duty.pick({
           callerAgentId: this.callerAgentId,
           profileName: requestedProfileName,
         });
@@ -489,10 +488,14 @@ export class SubagentTool implements ISubagentTool {
         controller.abort(reason);
       },
     });
+    const completion = mirrored.then((r) => ({ result: r.summary, usage: r.usage }));
+    // Team-mode standby pool: once this run settles the member is idle again
+    // and becomes a dispatch candidate (LRU pick). No-op when team mode is off.
+    this.duty.observeSettle(agentId, profileName, this.callerAgentId, completion);
     return {
       agentId,
       profileName,
-      completion: mirrored.then((r) => ({ result: r.summary, usage: r.usage })),
+      completion,
     };
   }
 
@@ -534,6 +537,14 @@ export class SubagentTool implements ISubagentTool {
       const timeoutMs = (await this.isDutyProfile(requestedProfileName, resumeAgentId))
         ? undefined
         : resolveSubagentTimeoutMs(this.config);
+
+      // Pool-full: a foreground spawn at the concurrency ceiling must not pin
+      // the supervisor turn on `pool.acquire`. Enqueue it as a detached task
+      // (已入队,稍后自动开跑) — it starts automatically once a slot frees and
+      // its completion arrives via the task's automatic notification.
+      if (!runInBackground && !isResume && this.isPoolAtCapacity()) {
+        return this.enqueuePoolFullRun(args, toolCallId, timeoutMs);
+      }
 
       const controller = new AbortController();
       const abortBeforeRegister = (): void => {
@@ -606,6 +617,55 @@ export class SubagentTool implements ISubagentTool {
       return await this.formatForegroundResult(taskId, handle, timeoutMs);
     } catch (error) {
       return { output: `subagent error: ${launchErrorMessage(error, signal)}`, isError: true };
+    }
+  }
+
+  /**
+   * Whether the session concurrency pool is at its ceiling. `undefined` limit
+   * (unlimited) is never "full". Foreground spawns bail out to the queue when
+   * this is true — see {@link enqueuePoolFullRun}.
+   */
+  private isPoolAtCapacity(): boolean {
+    const state = this.pool.state();
+    return state.limit !== undefined && state.active >= state.limit;
+  }
+
+  /**
+   * 池满语义 — a foreground spawn at the concurrency ceiling is enqueued as a
+   * detached task instead of blocking the supervisor turn on `pool.acquire`.
+   * The task defers the whole launch into `start`: it acquires a slot
+   * (blocking inside the task — never on the supervisor turn), runs, and its
+   * terminal notification delivers the completion. Returns the immediate
+   * "已入队,稍后自动开跑" result with the task id.
+   */
+  private enqueuePoolFullRun(
+    args: SubagentToolInput,
+    toolCallId: string,
+    timeoutMs: number | undefined,
+  ): Promise<ExecutableToolResult> {
+    const controller = new AbortController();
+    const task = new QueuedSubagentTask(
+      (signal) => this.launch(args, toolCallId, controller),
+      args.description,
+      controller,
+    );
+    try {
+      const taskId = this.tasks.registerTask(task, {
+        detached: true,
+        timeoutMs,
+        signal: undefined,
+      });
+      return Promise.resolve({ output: formatQueuedAgentResult(taskId, args.description) });
+    } catch (error) {
+      controller.abort();
+      const message = error instanceof Error ? error.message : String(error);
+      return Promise.resolve({
+        output:
+          message === 'Too many background tasks are already running.'
+            ? 'Too many background tasks are already running.'
+            : message,
+        isError: true,
+      });
     }
   }
 
@@ -750,6 +810,19 @@ export function buildPerformanceCard(
     averageLine,
     rankLine,
     '</performance_card>',
+  ].join('\n');
+}
+
+/** 池满入队 — a foreground spawn enqueued as a detached task. */
+function formatQueuedAgentResult(taskId: string, description: string): string {
+  return [
+    `task_id: ${taskId}`,
+    'status: queued',
+    'automatic_notification: true',
+    '',
+    `description: ${description}`,
+    '',
+    'Enqueued (已入队,稍后自动开跑): the concurrency pool is full — the subagent will start automatically once a slot frees, and its completion arrives via automatic notification in a later turn. Do NOT wait, poll, or call TaskOutput on it; continue with other work or hand back to the user.',
   ].join('\n');
 }
 

@@ -40,7 +40,7 @@ import {
   subagentParentAgentId,
   subagentSwarmItem,
 } from '#/session/agentLifecycle/subagentMetadata';
-import { findIdleOwnedSubagent } from '#/session/agentLifecycle/subagentReuse';
+import { IDutySchedulerService } from '#/session/duty/duty';
 import { emitAgentRunSpawned, mirrorAgentRun } from '#/session/subagent/mirrorAgentRun';
 import { ISessionSubagentService } from '#/session/subagent/subagent';
 import { resolveTeamMode, wrapSubagentModelError } from '#/session/subagent/configSection';
@@ -84,9 +84,9 @@ export class SessionSwarmService implements ISessionSwarmService {
   private readonly inFlight = new Map<string, AbortController>();
   /**
    * Agent ids claimed for team-mode idle reuse by in-flight spawn attempts.
-   * A claim is made atomically with the pick (see `findIdleOwnedSubagent`) and
-   * released once the reused run starts (or fails to start), so two items in
-   * the same batch can never claim the same parked instance.
+   * A claim is made atomically with the pick (see `IDutySchedulerService.pick`)
+   * and released once the reused run starts (or fails to start), so two items
+   * in the same batch can never claim the same parked instance.
    */
   private readonly reservedForReuse = new Set<string>();
 
@@ -101,6 +101,7 @@ export class SessionSwarmService implements ISessionSwarmService {
     @IModelCatalog private readonly modelCatalog: IModelCatalog,
     @IConfigService private readonly config: IConfigService,
     @IRuntimeStatusService private readonly runtimeStatus: IRuntimeStatusService,
+    @IDutySchedulerService private readonly duty: IDutySchedulerService,
   ) {}
 
   async getSwarmItem(args: {
@@ -163,15 +164,13 @@ export class SessionSwarmService implements ISessionSwarmService {
 
     // Team mode: reuse a parked idle subagent of the same profile (resume
     // semantics — context preserved) instead of creating a fresh one. The
-    // claim is made atomically with the pick, so two spawn attempts in the
-    // same batch can never claim the same instance even though its run has
-    // not started yet. When team mode is off this block is skipped and
-    // behavior is identical to a plain spawn.
+    // pick goes through the DutyScheduler (LRU standby pool) and the claim is
+    // made atomically with it, so two spawn attempts in the same batch can
+    // never claim the same instance even though its run has not started yet.
+    // When team mode is off this block is skipped and behavior is identical
+    // to a plain spawn.
     if (resolveTeamMode(this.config)) {
-      const reuseId = await findIdleOwnedSubagent({
-        lifecycle: this.lifecycle,
-        metadata: this.metadata,
-        runtimeStatus: this.runtimeStatus,
+      const reuseId = await this.duty.pick({
         callerAgentId,
         profileName: options.profileName,
         claimInto: this.reservedForReuse,
@@ -294,6 +293,9 @@ export class SessionSwarmService implements ISessionSwarmService {
       suppressRateLimitFailureEvent: options.suppressRateLimitFailureEvent,
       signal: options.signal,
     });
+    // Team-mode standby pool: once this run settles the member is idle again
+    // and becomes a dispatch candidate (LRU pick). No-op when team mode is off.
+    this.duty.observeSettle(agentId, profileName, caller.id, mirrored);
     return {
       agentId,
       profileName,

@@ -587,6 +587,8 @@ export * from '#/session/sessionInit/sessionInitService';
 export * from '#/session/sessionInit/profile/init';
 export * from '#/session/swarm/sessionSwarm';
 export * from '#/session/swarm/sessionSwarmService';
+export * from '#/session/duty/duty';
+import '#/session/duty/dutyScheduler';
 export * from '#/session/todo/todoItem';
 export * from '#/session/todo/todoListReminder';
 export * from '#/session/todo/sessionTodo';

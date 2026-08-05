@@ -46,6 +46,46 @@ export interface FindIdleOwnedSubagentInput {
   readonly claimInto?: Set<string>;
 }
 
+/** One parked, idle, owned subagent candidate for reuse. */
+export interface IdleOwnedSubagentCandidate {
+  readonly agentId: string;
+  /** Deterministic tie-break: the `agent-<n>` numeric suffix. */
+  readonly ordinal: number;
+  /** The instance's bound model alias — used for per-model score weighting. */
+  readonly model?: string;
+}
+
+/**
+ * List every parked, idle, owned subagent of `profileName` (in-process
+ * registry scan). Idle = the loop is not running; owned = the metadata parent
+ * is `callerAgentId`. `claimInto` entries are skipped so a concurrent batch
+ * cannot double-claim. The scan is synchronous after a single metadata read —
+ * with JavaScript's single-threaded semantics the returned list is a stable
+ * snapshot for the caller to rank and claim.
+ */
+export async function listIdleOwnedSubagents(
+  input: FindIdleOwnedSubagentInput,
+): Promise<IdleOwnedSubagentCandidate[]> {
+  const { lifecycle, metadata, callerAgentId, profileName, claimInto } = input;
+  const agents = (await metadata.read()).agents ?? {};
+  const candidates: IdleOwnedSubagentCandidate[] = [];
+  for (const handle of lifecycle.list()) {
+    if (claimInto?.has(handle.id) === true) continue;
+    if (handle.accessor.get(IAgentLoopService).status().state === 'running') continue;
+    const agentMeta = agents[handle.id];
+    if (!isSubagentMeta(agentMeta)) continue;
+    if (subagentParentAgentId(agentMeta) !== callerAgentId) continue;
+    const profile = handle.accessor.get(IAgentProfileService).data();
+    if (profile.profileName !== profileName) continue;
+    candidates.push({
+      agentId: handle.id,
+      ordinal: agentOrdinal(handle.id),
+      model: profile.modelAlias,
+    });
+  }
+  return candidates;
+}
+
 /**
  * Find the best parked, idle, owned subagent of `profileName` for reuse.
  *
@@ -59,29 +99,13 @@ export async function findIdleOwnedSubagent(
   input: FindIdleOwnedSubagentInput,
 ): Promise<string | undefined> {
   const { lifecycle, metadata, runtimeStatus, callerAgentId, profileName, claimInto } = input;
-  const agents = (await metadata.read()).agents ?? {};
-
-  // 1) Process-internal scan: parked instances still in the live registry.
-  let best: string | undefined;
-  let bestOrdinal = Number.NEGATIVE_INFINITY;
-  for (const handle of lifecycle.list()) {
-    if (claimInto?.has(handle.id) === true) continue;
-    if (handle.accessor.get(IAgentLoopService).status().state === 'running') continue;
-    const agentMeta = agents[handle.id];
-    if (!isSubagentMeta(agentMeta)) continue;
-    if (subagentParentAgentId(agentMeta) !== callerAgentId) continue;
-    if (handle.accessor.get(IAgentProfileService).data().profileName !== profileName) continue;
-    const ordinal = agentOrdinal(handle.id);
-    if (ordinal > bestOrdinal) {
-      best = handle.id;
-      bestOrdinal = ordinal;
-    }
-  }
+  const candidates = await listIdleOwnedSubagents(input);
+  const best = bestByOrdinal(candidates);
   if (best !== undefined) {
     // Atomic with the pick: no await between the scan and the claim, so two
     // concurrent spawn attempts can never both claim `best`.
-    claimInto?.add(best);
-    return best;
+    claimInto?.add(best.agentId);
+    return best.agentId;
   }
 
   // 2) Cold fallback: after a process restart the registry no longer holds the
@@ -90,8 +114,8 @@ export async function findIdleOwnedSubagent(
   // with the runtime-status table. Old sessions whose agent metadata predates
   // the `profileName` label never match here and fall through to a fresh
   // creation (degradation, never an error).
-  best = undefined;
-  bestOrdinal = Number.NEGATIVE_INFINITY;
+  let coldBest: IdleOwnedSubagentCandidate | undefined;
+  const agents = (await metadata.read()).agents ?? {};
   const statuses = await runtimeStatus.list();
   for (const [agentId, agentMeta] of Object.entries(agents)) {
     if (claimInto?.has(agentId) === true) continue;
@@ -100,24 +124,35 @@ export async function findIdleOwnedSubagent(
     if (subagentProfileName(agentMeta) !== profileName) continue;
     const entry = statuses[profileName];
     if (entry === undefined || entry.state !== 'resting' || entry.agentId !== agentId) continue;
-    const ordinal = agentOrdinal(agentId);
-    if (ordinal > bestOrdinal) {
-      best = agentId;
-      bestOrdinal = ordinal;
-    }
+    const candidate: IdleOwnedSubagentCandidate = { agentId, ordinal: agentOrdinal(agentId) };
+    if (coldBest === undefined || candidate.ordinal > coldBest.ordinal) coldBest = candidate;
   }
-  if (best === undefined) return undefined;
+  if (coldBest === undefined) return undefined;
 
   // Materialize the parked instance back into the live registry. `create` is
   // create-or-get for an explicit id, so concurrent cold materializations of
   // the same instance join into a single scope — no lock needed here.
-  const handle = await lifecycle.create({ agentId: best });
+  const handle = await lifecycle.create({ agentId: coldBest.agentId });
   // Re-check running: a concurrent path may have materialized and started the
   // instance while we were scanning; a running instance is not reusable.
   if (handle.accessor.get(IAgentLoopService).status().state === 'running') {
     return undefined;
   }
-  claimInto?.add(best);
+  claimInto?.add(coldBest.agentId);
+  return coldBest.agentId;
+}
+
+function bestByOrdinal(
+  candidates: readonly IdleOwnedSubagentCandidate[],
+): IdleOwnedSubagentCandidate | undefined {
+  let best: IdleOwnedSubagentCandidate | undefined;
+  let bestOrdinal = Number.NEGATIVE_INFINITY;
+  for (const candidate of candidates) {
+    if (candidate.ordinal > bestOrdinal) {
+      best = candidate;
+      bestOrdinal = candidate.ordinal;
+    }
+  }
   return best;
 }
 
