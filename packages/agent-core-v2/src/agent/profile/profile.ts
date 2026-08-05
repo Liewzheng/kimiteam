@@ -60,6 +60,8 @@ export interface SystemPromptContext extends AgentProfileContext {
   readonly agentsMdWarning?: string;
   readonly pipeline?: string;
   readonly pipelineWarning?: string;
+  readonly modelRoster?: string;
+  readonly modelRosterWarning?: string;
   readonly agentsMdPaths?: readonly string[];
 }
 

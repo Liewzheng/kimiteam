@@ -264,6 +264,20 @@ describe('renderSystemPromptResult', () => {
     );
   });
 
+  it('shows the model roster section only when a roster exists', () => {
+    const prompt = renderSystemPromptResult(
+      '',
+      { modelRoster: 'qwen-k3: strong coding, limited tooling' },
+      { skillActive: true },
+    ).text;
+
+    expect(prompt).toContain('# Model Roster');
+    expect(prompt).toContain('qwen-k3: strong coding, limited tooling');
+    expect(renderSystemPromptResult('', {}, { skillActive: true }).text).not.toContain(
+      '# Model Roster',
+    );
+  });
+
   it('renders the builtin template with no leftover placeholders', () => {
     // Every placeholder in the builtin template must be bound in the variable
     // table — an unbound one would stay verbatim in the output.

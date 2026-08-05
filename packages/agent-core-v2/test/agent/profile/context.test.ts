@@ -266,6 +266,69 @@ describe('prepareSystemPromptContext additional directories', () => {
   });
 });
 
+describe('prepareSystemPromptContext model roster', () => {
+  let brandHome: string;
+
+  beforeEach(async () => {
+    brandHome = await mkdtemp(join(tmpdir(), 'kimi-agents-roster-'));
+  });
+
+  afterEach(async () => {
+    await rm(brandHome, { recursive: true, force: true });
+  });
+
+  it('injects the user-level model roster with a Model Roster label when present', async () => {
+    await mkdir(join(brandHome, 'agents'), { recursive: true });
+    await writeFile(
+      join(brandHome, 'agents', 'model-roster.md'),
+      'qwen-k3: strong coding, limited tooling',
+      'utf-8',
+    );
+
+    const result = await prepareSystemPromptContext({ fs, homeDir }, workDir, brandHome, {
+      includeModelRoster: true,
+    });
+
+    expect(result.modelRoster).toContain('## Model Roster');
+    expect(result.modelRoster).toContain('qwen-k3: strong coding, limited tooling');
+    expect(result.modelRoster).toContain(join(brandHome, 'agents', 'model-roster.md'));
+    expect(result.modelRosterWarning).toBeUndefined();
+  });
+
+  it('silently skips a missing model roster', async () => {
+    const result = await prepareSystemPromptContext({ fs, homeDir }, workDir, brandHome, {
+      includeModelRoster: true,
+    });
+
+    expect(result.modelRoster).toBe('');
+    expect(result.modelRosterWarning).toBeUndefined();
+  });
+
+  it('does not load the roster unless includeModelRoster is set', async () => {
+    await mkdir(join(brandHome, 'agents'), { recursive: true });
+    await writeFile(join(brandHome, 'agents', 'model-roster.md'), 'should stay out', 'utf-8');
+
+    const result = await prepareSystemPromptContext({ fs, homeDir }, workDir, brandHome);
+
+    expect(result.modelRoster).toBe('');
+    expect(result.modelRosterWarning).toBeUndefined();
+  });
+
+  it('returns modelRosterWarning and keeps the full content when oversized', async () => {
+    await mkdir(join(brandHome, 'agents'), { recursive: true });
+    const largeContent = 'x'.repeat(40 * 1024);
+    await writeFile(join(brandHome, 'agents', 'model-roster.md'), largeContent, 'utf-8');
+
+    const result = await prepareSystemPromptContext({ fs, homeDir }, workDir, brandHome, {
+      includeModelRoster: true,
+    });
+
+    expect(result.modelRoster).toContain(largeContent);
+    expect(result.modelRosterWarning).toBeDefined();
+    expect(result.modelRosterWarning).toContain('exceeds the recommended');
+  });
+});
+
 describe('loadAgentsMdDetailed discovered paths', () => {
   it('recovers AGENTS.md source annotations without treating plugin annotations as files', () => {
     expect(

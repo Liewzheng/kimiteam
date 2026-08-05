@@ -122,6 +122,7 @@ import { IPluginService } from '#/app/plugin/plugin';
 import type { ResolvedAgentProfile, SystemPromptContext } from '#/agent/profile/profile';
 import { IAgentStateService } from '#/agent/state/agentState';
 import { IAgentAgentsMdReminderService } from '#/agent/agentsMdReminder/agentsMdReminder';
+import { IAgentScopeContext } from '#/agent/scopeContext/scopeContext';
 
 import { ITelemetryService } from '#/app/telemetry/telemetry';
 import { IAgentTelemetryContextService } from '#/app/telemetry/agentTelemetryContext';
@@ -200,6 +201,10 @@ export const profilePipelineWarningKey = defineState<string | undefined>(
   'profile.pipelineWarning',
   () => undefined as string | undefined,
 );
+export const profileModelRosterWarningKey = defineState<string | undefined>(
+  'profile.modelRosterWarning',
+  () => undefined as string | undefined,
+);
 export const profileEmittedThinkingEffortWarningsKey = defineState<Set<string>>(
   'profile.emittedThinkingEffortWarnings',
   () => new Set(),
@@ -252,11 +257,13 @@ export class AgentProfileService extends Disposable implements IAgentProfileServ
     @IPluginService private readonly plugins: IPluginService,
     @IAgentIdentity private readonly identity: IAgentIdentity,
     @IAgentAgentsMdReminderService private readonly agentsMdReminder: IAgentAgentsMdReminderService,
+    @IAgentScopeContext private readonly scopeContext: IAgentScopeContext,
   ) {
     super();
     this.states.register(profileActiveToolNamesOverlayKey);
     this.states.register(profileAgentsMdWarningKey);
     this.states.register(profilePipelineWarningKey);
+    this.states.register(profileModelRosterWarningKey);
     this.states.register(profileEmittedThinkingEffortWarningsKey);
     this.states.register(profileEmittedToolPatternWarningsKey);
     this.states.register(profileEmittedPluginBudgetWarningsKey);
@@ -310,6 +317,14 @@ export class AgentProfileService extends Disposable implements IAgentProfileServ
 
   private set pipelineWarning(value: string | undefined) {
     this.states.set(profilePipelineWarningKey, value);
+  }
+
+  private get modelRosterWarning(): string | undefined {
+    return this.states.get(profileModelRosterWarningKey);
+  }
+
+  private set modelRosterWarning(value: string | undefined) {
+    this.states.set(profileModelRosterWarningKey, value);
   }
 
   private get emittedThinkingEffortWarnings(): Set<string> {
@@ -416,6 +431,7 @@ export class AgentProfileService extends Disposable implements IAgentProfileServ
     this.activeProfile = profile;
     this.cacheAgentsMdWarning(context);
     this.cachePipelineWarning(context);
+    this.cacheModelRosterWarning(context);
 
     const thinkingLevel = this.resolveThinkingEffort(
       input.thinking ?? (currentProfileName !== undefined ? this.thinkingLevel : undefined),
@@ -446,6 +462,7 @@ export class AgentProfileService extends Disposable implements IAgentProfileServ
 
     this.publishAgentsMdWarning();
     this.publishPipelineWarning();
+    this.publishModelRosterWarning();
     this.publishToolPatternWarnings(profile);
   }
 
@@ -517,8 +534,10 @@ export class AgentProfileService extends Disposable implements IAgentProfileServ
     this.seedAgentsMdReminder(context);
     this.cacheAgentsMdWarning(context);
     this.cachePipelineWarning(context);
+    this.cacheModelRosterWarning(context);
     this.publishAgentsMdWarning();
     this.publishPipelineWarning();
+    this.publishModelRosterWarning();
     this.publishToolPatternWarnings(profile);
   }
 
@@ -548,8 +567,10 @@ export class AgentProfileService extends Disposable implements IAgentProfileServ
     this.seedAgentsMdReminder(context);
     this.cacheAgentsMdWarning(context);
     this.cachePipelineWarning(context);
+    this.cacheModelRosterWarning(context);
     this.publishAgentsMdWarning();
     this.publishPipelineWarning();
+    this.publishModelRosterWarning();
   }
 
   private seedAgentsMdReminder(context: SystemPromptContext): void {
@@ -902,6 +923,20 @@ export class AgentProfileService extends Disposable implements IAgentProfileServ
     });
   }
 
+  private cacheModelRosterWarning(context: Pick<SystemPromptContext, 'modelRosterWarning'>): void {
+    this.modelRosterWarning = context.modelRosterWarning;
+  }
+
+  private publishModelRosterWarning(): void {
+    const warning = this.modelRosterWarning;
+    if (warning === undefined) return;
+    this.eventBus.publish({
+      type: 'warning',
+      message: warning,
+      code: 'model-roster-oversized',
+    });
+  }
+
   private publishToolPatternWarnings(profile?: ResolvedAgentProfile): void {
     const known = new Set<string>();
     for (const contribution of getAgentToolContributions()) known.add(contribution.options.name);
@@ -961,6 +996,7 @@ export class AgentProfileService extends Disposable implements IAgentProfileServ
       {
         additionalDirs: options?.additionalDirs ?? this.workspace.additionalDirs,
         preloadedAgentsMd,
+        includeModelRoster: this.scopeContext.agentId === 'main',
       },
     );
     const skills = await this.resolveSkillListing(profile);

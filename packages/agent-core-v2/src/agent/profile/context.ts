@@ -33,7 +33,10 @@
  * rendered source annotations.
  *
  * The combined pipeline content mirrors the same soft budget and warning
- * behavior (`pipelineWarning`).
+ * behavior (`pipelineWarning`). A user-level model roster
+ * (`brandHome/agents/model-roster.md`) is loaded the same way for the main
+ * agent only (`includeModelRoster`) — the main agent decides which subagent
+ * model to dispatch, so the roster is not injected into subagents.
  */
 
 import { basename, dirname, join, normalize } from 'pathe';
@@ -59,15 +62,18 @@ export interface PreparedSystemPromptContext extends SystemPromptContext {
   readonly cwdListing?: string;
   readonly agentsMd?: string;
   readonly pipeline?: string;
+  readonly modelRoster?: string;
   readonly agentsMdPaths?: readonly string[];
   readonly additionalDirsInfo?: string;
   readonly agentsMdWarning?: string;
   readonly pipelineWarning?: string;
+  readonly modelRosterWarning?: string;
 }
 
 export interface PrepareSystemPromptContextOptions {
   readonly additionalDirs?: readonly string[];
   readonly preloadedAgentsMd?: LoadedAgentsMd;
+  readonly includeModelRoster?: boolean;
 }
 
 export async function prepareSystemPromptContext(
@@ -77,22 +83,28 @@ export async function prepareSystemPromptContext(
   options?: PrepareSystemPromptContextOptions,
 ): Promise<PreparedSystemPromptContext> {
   const additionalDirs = dedupeDirs(options?.additionalDirs ?? []);
-  const [cwdListing, agentsMdResult, pipelineResult, additionalDirsInfo] = await Promise.all([
-    listDirectory(deps, workDir, { collapseHiddenDirs: true }),
-    options?.preloadedAgentsMd !== undefined
-      ? Promise.resolve(options.preloadedAgentsMd)
-      : loadAgentsMdForRoots(deps, brandHome, [workDir]),
-    loadPipelineForRoots(deps, brandHome, [workDir]),
-    loadAdditionalDirsInfo(deps, additionalDirs),
-  ]);
+  const [cwdListing, agentsMdResult, pipelineResult, additionalDirsInfo, modelRosterResult] =
+    await Promise.all([
+      listDirectory(deps, workDir, { collapseHiddenDirs: true }),
+      options?.preloadedAgentsMd !== undefined
+        ? Promise.resolve(options.preloadedAgentsMd)
+        : loadAgentsMdForRoots(deps, brandHome, [workDir]),
+      loadPipelineForRoots(deps, brandHome, [workDir]),
+      loadAdditionalDirsInfo(deps, additionalDirs),
+      options?.includeModelRoster === true
+        ? loadModelRoster(deps, brandHome)
+        : Promise.resolve(emptyModelRoster()),
+    ]);
   return {
     cwdListing,
     agentsMd: agentsMdResult.content,
     pipeline: pipelineResult.content,
+    modelRoster: modelRosterResult.content,
     agentsMdPaths: agentsMdResult.paths,
     additionalDirsInfo,
     agentsMdWarning: agentsMdResult.warning,
     pipelineWarning: pipelineResult.warning,
+    modelRosterWarning: modelRosterResult.warning,
   };
 }
 
@@ -313,6 +325,56 @@ function renderPipelineFiles(files: readonly PipelineFile[]): string {
     .join('\n\n');
 }
 
+interface LoadedModelRoster {
+  readonly content: string;
+  readonly warning: string | undefined;
+}
+
+function emptyModelRoster(): LoadedModelRoster {
+  return { content: '', warning: undefined };
+}
+
+/**
+ * Loads the user-level model roster — `brandHome/agents/model-roster.md`
+ * (brand home falling back to `~/.kimi-code`), a single optional file recording
+ * the main agent's model evaluation table (capabilities, limitations, known
+ * hallucination risks). Missing or empty files are skipped silently. The loaded
+ * content carries a `## Model Roster` label and the same soft-budget warning
+ * behavior as AGENTS.md / pipeline (`modelRosterWarning`, full content kept
+ * instead of truncating). Callers gate loading on the main agent only
+ * (`includeModelRoster`), so subagents never receive the roster.
+ */
+async function loadModelRoster(
+  deps: ProfileContextDeps,
+  brandHome: string | undefined,
+): Promise<LoadedModelRoster> {
+  const realHome = deps.homeDir;
+  const brandDir = brandHome ?? join(realHome, '.kimi-code');
+  const loadWarnings: string[] = [];
+  const warnLoad = (message: string): void => {
+    loadWarnings.push(message);
+  };
+  const file = await readAgentFile(deps, join(brandDir, 'agents', 'model-roster.md'), warnLoad);
+  if (file === undefined) {
+    return { content: '', warning: loadWarnings.length > 0 ? loadWarnings.join('\n') : undefined };
+  }
+  const content = renderModelRosterFile(file);
+  const totalBytes = byteLength(content);
+  if (totalBytes > AGENTS_MD_RECOMMENDED_MAX_BYTES) {
+    loadWarnings.push(
+      `model roster total ${formatKB(totalBytes)} KB exceeds the recommended ` +
+        `${formatKB(AGENTS_MD_RECOMMENDED_MAX_BYTES)} KB. Large model roster files ` +
+        `increase cost and may impact performance; consider trimming.`,
+    );
+  }
+  const warning = loadWarnings.length > 0 ? loadWarnings.join('\n') : undefined;
+  return { content, warning };
+}
+
+function renderModelRosterFile(file: AgentFile): string {
+  return `## Model Roster\n\n${annotationFor(file.path)}${file.content}`;
+}
+
 export interface AgentsMdWatchRoot {
   readonly root: string;
   readonly candidates: readonly string[];
@@ -326,7 +388,13 @@ export async function agentsMdWatchRoots(
   const realHome = deps.homeDir;
   const brandDir = brandHome ?? join(realHome, '.kimi-code');
   const plan: AgentsMdWatchRoot[] = [
-    { root: brandDir, candidates: [join(brandDir, 'AGENTS.md')] },
+    {
+      root: brandDir,
+      candidates: [
+        join(brandDir, 'AGENTS.md'),
+        join(brandDir, 'agents', 'model-roster.md'),
+      ],
+    },
     {
       root: realHome,
       candidates: [join(realHome, '.agents', 'AGENTS.md'), join(realHome, '.agents', 'agents.md')],
