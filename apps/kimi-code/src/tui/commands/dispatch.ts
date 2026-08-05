@@ -64,6 +64,7 @@ import {
 } from './session';
 import { handleSwarmCommand } from './swarm';
 import { handleTeamCommand } from './team';
+import { handleTodoCommand } from './todo';
 import { handleUndoCommand } from './undo';
 import { handleWebCommand } from './web';
 
@@ -92,6 +93,7 @@ export {
 } from './config';
 export { handleSwarmCommand } from './swarm';
 export { handleTeamCommand } from './team';
+export { handleTodoCommand } from './todo';
 export { handleFeedbackCommand, showMcpServers, showStatusReport, showUsage } from './info';
 export { handlePluginsCommand } from './plugins';
 export { handleReloadCommand, handleReloadTuiCommand } from './reload';
@@ -342,6 +344,7 @@ const SESSION_REQUIRING_COMMANDS: ReadonlySet<BuiltinSlashCommandName> = new Set
   'init',
   'plan',
   'swarm',
+  'todo',
   'undo',
   'web',
 ]);
@@ -483,6 +486,9 @@ async function handleBuiltInSlashCommand(
       return;
     case 'team':
       await handleTeamCommand(host, args);
+      return;
+    case 'todo':
+      await handleTodoCommand(host);
       return;
     case 'compact':
       await handleCompactCommand(host, args);

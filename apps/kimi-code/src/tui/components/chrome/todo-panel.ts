@@ -18,9 +18,25 @@ import type { ColorPalette } from '#/tui/theme/colors';
 
 export type TodoStatus = 'pending' | 'in_progress' | 'done';
 
+/**
+ * One todo item. `title` / `status` are the persistent chrome fields; the
+ * extended fields (id / assignee / whatDone / completedAt) come from the
+ * engine's TodoList tool args per the parallel contract work and are carried
+ * through the event/replay chain untouched for the `/todo` completed-work
+ * panel. They are optional so a pre-extension engine still works — the chrome
+ * panel ignores them; `/todo` falls back to title / '—'.
+ */
 export interface TodoItem {
   readonly title: string;
   readonly status: TodoStatus;
+  /** Stable todo id (engine-assigned); absent on pre-extension engines. */
+  readonly id?: string;
+  /** Agent / member that did the work. */
+  readonly assignee?: string;
+  /** Human summary of what was done (done items); falls back to title. */
+  readonly whatDone?: string;
+  /** ISO-8601 completion timestamp (done items). */
+  readonly completedAt?: string;
 }
 
 const MAX_VISIBLE = 5;
@@ -113,18 +129,55 @@ export function selectVisibleTodos(todos: readonly TodoItem[]): VisibleTodos {
 
 export class TodoPanelComponent implements Component {
   private todos: readonly TodoItem[] = [];
+  /** Completed-work history accumulated from every todo list seen (live tool
+   *  results + replay hydration). Unlike the live list it is NOT cleared when
+   *  every todo becomes done — that all-done collapse is exactly the "all
+   *  work completed" case `/todo` exists for. Wiped on `clear()` (session
+   *  reset / /clear). */
+  private completedTodos: readonly TodoItem[] = [];
   private expanded = false;
 
   setTodos(todos: readonly TodoItem[]): void {
-    this.todos = todos.map((t) => ({ title: t.title, status: t.status }));
+    const next = todos.map((t) => ({
+      title: t.title,
+      status: t.status,
+      id: t.id,
+      assignee: t.assignee,
+      whatDone: t.whatDone,
+      completedAt: t.completedAt,
+    }));
+    this.todos = next;
+    this.accumulateCompleted(next);
   }
 
   getTodos(): readonly TodoItem[] {
     return this.todos;
   }
 
+  /** Done items seen across this session's todo updates, deduped by id
+   *  (fallback: title). Newest updates append; ordering is chronological. */
+  getCompletedTodos(): readonly TodoItem[] {
+    return this.completedTodos;
+  }
+
+  private accumulateCompleted(todos: readonly TodoItem[]): void {
+    const done = todos.filter((t) => t.status === 'done');
+    if (done.length === 0) return;
+    const seen = new Set<string>();
+    const merged: TodoItem[] = [];
+    for (const item of [...this.completedTodos, ...done]) {
+      const key =
+        item.id !== undefined && item.id.length > 0 ? `id:${item.id}` : `title:${item.title}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(item);
+    }
+    this.completedTodos = merged;
+  }
+
   clear(): void {
     this.todos = [];
+    this.completedTodos = [];
     this.expanded = false;
   }
 

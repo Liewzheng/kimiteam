@@ -365,6 +365,15 @@ export const BUILTIN_SLASH_COMMANDS = [
     availability: 'always',
   },
   {
+    name: 'todo',
+    aliases: [],
+    description: 'View completed work from the todo list',
+    priority: 60,
+    // Read-only panel — safe to open while the agent is streaming (mirrors
+    // the bare `/team` panel availability; Ctrl+C still cancels the turn).
+    availability: 'always',
+  },
+  {
     name: 'feedback',
     aliases: ['bug'],
     description: 'Send feedback to make Kimi Code better',

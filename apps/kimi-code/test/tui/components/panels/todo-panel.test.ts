@@ -193,6 +193,57 @@ describe('TodoPanelComponent', () => {
     panel.setTodos(many(7));
     expect(strip(panel.render(80).join('\n'))).toMatch(/\+2 more/);
   });
+
+  // --- completed-work history (feeds the /todo panel) ---
+
+  it('accumulates done items into getCompletedTodos across list updates', () => {
+    const panel = new TodoPanelComponent();
+    panel.setTodos([
+      { title: 'a', status: 'done', id: 'T1' },
+      { title: 'b', status: 'pending' },
+    ]);
+    panel.setTodos([
+      { title: 'a', status: 'done', id: 'T1' },
+      { title: 'c', status: 'done', id: 'T2' },
+    ]);
+    expect(panel.getCompletedTodos().map((t) => t.id)).toEqual(['T1', 'T2']);
+  });
+
+  it('carries the extended contract fields through setTodos', () => {
+    const panel = new TodoPanelComponent();
+    panel.setTodos([
+      { title: 'a', status: 'done', id: 'T1', assignee: 'Alice', whatDone: 'did a', completedAt: 'x' },
+    ]);
+    expect(panel.getCompletedTodos()[0]).toMatchObject({
+      id: 'T1',
+      assignee: 'Alice',
+      whatDone: 'did a',
+      completedAt: 'x',
+    });
+  });
+
+  it('keeps completed history when an all-done list is collapsed via setTodos([])', () => {
+    const panel = new TodoPanelComponent();
+    panel.setTodos([{ title: 'a', status: 'done', id: 'T1' }]);
+    panel.setTodos([]); // turn-end collapse
+    expect(panel.getCompletedTodos().map((t) => t.id)).toEqual(['T1']);
+  });
+
+  it('dedupes by id and falls back to title when id is absent', () => {
+    const panel = new TodoPanelComponent();
+    panel.setTodos([{ title: 'a', status: 'done', id: 'T1' }]);
+    panel.setTodos([{ title: 'a', status: 'done', id: 'T1' }]);
+    panel.setTodos([{ title: 'x', status: 'done' }]);
+    panel.setTodos([{ title: 'x', status: 'done' }]);
+    expect(panel.getCompletedTodos()).toHaveLength(2);
+  });
+
+  it('clear() wipes the completed-work history', () => {
+    const panel = new TodoPanelComponent();
+    panel.setTodos([{ title: 'a', status: 'done' }]);
+    panel.clear();
+    expect(panel.getCompletedTodos()).toEqual([]);
+  });
 });
 
 describe('selectVisibleTodos', () => {

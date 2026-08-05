@@ -32,6 +32,7 @@ import type {
 } from '@moonshot-ai/kimi-code-sdk';
 
 import { MoonLoader } from '../components/chrome/moon-loader';
+import type { TodoItem } from '../components/chrome/todo-panel';
 import { buildGoalMarker } from '../components/messages/goal-markers';
 import { StatusMessageComponent } from '../components/messages/status-message';
 import {
@@ -632,10 +633,15 @@ export class SessionEventHandler {
       const rawTodos = (matchedCall.args as { todos?: unknown }).todos;
       if (Array.isArray(rawTodos)) {
         const sanitized = rawTodos
-          .filter((todo): todo is { title: string; status: 'pending' | 'in_progress' | 'done' } =>
-            isTodoItemShape(todo),
-          )
-          .map((t) => ({ title: t.title, status: t.status }));
+          .filter((todo): todo is TodoItem => isTodoItemShape(todo))
+          .map((t) => ({
+            title: t.title,
+            status: t.status,
+            id: t.id,
+            assignee: t.assignee,
+            whatDone: t.whatDone,
+            completedAt: t.completedAt,
+          }));
         streamingUI.setTodoList(sanitized);
       }
     }

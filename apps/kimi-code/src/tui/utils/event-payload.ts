@@ -82,11 +82,27 @@ export function serializeToolResultOutput(output: unknown): string {
 
 export function isTodoItemShape(
   value: unknown,
-): value is { title: string; status: 'pending' | 'in_progress' | 'done' } {
+): value is {
+  title: string;
+  status: 'pending' | 'in_progress' | 'done';
+  id?: string;
+  assignee?: string;
+  whatDone?: string;
+  completedAt?: string;
+} {
   if (typeof value !== 'object' || value === null) return false;
-  const rec = value as { title?: unknown; status?: unknown };
-  if (typeof rec.title !== 'string' || rec.title.length === 0) return false;
-  return rec.status === 'pending' || rec.status === 'in_progress' || rec.status === 'done';
+  const rec = value as Record<string, unknown>;
+  if (typeof rec['title'] !== 'string' || rec['title'].length === 0) return false;
+  if (rec['status'] !== 'pending' && rec['status'] !== 'in_progress' && rec['status'] !== 'done') {
+    return false;
+  }
+  // Extended contract fields are optional — when present they must be strings
+  // (validated so a malformed engine payload never crashes the /todo panel).
+  if (rec['id'] !== undefined && typeof rec['id'] !== 'string') return false;
+  if (rec['assignee'] !== undefined && typeof rec['assignee'] !== 'string') return false;
+  if (rec['whatDone'] !== undefined && typeof rec['whatDone'] !== 'string') return false;
+  if (rec['completedAt'] !== undefined && typeof rec['completedAt'] !== 'string') return false;
+  return true;
 }
 
 export function formatErrorMessage(error: unknown): string {
