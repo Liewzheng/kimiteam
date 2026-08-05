@@ -167,6 +167,8 @@ export * from '#/app/agentProfileCatalog/profile-shared';
 export * from '#/app/agentProfileCatalog/promptPrefix';
 export * from '#/app/agentPerformance/agentPerformance';
 import '#/app/agentPerformance/agentPerformanceService';
+export * from '#/app/todoCounter/todoCounter';
+import '#/app/todoCounter/todoCounterService';
 export * from '#/app/runtimeStatus/runtimeStatus';
 import '#/app/runtimeStatus/runtimeStatusService';
 export {
