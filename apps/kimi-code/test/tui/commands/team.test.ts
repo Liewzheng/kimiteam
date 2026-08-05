@@ -293,9 +293,9 @@ describe('deriveMemberStatus', () => {
     expect(deriveMemberStatus(true, entry, now)).toBe('resting');
   });
 
-  it('treats an expired rest window as 上班 (on-duty)', () => {
+  it('treats an expired rest window as 下班 (off-duty)', () => {
     const entry = { state: 'resting', restExpiresAt: '2026-07-30T11:59:00.000Z' } as const;
-    expect(deriveMemberStatus(true, entry, now)).toBe('on-duty');
+    expect(deriveMemberStatus(true, entry, now)).toBe('off-duty');
   });
 
   it('treats a profile with no status entry as 上班 (on-duty)', () => {
@@ -306,10 +306,10 @@ describe('deriveMemberStatus', () => {
     expect(deriveMemberStatus(true, { state: 'resting' } as const, now)).toBe('on-duty');
   });
 
-  it('treats an unparseable restExpiresAt as 上班 (on-duty)', () => {
+  it('treats an unparseable restExpiresAt as expired → 下班 (off-duty)', () => {
     expect(
       deriveMemberStatus(true, { state: 'resting', restExpiresAt: 'not-a-date' } as const, now),
-    ).toBe('on-duty');
+    ).toBe('off-duty');
   });
 
   it('maps a profile-less name to 下班 (off-duty)', () => {
@@ -662,12 +662,12 @@ describe('aggregateMemberRows runtime status + off-duty rows', () => {
     expect(rows.find((r) => r.name === 'Alice')!.status).toBe('resting');
   });
 
-  it('maps an expired rest window back to 上班 (on-duty)', () => {
+  it('maps an expired rest window to 下班 (off-duty)', () => {
     const rows = aggregateMemberRows(
       profiles, perf, undefined, undefined, undefined,
       { Alice: { state: 'resting', restExpiresAt: '2026-07-30T11:59:00.000Z' } } as const, now,
     );
-    expect(rows.find((r) => r.name === 'Alice')!.status).toBe('on-duty');
+    expect(rows.find((r) => r.name === 'Alice')!.status).toBe('off-duty');
   });
 
   it('lists perf-only names as 下班 (off-duty) with role/model dash and history kept', () => {

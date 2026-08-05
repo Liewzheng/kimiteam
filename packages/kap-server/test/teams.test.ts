@@ -242,7 +242,7 @@ describe('server-v2 /api/v1/teams/{session_id}', () => {
     expect(members.project).toEqual([]);
   });
 
-  it('maps member status to the TUI four-state semantics (working/resting/on-duty)', async () => {
+  it('maps member status to the TUI four-state semantics (working/resting/on-duty/off-duty)', async () => {
     const id = await createSession();
     await teamFetch(`/api/v1/teams/${id}/members`, {
       method: 'POST',
@@ -266,10 +266,11 @@ describe('server-v2 /api/v1/teams/{session_id}', () => {
     members = allMembers((await teamFetch(`/api/v1/teams/${id}/members`)).body);
     expect(members.find((m) => m.name === 'duty-cycle')?.status).toBe('resting');
 
-    // Resting with an expired rest window → on-duty (TUI treats expired as on-duty).
+    // Resting with an expired rest window → off-duty (a reaped/parked member,
+    // same as the TUI deriveMemberStatus).
     await status.markResting('duty-cycle', 'agent-1', new Date(Date.now() - 1_000).toISOString());
     members = allMembers((await teamFetch(`/api/v1/teams/${id}/members`)).body);
-    expect(members.find((m) => m.name === 'duty-cycle')?.status).toBe('on-duty');
+    expect(members.find((m) => m.name === 'duty-cycle')?.status).toBe('off-duty');
   });
 
   it('lists a fired member with performance history as off-duty', async () => {

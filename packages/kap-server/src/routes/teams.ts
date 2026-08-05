@@ -246,17 +246,20 @@ async function readMemberDef(
  * `apps/kimi-code/src/tui/commands/team.ts` `deriveMemberStatus`:
  *   - working:  a live engine entry reports `working`
  *   - resting:  entry reports `resting` AND its rest window has not expired
- *   - on-duty:  profile exists with no live entry, or the rest window expired
+ *   - on-duty:  profile exists with no status entry
  *               (employed, no live instance — spawns on demand)
- *   - off-duty: produced by the caller for perf-only archives (fired members)
+ *   - off-duty: profile exists but the resting window expired (the parked
+ *               instance was reaped — a terminal record); or perf-only
+ *               archives (fired members)
  *
- * Unparseable `restExpiresAt` counts as expired (→ on-duty), same as the TUI.
+ * An unparseable `restExpiresAt` counts as expired (→ off-duty), same as TUI.
  */
 function memberStatus(entry: RuntimeStatusEntry | undefined, now: number = Date.now()): TeamMemberWire['status'] {
   if (entry?.state === 'working') return 'working';
   if (entry?.state === 'resting' && entry.restExpiresAt !== undefined) {
     const expiresAt = Date.parse(entry.restExpiresAt);
     if (Number.isFinite(expiresAt) && expiresAt > now) return 'resting';
+    return 'off-duty';
   }
   return 'on-duty';
 }

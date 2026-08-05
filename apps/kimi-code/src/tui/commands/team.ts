@@ -260,10 +260,11 @@ export function parseRuntimeStatusData(raw: string): RuntimeStatusData | null {
  *  - 工作 working:  profile exists && status.state === 'working'
  *  - 休息 resting:  profile exists && status.state === 'resting'
  *                    && rest window (`restExpiresAt`) has not expired
- *  - 上班 on-duty:  profile exists && (no status entry || resting expired)
+ *  - 上班 on-duty:  profile exists && no status entry
  *                    — employed, no live instance, spawns on demand
- *  - 下班 off-duty: no profile file, but performance history exists
- *                    (fired / archived)
+ *  - 下班 off-duty: profile exists && resting window expired (the parked
+ *                    instance was reaped — a terminal record); or no profile
+ *                    file but performance history exists (fired / archived)
  *
  * `now` is injected so callers can freeze time for the rest-window check.
  */
@@ -276,8 +277,11 @@ export function deriveMemberStatus(
   if (entry?.state === 'working') return 'working';
   if (entry?.state === 'resting' && entry.restExpiresAt !== undefined) {
     const expiresAt = Date.parse(entry.restExpiresAt);
-    // Unparseable timestamps count as expired → the member is on-duty.
+    // A live rest window → resting. An expired/unparseable window means the
+    // parked instance was reaped (the reaper keeps the entry as a terminal
+    // record) — a member that went off duty, not an employable on-duty.
     if (Number.isFinite(expiresAt) && expiresAt > now) return 'resting';
+    return 'off-duty';
   }
   return 'on-duty';
 }

@@ -740,11 +740,43 @@ describe('SessionSubagentService — idle reaper & runtime status', () => {
     await vi.advanceTimersByTimeAsync(SUBAGENT_IDLE_TTL_MS - 1);
     expect(stubs.agentLifecycle.remove).not.toHaveBeenCalled();
 
-    // Expiry while idle → the instance is destroyed and its profile entry dropped.
+    // Expiry while idle → the instance is destroyed; the resting status entry
+    // is kept as a terminal expired-resting record (never erased).
     await vi.advanceTimersByTimeAsync(1);
     await vi.advanceTimersByTimeAsync(0); // flush reap microtasks
     expect(stubs.agentLifecycle.remove).toHaveBeenCalledWith(AGENT_ID);
-    expect(stubs.status.removeProfile).toHaveBeenCalledWith(PROFILE_NAME);
+    expect(stubs.status.removeProfile).not.toHaveBeenCalled();
+  });
+
+  it('keeps the resting status entry after reaping so the panel can see prior completion', async () => {
+    const entries = new Map<string, { state: string; agentId: string; restExpiresAt: string }>();
+    const stubs = buildStubs({ teamMode: true });
+    (stubs.status.markResting as Mock).mockImplementation(
+      async (profileName: string, agentId: string, restExpiresAt: string) => {
+        entries.set(profileName, { state: 'resting', agentId, restExpiresAt });
+      },
+    );
+    (stubs.status.list as Mock).mockImplementation(async () => Object.fromEntries(entries));
+    const service = buildService(stubs);
+    const deferred = deferredCompletion();
+    mockedRun(deferred.promise);
+
+    await service.run(AGENT_ID, defaultRequest, defaultOpts);
+    deferred.resolve({ summary: 'done' });
+    await vi.advanceTimersByTimeAsync(0); // settle → resting entry recorded
+
+    await vi.advanceTimersByTimeAsync(SUBAGENT_IDLE_TTL_MS);
+    await vi.advanceTimersByTimeAsync(1); // past the horizon → reaped
+    await vi.advanceTimersByTimeAsync(0); // flush reap microtasks
+
+    expect(stubs.agentLifecycle.remove).toHaveBeenCalledWith(AGENT_ID);
+    expect(stubs.status.removeProfile).not.toHaveBeenCalled();
+    const kept = entries.get(PROFILE_NAME);
+    expect(kept).toBeDefined();
+    expect(kept?.state).toBe('resting');
+    // The persisted rest window has now elapsed — the panel derives off-duty
+    // from it instead of losing the member's prior completion entirely.
+    expect(Date.parse(kept!.restExpiresAt)).toBeLessThanOrEqual(Date.now());
   });
 
   it('parks a subagent for the default 2h idle TTL when idle_ttl_ms is unset', async () => {
@@ -781,7 +813,7 @@ describe('SessionSubagentService — idle reaper & runtime status', () => {
     await vi.advanceTimersByTimeAsync(1);
     await vi.advanceTimersByTimeAsync(0); // flush reap microtasks
     expect(stubs.agentLifecycle.remove).toHaveBeenCalledWith(AGENT_ID);
-    expect(stubs.status.removeProfile).toHaveBeenCalledWith(PROFILE_NAME);
+    expect(stubs.status.removeProfile).not.toHaveBeenCalled();
   });
 
   it('writes the resting horizon from the configured idle TTL, not the default', async () => {
@@ -951,10 +983,10 @@ describe('SessionSubagentService — idle reaper & runtime status', () => {
     await vi.advanceTimersByTimeAsync(1);
     await vi.advanceTimersByTimeAsync(0); // flush reap microtasks
     expect(stubs.agentLifecycle.remove).toHaveBeenCalledWith(AGENT_ID);
-    expect(stubs.status.removeProfile).toHaveBeenCalledWith(PROFILE_NAME);
+    expect(stubs.status.removeProfile).not.toHaveBeenCalled();
   });
 
-  it('reconcile reaps an already-expired resting instance immediately and clears the entry', async () => {
+  it('reconcile reaps an already-expired resting instance and keeps the entry as expired resting', async () => {
     const stubs = buildStubs({ teamMode: true });
     buildService(stubs);
     (stubs.status.list as Mock).mockResolvedValue({
@@ -969,7 +1001,7 @@ describe('SessionSubagentService — idle reaper & runtime status', () => {
     stubs.onDidRestore.fire(AGENT_ID);
     await vi.advanceTimersByTimeAsync(0); // reconcile reads status → expired → reap
     expect(stubs.agentLifecycle.remove).toHaveBeenCalledWith(AGENT_ID);
-    expect(stubs.status.removeProfile).toHaveBeenCalledWith(PROFILE_NAME);
+    expect(stubs.status.removeProfile).not.toHaveBeenCalled();
   });
 
   it('reconcile leaves entries whose agentId does not match untouched', async () => {
@@ -1375,7 +1407,7 @@ describe('SubagentIdleReaper — duty members are never reaped', () => {
     await vi.advanceTimersByTimeAsync(1);
     await vi.advanceTimersByTimeAsync(0); // flush reap microtasks
     expect(stubs.agentLifecycle.remove).toHaveBeenCalledWith(AGENT_ID);
-    expect(stubs.status.removeProfile).toHaveBeenCalledWith(PROFILE_NAME);
+    expect(stubs.status.removeProfile).not.toHaveBeenCalled();
   });
 
   it('reconcile never reaps a duty profile whose resting horizon elapsed while down', async () => {

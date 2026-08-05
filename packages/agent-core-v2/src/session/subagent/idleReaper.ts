@@ -48,7 +48,7 @@ export function subagentRestExpiresAt(
 }
 
 interface IdleTimerEntry {
-  /** Profile the instance was armed under; used to drop the status entry on reap. */
+  /** Profile the instance was armed under; used for the reap log line. */
   readonly profileName: string | undefined;
   readonly timeout: ReturnType<typeof setTimeout>;
 }
@@ -115,9 +115,10 @@ export class SubagentIdleReaper extends Disposable {
    * `agentId`, the countdown is restarted for the *remaining* TTL (the
    * `restExpiresAt` written before the process died), or — when that horizon
    * already passed while we were down — the entry is reaped immediately
-   * (instance removed + profile entry dropped). Entries referencing other
-   * agents, `working` entries, and the main agent are left untouched. Resolves
-   * once the entry has been re-armed or fully reaped.
+   * (instance removed; the resting status entry is kept as a terminal
+   * expired-resting record). Entries referencing other agents, `working`
+   * entries, and the main agent are left untouched. Resolves once the entry
+   * has been re-armed or fully reaped.
    */
   async reconcile(agentId: string): Promise<void> {
     if (agentId === MAIN_AGENT_ID) return;
@@ -174,8 +175,10 @@ export class SubagentIdleReaper extends Disposable {
       return;
     }
     this.log.info('subagent idle reap: instance went off duty', { agentId, profileName });
-    if (profileName !== undefined) {
-      await this.status.removeProfile(profileName).catch(() => { /* swallow */ });
-    }
+    // The runtime-status entry is deliberately KEPT — the parked member's
+    // prior completion stays visible to the panel as a terminal
+    // expired-resting record (restExpiresAt in the past), instead of
+    // `removeProfile` erasing the state and degrading the member to a
+    // stateless on-duty. A later spawn overwrites the entry via markWorking.
   }
 }
