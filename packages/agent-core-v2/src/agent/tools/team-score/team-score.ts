@@ -47,6 +47,10 @@ export const TeamScoreToolInputSchema = z
       .optional()
       .describe('Why the member is being penalized (penalty action)'),
     agent_id: z.string().optional().describe('Optional subagent instance ID this entry is for'),
+    todo_id: z
+      .string()
+      .optional()
+      .describe('Optional todo number the scored delivery hung on (recorded as todoId on the performance entry)'),
     model: z
       .string()
       .optional()

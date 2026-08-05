@@ -53,6 +53,7 @@ import {
 } from '#/app/agentProfileCatalog/profile-shared';
 import { IAgentScopeContext } from '#/agent/scopeContext/scopeContext';
 import { IAgentSwarmService } from '#/agent/swarm/swarm';
+import { ISessionTodoService } from '#/session/todo/sessionTodo';
 import {
   buildSubagentModelDescriptions,
   resolveSubagentBinding,
@@ -181,6 +182,7 @@ export class AgentSwarmTool implements IAgentSwarmTool {
     @IAgentTaskService private readonly tasks: IAgentTaskService,
     @IAgentToolPolicyService private readonly toolPolicy: IAgentToolPolicyService,
     @IModelCatalog private readonly modelCatalog: IModelCatalog,
+    @ISessionTodoService private readonly todo: ISessionTodoService,
   ) {
     this.callerAgentId = scopeContext.agentId;
   }
@@ -265,11 +267,18 @@ export class AgentSwarmTool implements IAgentSwarmTool {
     toolCallId: string,
   ): Promise<string> {
     const { tasks, count } = await this.prepareSwarm(args, toolCallId, undefined);
-    const launch = (signal: AbortSignal): Promise<readonly SessionSwarmRunResult<AgentSwarmSpec>[]> =>
-      this.swarmService.run({
+    const todoId = args.todo_id;
+    const assignee = normalizeOptionalString(args.subagent_type) ?? DEFAULT_SUBAGENT_TYPE;
+    const launch = async (
+      signal: AbortSignal,
+    ): Promise<readonly SessionSwarmRunResult<AgentSwarmSpec>[]> => {
+      const results = await this.swarmService.run({
         callerAgentId: this.callerAgentId,
         tasks: tasks.map((task) => ({ ...task, signal })),
       });
+      this.writeTodoCompletion(todoId, renderSwarmWhatDone(results, args.description), assignee);
+      return results;
+    };
     const render = (results: readonly SessionSwarmRunResult<AgentSwarmSpec>[]): string =>
       renderSwarmResults(
         results.map(({ task, ...result }) => ({ spec: task.data as AgentSwarmSpec, ...result })),
@@ -291,6 +300,11 @@ export class AgentSwarmTool implements IAgentSwarmTool {
       callerAgentId: this.callerAgentId,
       tasks,
     });
+    this.writeTodoCompletion(
+      args.todo_id,
+      renderSwarmWhatDone(results, args.description),
+      normalizeOptionalString(args.subagent_type) ?? DEFAULT_SUBAGENT_TYPE,
+    );
     return renderSwarmResults(
       results.map(({ task, ...result }) => ({ spec: task.data as AgentSwarmSpec, ...result })),
     );
@@ -305,6 +319,7 @@ export class AgentSwarmTool implements IAgentSwarmTool {
     toolCallId: string,
     signal: AbortSignal | undefined,
   ): Promise<{ readonly tasks: SessionSwarmTask<AgentSwarmSpec>[]; readonly count: number }> {
+    this.assertDispatchTodo(args.todo_id);
     const profileName = normalizeOptionalString(args.subagent_type) ?? DEFAULT_SUBAGENT_TYPE;
     let spawnDuty = false;
     let resolveBindingFor: (item: string) => SubagentSpawnBinding | undefined =
@@ -389,6 +404,57 @@ export class AgentSwarmTool implements IAgentSwarmTool {
       };
     });
     return { tasks, count: specs.length };
+  }
+
+  /**
+   * Hard dispatch gate: every swarm dispatch must carry a `todo_id` that
+   * exists and is not done. Missing / unknown / already-done todos are
+   * rejected before any subagent starts — the same Error2 pattern as the
+   * allowlist rejection.
+   */
+  private assertDispatchTodo(todoId: string | undefined): void {
+    const id = todoId?.trim();
+    if (id === undefined || id.length === 0) {
+      throw new Error2(
+        ErrorCodes.VALIDATION_FAILED,
+        '派工必须携带 todo_id（/todo 创建或选择）',
+      );
+    }
+    const todo = this.todo.getTodo(id);
+    if (todo === undefined) {
+      throw new Error2(
+        ErrorCodes.VALIDATION_FAILED,
+        `Todo "${id}" does not exist — create or select it from /todo / TodoList before dispatching.`,
+        { details: { todoId: id } },
+      );
+    }
+    if (todo.status === 'done') {
+      throw new Error2(
+        ErrorCodes.VALIDATION_FAILED,
+        `Todo "${id}" is already done — create or select an open todo before dispatching.`,
+        { details: { todoId: id } },
+      );
+    }
+  }
+
+  /**
+   * Close the unit's todo once the swarm batch has run to completion (success
+   * only — callers invoke it after `swarmService.run` resolves; a throwing
+   * batch never reaches it). A failed writeback must not fail an already
+   * completed batch, so it is swallowed here.
+   */
+  private writeTodoCompletion(
+    todoId: string | undefined,
+    whatDone: string,
+    assignee: string,
+  ): void {
+    const id = todoId?.trim();
+    if (id === undefined || id.length === 0) return;
+    try {
+      this.todo.setTodoCompleted(id, { whatDone, assignee });
+    } catch {
+      // Completion already succeeded; the writeback is best-effort.
+    }
   }
 }
 
@@ -522,6 +588,29 @@ function renderSwarmSummary(completed: number, failed: number, aborted = 0): str
   if (failed > 0) parts.push(`failed: ${String(failed)}`);
   if (aborted > 0) parts.push(`aborted: ${String(aborted)}`);
   return parts.join(', ');
+}
+
+/** How many characters of a swarm completion summary are kept for the todo
+ *  writeback. */
+const SWARM_WHAT_DONE_MAX_CHARS = 500;
+
+/**
+ * Brief completion summary for the swarm todo writeback: the batch description
+ * plus the completed/failed/aborted tally (empty tally → description alone),
+ * truncated.
+ */
+function renderSwarmWhatDone(
+  results: readonly SessionSwarmRunResult<AgentSwarmSpec>[],
+  description: string,
+): string {
+  const completed = results.filter((result) => result.status === 'completed').length;
+  const failed = results.filter((result) => result.status === 'failed').length;
+  const aborted = results.filter((result) => result.status === 'aborted').length;
+  const tally = renderSwarmSummary(completed, failed, aborted);
+  const base = tally.length > 0 ? `${description}: ${tally}` : description;
+  return base.length > SWARM_WHAT_DONE_MAX_CHARS
+    ? `${base.slice(0, SWARM_WHAT_DONE_MAX_CHARS)}…`
+    : base;
 }
 
 /** Immediate result of a background swarm dispatch — one detached task wraps

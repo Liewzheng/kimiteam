@@ -15,6 +15,7 @@ export interface PerformanceEntry {
   readonly note: string;
   readonly model?: string;        // model id the member was using when scored
   readonly agentId?: string;
+  readonly todoId?: string;       // the todo this score's delivery hung on
   readonly sessionId?: string;
 }
 

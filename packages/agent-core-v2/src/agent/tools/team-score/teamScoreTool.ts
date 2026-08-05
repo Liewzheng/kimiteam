@@ -118,6 +118,7 @@ export class TeamScoreTool implements ITeamScoreTool {
       note,
       model: args.model,
       agentId: args.agent_id,
+      todoId: args.todo_id,
     });
 
     const sum = await this.perf.summary(args.profile);
@@ -168,6 +169,7 @@ export class TeamScoreTool implements ITeamScoreTool {
       note: `[penalty] ${args.reason}`,
       model: args.model,
       agentId: args.agent_id,
+      todoId: args.todo_id,
     });
 
     const parts: string[] = [

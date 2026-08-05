@@ -8,4 +8,6 @@ Each of these is enforced — a violation is rejected before any subagent starts
 
 Use enough subagents to keep the work focused and parallel. AgentSwarm supports up to 128 subagents, and launches are queued automatically, so it is safe to split large tasks into many clear, independent items.
 
+Every dispatch attaches a `todo_id` — the todo number the unit hangs on (create or select it from `/todo` / `TodoList` before dispatching). It is required: the engine validates that the number exists and rejects a dispatch without one.
+
 If `AgentSwarm` is called, that call must be the only tool call in the response.

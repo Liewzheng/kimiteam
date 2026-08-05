@@ -16,4 +16,5 @@
 | Onboarding(冷启动/调整/受控探测) | 技能本体 `src/app/skillCatalog/builtin/team-onboarding.md` | 无(onboarding skill) | 无 | TC-TEAM-004~008 | `/team init` 触发;4 问+追问;探测经同意;调整模式 |
 | KV-cache 保活(停靠复用/冷回退/TTL/周期唤醒) | 待补(实现 `src/session/subagent/subagentWarmService.ts` + `src/session/duty/`;设计见 `.changeset/team-warm-keepalive.md`) | 决策表 Member finishes a unit + Controlling 长任务 | `idle_ttl_ms`、`warm_interval_ms`、`duty_idle_ttl_ms` | TC-TEAM-015~017 | 默认 2h;resting 复用、重启找回;周期唤醒保活 KV 缓存;duty 成员默认不收割 |
 | 流水线调度(拆单/选人/后台队列) | 待补(实现 `src/session/duty/dutyScheduler.ts` + `src/session/swarm/sessionSwarmService.ts`) | 决策表 New task to dispatch / Multiple members / Queue backlog 等 | 无 | 待补 | ≤5min 拆单;standby 池 LRU 加权选人(得分+负载);swarm 后台批处理、池满自动入队;先看瓶颈 |
+| /todo 派工挂钩与已完成工作面板 | 待补(制度条目:team-lead-doctrine.md 决策表) | 决策表 Any dispatch + Decision 工作单 + Controlling 回写 | 无(TodoList 工具) | 待补 | 每项派工必须带 `todo_id`(引擎强校验,缺失拒绝);todo 号自增(T1/T2…);完成回写 whatDone/assignee;/todo 面板查看已完成工作 |
 | 手工测试用例 | [team-manual-test.md](team-manual-test.md) | 无 | 无 | (本文档即全集) | 45 条,ISO/IEC/IEEE 29119-3 Tailored Conformance 裁剪 |

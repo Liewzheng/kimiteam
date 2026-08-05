@@ -136,6 +136,7 @@ import {
   IAgentUsageService,
   ISessionWorkspaceContext,
   IWorkspaceStateService,
+  ISessionTodoService,
   AgentLLMRequesterService,
   LifecycleScope,
   AgentMcpService,
@@ -193,6 +194,7 @@ import type { IProcess } from '#/session/process/processRunner';
 import { ISessionQuestionService, type QuestionResult } from '#/session/question/question';
 import { ISessionSkillCatalog } from '#/session/sessionSkillCatalog/skillCatalog';
 import { ISessionSwarmService } from '#/session/swarm/sessionSwarm';
+import type { TodoItem } from '#/session/todo/todoItem';
 import type { PathAccessOperation } from '#/session/workspaceContext/workspaceContext';
 
 import { stubAgentIdentity } from '../app/agentIdentity/stubs';
@@ -1271,6 +1273,26 @@ export class AgentTestContext {
               ISessionCronService,
               new SyncDescriptor(SessionCronServiceImpl),
             );
+            // Default todo service: the dispatch tools (Agent / AgentSwarm)
+            // hard-require a `todo_id` and validate it via the session todo
+            // service. The harness defaults to a permissive stub (any id
+            // exists, pending, completes fine) so existing dispatch tests stay
+            // green without seeding todos; tests that assert todo validation
+            // override it with a controlled service.
+            reg.defineInstance(ISessionTodoService, {
+              _serviceBrand: undefined,
+              getTodos: () => [],
+              setTodos: () => {},
+              clear: () => {},
+              getTodo: (id: string): TodoItem => ({
+                title: `stub todo ${id}`,
+                status: 'pending',
+                id,
+              }),
+              hasTodo: () => true,
+              setTodoCompleted: () => true,
+              onDidChange: Event.None as Event<readonly TodoItem[]>,
+            } satisfies ISessionTodoService);
           },
         ],
         this.serviceOverrides,

@@ -26,6 +26,12 @@ export const AgentSwarmToolInputSchema = z
       .trim()
       .min(1)
       .describe('Short description for the whole swarm.'),
+    todo_id: z
+      .string()
+      .optional()
+      .describe(
+        'Required: the todo number (create or select one from /todo / TodoList before dispatching) this swarm hangs on. The engine rejects a dispatch without it, validates that it exists and is not done, and closes it with whatDone/assignee on completion.',
+      ),
     subagent_type: z
       .string()
       .trim()

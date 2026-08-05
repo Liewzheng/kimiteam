@@ -37,6 +37,12 @@ export const SubagentToolInputSchema = z.preprocess(
   z.object({
     prompt: z.string().describe('Full task prompt for the subagent'),
     description: z.string().describe('Short task description (3-5 words) for UI display'),
+    todo_id: z
+      .string()
+      .optional()
+      .describe(
+        'Required: the todo number (create or select one from /todo / TodoList before dispatching) this unit hangs on. The engine rejects a dispatch without it, validates that it exists and is not done, and closes it with whatDone/assignee on completion.',
+      ),
     subagent_type: z
       .string()
       .optional()

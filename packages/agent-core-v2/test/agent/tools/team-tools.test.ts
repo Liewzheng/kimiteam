@@ -748,6 +748,21 @@ describe('TeamScore', () => {
     expect(entry.ts).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
   });
 
+  it('maps todo_id onto the performance entry as todoId', async () => {
+    const perf = new ScorePerfStub({ coder: { count: 0 } });
+    const tool = makeScoreTool(tmpDir, 'main', { main: {} }, perf);
+    await runResolution(
+      await tool.resolveExecution({
+        profile: 'coder',
+        score: 85,
+        note: 'delivered the unit',
+        todo_id: 'T5',
+      }),
+    );
+    expect(perf.entries).toHaveLength(1);
+    expect(perf.entries[0]!.todoId).toBe('T5');
+  });
+
   it('passes undefined for optional model/agent_id when omitted', async () => {
     const perf = new ScorePerfStub({ coder: { count: 0 } });
     const tool = makeScoreTool(tmpDir, 'main', { main: {} }, perf);

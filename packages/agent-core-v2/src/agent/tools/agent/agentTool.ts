@@ -82,6 +82,7 @@ import { ISessionProcessRunner } from '#/session/process/processRunner';
 import { ISessionMetadata } from '#/session/sessionMetadata/sessionMetadata';
 import { ISessionWorkspaceContext } from '#/session/workspaceContext/workspaceContext';
 import { ISubagentPoolService } from '#/session/subagentPool/subagentPool';
+import { ISessionTodoService } from '#/session/todo/sessionTodo';
 
 import { emitAgentRunSpawned, mirrorAgentRun } from '#/session/subagent/mirrorAgentRun';
 import { ISessionSubagentService } from '#/session/subagent/subagent';
@@ -164,6 +165,7 @@ export class SubagentTool implements ISubagentTool {
     @IAgentPerformanceService private readonly performance: IAgentPerformanceService,
     @IDutySchedulerService private readonly duty: IDutySchedulerService,
     @ISubagentPoolService private readonly pool: ISubagentPoolService,
+    @ISessionTodoService private readonly todo: ISessionTodoService,
   ) {
     this.callerAgentId = scopeContext.agentId;
     this.canRunInBackground = () =>
@@ -363,6 +365,37 @@ export class SubagentTool implements ISubagentTool {
     return this.catalog.get(profileName)?.duty === true;
   }
 
+  /**
+   * Hard dispatch gate: every dispatch must carry a `todo_id` that exists and
+   * is not done. Missing / unknown / already-done todos are rejected before
+   * anything launches — the same Error2 pattern as the allowlist rejection.
+   * Throws (the caller's try/catch turns it into an error result).
+   */
+  private assertDispatchTodo(todoId: string | undefined): void {
+    const id = todoId?.trim();
+    if (id === undefined || id.length === 0) {
+      throw new Error2(
+        ErrorCodes.VALIDATION_FAILED,
+        '派工必须携带 todo_id（/todo 创建或选择）',
+      );
+    }
+    const todo = this.todo.getTodo(id);
+    if (todo === undefined) {
+      throw new Error2(
+        ErrorCodes.VALIDATION_FAILED,
+        `Todo "${id}" does not exist — create or select it from /todo / TodoList before dispatching.`,
+        { details: { todoId: id } },
+      );
+    }
+    if (todo.status === 'done') {
+      throw new Error2(
+        ErrorCodes.VALIDATION_FAILED,
+        `Todo "${id}" is already done — create or select an open todo before dispatching.`,
+        { details: { todoId: id } },
+      );
+    }
+  }
+
   private async launch(
     args: SubagentToolInput,
     toolCallId: string,
@@ -529,6 +562,25 @@ export class SubagentTool implements ISubagentTool {
       },
     });
     const completion = mirrored.then((r) => ({ result: r.summary, usage: r.usage }));
+    // Todo writeback on success: once the run completes, close the unit's
+    // todo with a brief outcome and the member's profile. Fire-and-forget —
+    // the completion promise is consumed by the task machinery, so a failed
+    // writeback must never fail the already-finished run (rejection side
+    // swallows aborts/failures — only a success writes back).
+    const todoId = args.todo_id?.trim();
+    if (todoId !== undefined && todoId.length > 0) {
+      void completion
+        .then(
+          (r) => {
+            this.todo.setTodoCompleted(todoId, {
+              whatDone: summarizeDispatchWhatDone(r.result, args.description),
+              assignee: profileName,
+            });
+          },
+          () => {},
+        )
+        .catch(() => {});
+    }
     // Team-mode standby pool: once this run settles the member is idle again
     // and becomes a dispatch candidate (LRU pick). No-op when team mode is off.
     this.duty.observeSettle(agentId, profileName, this.callerAgentId, completion);
@@ -571,6 +623,7 @@ export class SubagentTool implements ISubagentTool {
   ): Promise<ExecutableToolResult> {
     try {
       signal.throwIfAborted();
+      this.assertDispatchTodo(args.todo_id);
       const runInBackground = this.resolveRunInBackground(args);
       const requestedProfileName = args.subagent_type?.length ? args.subagent_type : undefined;
       const resumeAgentId = args.resume?.trim();
@@ -861,6 +914,24 @@ export function buildPerformanceCard(
     rankLine,
     '</performance_card>',
   ].join('\n');
+}
+
+/** How many characters of a subagent summary are kept for the todo writeback. */
+const WHAT_DONE_MAX_CHARS = 500;
+
+/**
+ * Brief completion summary for the todo writeback: the subagent's own result
+ * summary, truncated; falls back to the dispatch description when the summary
+ * is empty.
+ */
+function summarizeDispatchWhatDone(result: string | undefined, description: string): string {
+  const summary = result?.trim();
+  if (summary !== undefined && summary.length > 0) {
+    return summary.length > WHAT_DONE_MAX_CHARS
+      ? `${summary.slice(0, WHAT_DONE_MAX_CHARS)}…`
+      : summary;
+  }
+  return description;
 }
 
 /** 池满入队 — a foreground spawn enqueued as a detached task. */
