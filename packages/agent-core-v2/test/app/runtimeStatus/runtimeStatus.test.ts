@@ -13,7 +13,12 @@ import { InMemoryStorageService } from '#/persistence/backends/memory/inMemorySt
 import { JsonAtomicDocumentStore } from '#/persistence/backends/node-fs/atomicDocumentStore';
 import type { IAtomicDocumentStore } from '#/persistence/interface/atomicDocumentStore';
 import { RuntimeStatusService } from '#/app/runtimeStatus/runtimeStatusService';
-import type { RuntimeStatusRaw } from '#/app/runtimeStatus/runtimeStatus';
+import {
+  buildRosterSnapshot,
+  deriveRosterStatus,
+  type RuntimeStatusRaw,
+  type RosterSnapshot,
+} from '#/app/runtimeStatus/runtimeStatus';
 
 // ---------------------------------------------------------------------------
 // Build helpers
@@ -168,5 +173,155 @@ describe('RuntimeStatusService', () => {
     const raw = await readRaw(storage);
     expect(raw).toEqual(listed);
     expect(Object.keys(listed)).toHaveLength(2);
+  });
+
+  // -------------------------------------------------------------------------
+  // Derived `standby` state + roster snapshot
+  // -------------------------------------------------------------------------
+
+  it('deriveRosterStatus: working stays working, resting settled inside the keepalive window is standby', () => {
+    const now = Date.parse('2025-06-01T10:00:00.000Z');
+    const window = 900_000; // 15 min
+
+    expect(
+      deriveRosterStatus({ state: 'working', agentId: 'a', updatedAt: new Date(now).toISOString() }, now, window),
+    ).toBe('working');
+    // Settled 8 min ago — within the 15 min window → standby (fresh, warm cache).
+    expect(
+      deriveRosterStatus(
+        { state: 'resting', agentId: 'a', updatedAt: new Date(now - 8 * 60_000).toISOString(), restExpiresAt: new Date(now + 2 * 60 * 60_000).toISOString() },
+        now,
+        window,
+      ),
+    ).toBe('standby');
+    // Boundary: settled exactly `window` ago is still standby (inclusive).
+    expect(
+      deriveRosterStatus(
+        { state: 'resting', agentId: 'a', updatedAt: new Date(now - window).toISOString(), restExpiresAt: new Date(now + 2 * 60 * 60_000).toISOString() },
+        now,
+        window,
+      ),
+    ).toBe('standby');
+  });
+
+  it('deriveRosterStatus: resting settled beyond the keepalive window is resting', () => {
+    const now = Date.parse('2025-06-01T10:00:00.000Z');
+    const window = 900_000;
+    // Settled 30 min ago — beyond the 15 min window → plain resting.
+    expect(
+      deriveRosterStatus(
+        { state: 'resting', agentId: 'a', updatedAt: new Date(now - 30 * 60_000).toISOString(), restExpiresAt: new Date(now + 2 * 60 * 60_000).toISOString() },
+        now,
+        window,
+      ),
+    ).toBe('resting');
+  });
+
+  it('deriveRosterStatus: a zero-length window never derives standby', () => {
+    const now = Date.parse('2025-06-01T10:00:00.000Z');
+    expect(
+      deriveRosterStatus(
+        { state: 'resting', agentId: 'a', updatedAt: new Date(now - 60_000).toISOString(), restExpiresAt: new Date(now + 2 * 60 * 60_000).toISOString() },
+        now,
+        0,
+      ),
+    ).toBe('resting');
+  });
+
+  it('deriveRosterStatus: expired or corrupt resting entries are off-duty', () => {
+    const now = Date.parse('2025-06-01T10:00:00.000Z');
+    const window = 900_000;
+    // Expired horizon → off duty (pending reap); expiry wins over freshness.
+    expect(
+      deriveRosterStatus(
+        { state: 'resting', agentId: 'a', updatedAt: new Date(now - 60_000).toISOString(), restExpiresAt: new Date(now - 60_000).toISOString() },
+        now,
+        window,
+      ),
+    ).toBe('off-duty');
+    // Settled within the window but already expired → still off duty.
+    expect(
+      deriveRosterStatus(
+        { state: 'resting', agentId: 'a', updatedAt: new Date(now - 60_000).toISOString(), restExpiresAt: new Date(now - 1).toISOString() },
+        now,
+        window,
+      ),
+    ).toBe('off-duty');
+    // Missing / unparseable restExpiresAt → off duty (malformed resting).
+    expect(
+      deriveRosterStatus({ state: 'resting', agentId: 'a', updatedAt: new Date(now - 60_000).toISOString() }, now, window),
+    ).toBe('off-duty');
+    expect(
+      deriveRosterStatus({ state: 'resting', agentId: 'a', updatedAt: new Date(now - 60_000).toISOString(), restExpiresAt: 'not-a-date' }, now, window),
+    ).toBe('off-duty');
+    // Corrupt settle time (unparseable updatedAt) → off duty.
+    expect(
+      deriveRosterStatus(
+        { state: 'resting', agentId: 'a', updatedAt: 'not-a-date', restExpiresAt: new Date(now + 2 * 60 * 60_000).toISOString() },
+        now,
+        window,
+      ),
+    ).toBe('off-duty');
+    // Absent profile → off duty by absence.
+    expect(deriveRosterStatus(undefined, now, window)).toBe('off-duty');
+  });
+
+  it('buildRosterSnapshot groups profiles by derived status, profile-name sorted', () => {
+    const now = Date.parse('2025-06-01T10:00:00.000Z');
+    const window = 900_000;
+    const raw: RuntimeStatusRaw = {
+      reviewer: { state: 'resting', agentId: 'a2', updatedAt: new Date(now - 30 * 60_000).toISOString(), restExpiresAt: new Date(now + 2 * 60 * 60_000).toISOString() }, // settled beyond window → resting
+      coder: { state: 'working', agentId: 'a1', updatedAt: new Date(now - 60_000).toISOString() }, // working
+      explorer: { state: 'resting', agentId: 'a3', updatedAt: new Date(now - 5 * 60_000).toISOString(), restExpiresAt: new Date(now + 2 * 60 * 60_000).toISOString() }, // settled within window → standby
+      stale: { state: 'resting', agentId: 'a4', updatedAt: new Date(now - 60_000).toISOString(), restExpiresAt: new Date(now - 60_000).toISOString() }, // expired → off-duty
+    };
+
+    const snap = buildRosterSnapshot(raw, now, window);
+    expect(snap.at).toBe(new Date(now).toISOString());
+    expect(snap.standbyKeepaliveMs).toBe(window);
+    expect(snap.working.map((m) => m.profileName)).toEqual(['coder']);
+    expect(snap.standby.map((m) => m.profileName)).toEqual(['explorer']);
+    expect(snap.resting.map((m) => m.profileName)).toEqual(['reviewer']);
+    expect(snap.offDuty.map((m) => m.profileName)).toEqual(['stale']);
+    // Members + status map cover every present profile, sorted.
+    expect(snap.members.map((m) => m.profileName)).toEqual(['coder', 'explorer', 'reviewer', 'stale']);
+    expect(snap.statusByProfile).toEqual({
+      coder: 'working',
+      explorer: 'standby',
+      reviewer: 'resting',
+      stale: 'off-duty',
+    });
+    // Each member carries its raw entry.
+    expect(snap.standby[0]?.entry?.agentId).toBe('a3');
+  });
+
+  it('roster() reads the table and returns a snapshot without mutating storage', async () => {
+    const { service, storage } = buildRuntimeStatusService();
+    const now = Date.now();
+    await service.markWorking('coder', 'agent-1');
+    // markResting writes updatedAt = real now; pass a slightly later roster
+    // clock so the freshly settled explorer lands inside the keepalive window.
+    await service.markResting('explorer', 'agent-3', new Date(now + 5 * 60_000).toISOString());
+
+    const snap: RosterSnapshot = await service.roster(900_000, now + 60_000);
+    expect(snap.working.map((m) => m.profileName)).toEqual(['coder']);
+    expect(snap.standby.map((m) => m.profileName)).toEqual(['explorer']);
+    expect(snap.offDuty).toHaveLength(0);
+
+    // The read must not write/repair the stored document.
+    const raw = await readRaw(storage);
+    expect(raw?.['coder']).toMatchObject({ state: 'working' });
+    expect(raw?.['explorer']).toMatchObject({ state: 'resting' });
+  });
+
+  it('roster() degrades to an empty snapshot when the table is empty', async () => {
+    const { service } = buildRuntimeStatusService();
+    const snap = await service.roster(900_000, Date.parse('2025-06-01T10:00:00.000Z'));
+    expect(snap.members).toEqual([]);
+    expect(snap.working).toEqual([]);
+    expect(snap.standby).toEqual([]);
+    expect(snap.resting).toEqual([]);
+    expect(snap.offDuty).toEqual([]);
+    expect(snap.statusByProfile).toEqual({});
   });
 });

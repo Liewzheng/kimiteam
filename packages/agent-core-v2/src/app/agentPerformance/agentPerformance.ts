@@ -60,6 +60,15 @@ export interface IAgentPerformanceService {
   /** Read-only summary for one profile. */
   summary(profileName: string): Promise<PerformanceSummary>;
   /**
+   * The most recent shift's duration for a profile, or `undefined` when it has
+   * no recorded shifts. Read-only, over the FIFO shift bucket (newest last).
+   * Purpose: load-weighted member selection — the duty scheduler weights a
+   * candidate by how long its most recent shift ran (doctrine: "load (recent
+   * shift duration + concurrency)"), which `summary().avgDurationMs` does not
+   * give (that is an average over the whole bucket, not the recent shift).
+   */
+  recentShiftDurationMs(profileName: string): Promise<number | undefined>;
+  /**
    * The most recent raw scores for a profile, newest last, capped at `limit`.
    * `summary()` only exposes aggregates, so distribution checks (e.g. score
    * inflation) read the raw FIFO bucket through this.

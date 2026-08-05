@@ -299,6 +299,43 @@ describe('AgentPerformanceServiceImpl', () => {
     expect(sum.avgDurationMs).toBe(15_000);
   });
 
+  // recentShiftDurationMs — read-only "recent shift duration" for load-weighted
+  // member selection (doctrine: "load (recent shift duration + concurrency)").
+
+  it('recentShiftDurationMs returns undefined for a profile with no shifts', async () => {
+    const svc = buildAgentPerformanceService();
+    expect(await svc.recentShiftDurationMs('p')).toBeUndefined();
+    await svc.record({ ts: '2025-01-01T00:00:00.0Z', score: 80, note: 's', profileName: 'p' });
+    // Scores alone never fabricate a shift duration.
+    expect(await svc.recentShiftDurationMs('p')).toBeUndefined();
+  });
+
+  it('recentShiftDurationMs returns the most recent shift duration (newest last)', async () => {
+    const svc = buildAgentPerformanceService();
+    await svc.recordShift('p', {
+      startedAt: 'a', endedAt: 'b', durationMs: 10_000, workSummary: 's1',
+    });
+    await svc.recordShift('p', {
+      startedAt: 'c', endedAt: 'd', durationMs: 20_000, workSummary: 's2',
+    });
+    await svc.recordShift('p', {
+      startedAt: 'e', endedAt: 'f', durationMs: 35_000, workSummary: 's3',
+    });
+    // The FIFO bucket is trimmed oldest-first, so the tail is the most recent.
+    expect(await svc.recentShiftDurationMs('p')).toBe(35_000);
+  });
+
+  it('recentShiftDurationMs stays correct after the FIFO trim', async () => {
+    const svc = buildAgentPerformanceService();
+    for (let i = 0; i < 55; i++) {
+      await svc.recordShift('p', {
+        startedAt: String(i), endedAt: String(i), durationMs: 1000 + i, workSummary: `s${i}`,
+      });
+    }
+    // After the 50-shift trim the latest recorded shift is still the newest.
+    expect(await svc.recentShiftDurationMs('p')).toBe(1000 + 54);
+  });
+
   // ---------------------------------------------------------------------------
   // byModel aggregation
   // ---------------------------------------------------------------------------

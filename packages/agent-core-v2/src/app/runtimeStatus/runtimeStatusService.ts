@@ -14,8 +14,12 @@ import { LifecycleScope, ScopeActivation, registerScopedService } from '#/_base/
 import { ILogService } from '#/_base/log/log';
 import { IAtomicDocumentStore } from '#/persistence/interface/atomicDocumentStore';
 
-import type { RuntimeStatusEntry, RuntimeStatusRaw } from './runtimeStatus';
-import { IRuntimeStatusService } from './runtimeStatus';
+import type {
+  RosterSnapshot,
+  RuntimeStatusEntry,
+  RuntimeStatusRaw,
+} from './runtimeStatus';
+import { buildRosterSnapshot, IRuntimeStatusService } from './runtimeStatus';
 
 const STORAGE_SCOPE = 'agents';
 const STORAGE_KEY = 'runtime-status.json';
@@ -87,6 +91,10 @@ export class RuntimeStatusService implements IRuntimeStatusService {
     return this._readOrCreate();
   }
 
+  roster(standbyKeepaliveMs: number, now: number = Date.now()): Promise<RosterSnapshot> {
+    return this._readOrCreate().then((raw) => buildRosterSnapshot(raw, now, standbyKeepaliveMs));
+  }
+
   private enqueue(op: () => Promise<void>): Promise<void> {
     const run = this._queue.then(op);
     // Keep the chain alive even when one write fails.
@@ -127,5 +135,9 @@ export type {
   RuntimeAgentState,
   RuntimeStatusEntry,
   RuntimeStatusRaw,
+  RosterStatus,
+  RosterMember,
+  RosterSnapshot,
   IRuntimeStatusService,
 } from './runtimeStatus';
+export { buildRosterSnapshot, deriveRosterStatus } from './runtimeStatus';

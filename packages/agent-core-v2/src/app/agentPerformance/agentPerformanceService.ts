@@ -95,6 +95,14 @@ export class AgentPerformanceServiceImpl implements IAgentPerformanceService {
     return bucket.entries.slice(-limit).map((entry) => entry.score);
   }
 
+  async recentShiftDurationMs(profileName: string): Promise<number | undefined> {
+    const raw = (await this._readOrCreate()) as PerformanceRaw;
+    const shifts = raw[profileName]?.shifts;
+    if (shifts === undefined || shifts.length === 0) return undefined;
+    // FIFO trim pushes newest to the tail, so the last shift is the most recent.
+    return shifts.at(-1)?.durationMs;
+  }
+
   async list(): Promise<ProfilePerformanceEntry[]> {
     const raw = (await this._readOrCreate()) as PerformanceRaw;
     const keys = Object.keys(raw);
