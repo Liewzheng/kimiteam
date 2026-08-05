@@ -356,6 +356,10 @@ timeout_ms = 7200000
 # idle_ttl_ms: integer
 # lead_turn_timeout_ms: integer
 # model_overrides: record<string, string>
+# warm_interval_ms: integer
+# duty_idle_ttl_ms: integer
+# max_standby: integer
+# standby_keepalive_ms: integer
 
 # ##########################################################################
 # task

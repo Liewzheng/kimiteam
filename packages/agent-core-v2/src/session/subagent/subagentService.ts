@@ -30,6 +30,7 @@ import { IFlagService } from '#/app/flag/flag';
 import { ISessionContext } from '#/session/sessionContext/sessionContext';
 import { createHooks } from '#/hooks';
 import { IAgentLifecycleService, MAIN_AGENT_ID } from '#/session/agentLifecycle/agentLifecycle';
+import { IModelCatalog } from '#/kosong/model/catalog';
 
 import {
   type AgentRunHandle,
@@ -46,6 +47,7 @@ import {
   SubagentIdleReaper,
   subagentRestExpiresAt,
 } from './idleReaper';
+import { SubagentWarmService } from './subagentWarmService';
 
 export class SessionSubagentService extends Disposable implements ISessionSubagentService {
   declare readonly _serviceBrand: undefined;
@@ -64,6 +66,17 @@ export class SessionSubagentService extends Disposable implements ISessionSubage
    * (run settle).
    */
   private readonly idleReaper: SubagentIdleReaper;
+  /**
+   * Docked-instance KV-cache warmer: arms a periodic zero-impact provider
+   * request per resting instance after its run settles (default 30 min,
+   * configurable via `[subagent] warm_interval_ms`) so a long-parked
+   * instance's provider-side prompt cache does not expire before the next
+   * dispatch. Owned here for the same reason as the reaper — every subagent
+   * run funnels through {@link run}, which is both the warm's cancel point
+   * (run start) and its arm point (run settle). Zero perturbation: the warm
+   * request bypasses context/usage/loop/hooks entirely.
+   */
+  private readonly warmService: SubagentWarmService;
 
   get onDidStopAgentTask() {
     return this.onDidStopAgentTaskEmitter.event;
@@ -77,22 +90,28 @@ export class SessionSubagentService extends Disposable implements ISessionSubage
     @IFlagService private readonly flags: IFlagService,
     @IAgentPerformanceService private readonly performance: IAgentPerformanceService,
     @ISessionContext private readonly sessionContext: ISessionContext,
+    @IModelCatalog private readonly modelCatalog: IModelCatalog,
     @ILogService log: ILogService,
     @IRuntimeStatusService private readonly runtimeStatus: IRuntimeStatusService,
   ) {
     super();
     this.idleReaper = this._register(
-      new SubagentIdleReaper(this.agentLifecycle, this.runtimeStatus, log, this.config),
+      new SubagentIdleReaper(this.agentLifecycle, this.runtimeStatus, log, this.config, this.catalog),
+    );
+    this.warmService = this._register(
+      new SubagentWarmService(this.agentLifecycle, this.runtimeStatus, log, this.config, this.modelCatalog),
     );
     // Re-hang a resumed resting instance's idle countdown: cold materialization
     // (session resume) creates agents through `IAgentLifecycleService.create`,
     // whose `onDidRestore` fires once the handle is fully bootstrapped. The
     // reaper's in-process timers died with the previous process, so the resting
     // TTL is restored from the persisted runtime status here — or reaped
-    // immediately when it already elapsed while we were down.
+    // immediately when it already elapsed while we were down. The warmer's
+    // periodic timer is re-hung the same way.
     this._register(
       this.agentLifecycle.onDidRestore((agentId) => {
         void this.idleReaper.reconcile(agentId);
+        void this.warmService.reconcile(agentId);
       }),
     );
   }
@@ -120,10 +139,13 @@ export class SessionSubagentService extends Disposable implements ISessionSubage
     // this block is skipped and behavior is identical to a plain run.
     const supervised = teamMode && agentId !== MAIN_AGENT_ID && profileName !== undefined;
     if (supervised) {
-      // A new run on this instance cancels any pending idle countdown before
-      // the pool wait, so a queued run can never be reaped mid-dispatch; the
-      // panel sees the profile as working from dispatch time.
+      // A new run on this instance cancels any pending idle countdown and warm
+      // timer before the pool wait, so a queued run can never be reaped or
+      // warmed mid-dispatch; the panel sees the profile as working from
+      // dispatch time. Cancelling the warm also aborts any in-flight warm for
+      // the instance — its context snapshot is stale the moment the run starts.
       this.idleReaper.cancel(agentId);
+      this.warmService.cancel(agentId);
       void this.runtimeStatus.markWorking(profileName!, agentId).catch(() => { /* swallow */ });
     }
 
@@ -229,6 +251,7 @@ export class SessionSubagentService extends Disposable implements ISessionSubage
   /** Restore idle supervision after a run failed to start. */
   private onRunStartFailed(agentId: string, profileName: string): void {
     this.idleReaper.arm(agentId, profileName);
+    this.warmService.arm(agentId, profileName);
     void this.runtimeStatus.markResting(
       profileName,
       agentId,
@@ -238,13 +261,14 @@ export class SessionSubagentService extends Disposable implements ISessionSubage
     );
   }
 
-  /** A run settled: park the instance under the idle TTL. */
+  /** A run settled: park the instance under the idle TTL and re-arm its warmer. */
   private onRunSettled(
     agentId: string,
     profileName: string,
     scoreCountAtStart: number | undefined,
   ): void {
     this.idleReaper.arm(agentId, profileName);
+    this.warmService.arm(agentId, profileName);
     void this.runtimeStatus.markResting(
       profileName,
       agentId,

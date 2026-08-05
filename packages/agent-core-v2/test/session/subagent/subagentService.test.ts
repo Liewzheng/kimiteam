@@ -15,6 +15,10 @@ import type { IAgentScopeHandle } from '#/_base/di/scope';
 import { IAgentLoopService } from '#/agent/loop/loop';
 import { IAgentProfileService } from '#/agent/profile/profile';
 import { IAgentPromptService } from '#/agent/prompt/prompt';
+import { IAgentContextMemoryService } from '#/agent/contextMemory/contextMemory';
+import type { ContextMessage } from '#/agent/contextMemory/types';
+import { IAgentToolRegistryService } from '#/agent/toolRegistry/toolRegistry';
+import type { ToolInfo } from '#/tool/toolContract';
 import type { IAgentPerformanceService } from '#/app/agentPerformance/agentPerformance';
 import type { IRuntimeStatusService } from '#/app/runtimeStatus/runtimeStatus';
 import type { IConfigService } from '#/app/config/config';
@@ -25,6 +29,8 @@ import type { ISessionAgentProfileCatalog } from '#/session/sessionAgentProfileC
 import type { ISessionContext } from '#/session/sessionContext/sessionContext';
 import type { IAgentLifecycleService } from '#/session/agentLifecycle/agentLifecycle';
 import type { ISubagentPoolService } from '#/session/subagentPool/subagentPool';
+import { IModelCatalog } from '#/kosong/model/catalog';
+import type { ModelRequestEvent } from '#/kosong/model/modelRequester';
 
 import { SessionSubagentService } from '#/session/subagent/subagentService';
 import { runAgentTurn } from '#/session/subagent/runAgentTurn';
@@ -55,6 +61,8 @@ const PROFILE_NAME = 'test-coder';
 const MODEL_ALIAS = 'provider/model-x';
 const AGENT_ID = 'agent-1';
 const SESSION_ID = 'session-abc-123';
+const WARM_SYSTEM_PROMPT = 'You are the warm keep-alive system prompt.';
+const WARM_CACHE_KEY = 'warm-cache-key';
 
 function slotStub(): IDisposable {
   let disposed = false;
@@ -70,6 +78,26 @@ function deferredCompletion(): {
   let reject!: (e: unknown) => void;
   const promise = new Promise<{ summary: string }>((res, rej) => { resolve = res; reject = rej; });
   return { promise, resolve, reject };
+}
+
+/**
+ * Minimal context message for warm tests — the warmer only reads presence
+ * (`messages.length`), so the shape just needs to be a valid `ContextMessage`.
+ */
+function ctxMessage(): ContextMessage {
+  return { role: 'user', content: [], toolCalls: [] };
+}
+
+/**
+ * A warm request stream: yields one finish event and ends. The warmer consumes
+ * and discards every event, so the exact shape only needs to type-check.
+ */
+function warmRequestIterable(): AsyncIterable<ModelRequestEvent> {
+  return {
+    async *[Symbol.asyncIterator]() {
+      yield { type: 'finish' as const, message: {} as never };
+    },
+  };
 }
 
 interface ServiceStubs {
@@ -94,6 +122,14 @@ interface ServiceStubs {
   loopState: { state: 'idle' | 'running' };
   /** Main agent's prompt-service stub — its `inject` records score reminders. */
   mainPromptService: { inject: Mock };
+  /** App-scoped model catalog — its `getRequester` mock records warm requests. */
+  modelCatalog: IModelCatalog & { getRequester: Mock };
+  /** The warm request mock returned by `getRequester`; assert against it. */
+  warmRequest: Mock;
+  /** Mutable context the agent handle serves via `IAgentContextMemoryService.get()`. */
+  contextMessages: ContextMessage[];
+  /** Mutable tools the agent handle serves via `IAgentToolRegistryService.list()`. */
+  toolInfos: ToolInfo[];
 }
 
 function buildStubs(options: {
@@ -105,6 +141,12 @@ function buildStubs(options: {
   agentId?: string;
   /** `[subagent] idle_ttl_ms`, when set; drives the idle-reaper TTL. */
   idleTtlMs?: number;
+  /** `[subagent] warm_interval_ms`, when set; drives the warm-timer period (0 disables). */
+  warmIntervalMs?: number;
+  /** `[subagent] duty_idle_ttl_ms`, when set; drives the duty-member idle TTL. */
+  dutyIdleTtlMs?: number;
+  /** Whether `profileName` is an on-duty member (`duty: true` in its agent file). */
+  duty?: boolean;
   /** `[secondary_model]` config, when present; drives derived-secondary binding. */
   secondaryModel?: { model?: string; defaultEffort?: string };
   /** Whether the `secondary-model` experiment flag is enabled. */
@@ -114,6 +156,9 @@ function buildStubs(options: {
 } = {}): ServiceStubs {
   const teamMode = options.teamMode ?? false;
   const idleTtlMs = options.idleTtlMs;
+  const warmIntervalMs = options.warmIntervalMs;
+  const dutyIdleTtlMs = options.dutyIdleTtlMs;
+  const duty = options.duty ?? false;
   const profileName = 'profileName' in options ? options.profileName : PROFILE_NAME;
   const modelAlias = options.modelAlias ?? MODEL_ALIAS;
   const poolActive = options.poolActive ?? 1;
@@ -123,6 +168,8 @@ function buildStubs(options: {
   const mainMaterialized = options.mainMaterialized ?? false;
 
   const loopState: { state: 'idle' | 'running' } = { state: 'idle' };
+  const contextMessages: ContextMessage[] = [];
+  const toolInfos: ToolInfo[] = [];
   const agentHandle = {
     id: agentId,
     kind: 'agent' as const,
@@ -131,6 +178,9 @@ function buildStubs(options: {
         if (serviceId === IAgentProfileService) {
           return {
             data: () => ({ profileName, modelAlias }),
+            resolveModelContext: () => ({ modelAlias }),
+            getSystemPrompt: () => WARM_SYSTEM_PROMPT,
+            resolveRequestParams: () => ({ cacheKey: WARM_CACHE_KEY }),
           };
         }
         if (serviceId === IAgentLoopService) {
@@ -141,6 +191,12 @@ function buildStubs(options: {
               hasPendingRequests: false,
             }),
           };
+        }
+        if (serviceId === IAgentContextMemoryService) {
+          return { get: () => contextMessages };
+        }
+        if (serviceId === IAgentToolRegistryService) {
+          return { list: () => toolInfos };
         }
         throw new Error(`Unexpected service: ${String(serviceId)}`);
       },
@@ -174,20 +230,22 @@ function buildStubs(options: {
   } as unknown as IAgentScopeHandle;
   const agentLifecycle = {
     _serviceBrand: undefined,
-    get: (id: string) => {
+    get: vi.fn((id: string) => {
       // A handle explicitly registered under the run id wins; the materialized
       // main handle is only served for `main` lookups.
       if (id === agentId) return agentHandle;
       if (id === MAIN_AGENT_ID && mainMaterialized) return mainHandle;
       return undefined;
-    },
+    }),
     remove: vi.fn().mockResolvedValue(undefined),
     onDidRestore: onDidRestore.event,
   } as unknown as IAgentLifecycleService & { remove: Mock };
 
   const catalog = {
     _serviceBrand: undefined,
-    get: () => undefined,
+    get: vi.fn((name: string) =>
+      duty && name === profileName ? { name, duty: true } : undefined,
+    ),
   } as unknown as ISessionAgentProfileCatalog;
 
   const pool = {
@@ -204,6 +262,8 @@ function buildStubs(options: {
         ? {
             teamMode,
             ...(idleTtlMs !== undefined ? { idleTtlMs } : {}),
+            ...(warmIntervalMs !== undefined ? { warmIntervalMs } : {}),
+            ...(dutyIdleTtlMs !== undefined ? { dutyIdleTtlMs } : {}),
           }
         : section === SECONDARY_MODEL_SECTION
           ? secondaryModel
@@ -239,6 +299,12 @@ function buildStubs(options: {
     list: Mock;
   };
 
+  const warmRequest = vi.fn().mockReturnValue(warmRequestIterable());
+  const modelCatalog = {
+    _serviceBrand: undefined,
+    getRequester: vi.fn().mockReturnValue({ request: warmRequest }),
+  } as unknown as IModelCatalog & { getRequester: Mock };
+
   return {
     agentLifecycle,
     catalog,
@@ -253,6 +319,10 @@ function buildStubs(options: {
     loopState,
     onDidRestore,
     mainPromptService,
+    modelCatalog,
+    warmRequest,
+    contextMessages,
+    toolInfos,
   };
 }
 
@@ -268,6 +338,7 @@ function buildService(stubs: ServiceStubs): SessionSubagentService {
     stubs.flags,
     stubs.performance,
     stubs.sessionContext,
+    stubs.modelCatalog,
     stubs.log,
     stubs.status,
   );
@@ -1042,5 +1113,309 @@ describe('SessionSubagentService — TeamScore reminder', () => {
       expect(stubs.performance.summary).toHaveBeenCalledTimes(2);
     });
     expect(stubs.mainPromptService.inject).not.toHaveBeenCalled();
+  });
+});
+
+describe('SessionSubagentService — docked-instance warmer (KV-cache keep-alive)', () => {
+  const request: AgentRunRequest = { kind: 'prompt', prompt: 'do something' };
+  const opts: RunAgentOptions = { signal: new AbortController().signal };
+  const WARM_INTERVAL = 1_000;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** One run that settles: parks the instance → idle reaper + warmer armed. */
+  async function parkInstance(stubs: ServiceStubs, service: SessionSubagentService): Promise<void> {
+    const deferred = deferredCompletion();
+    mockRunAgentTurn.mockResolvedValue({
+      agentId: AGENT_ID,
+      turn: {} as never,
+      completion: deferred.promise,
+    });
+    await service.run(AGENT_ID, request, opts);
+    deferred.resolve({ summary: 'ok' });
+    await vi.advanceTimersByTimeAsync(0); // settle → warm timer armed
+  }
+
+  it('fires a keep-alive request at warm_interval_ms and discards the output', async () => {
+    const stubs = buildStubs({ teamMode: true, warmIntervalMs: WARM_INTERVAL });
+    stubs.contextMessages.push(ctxMessage());
+    stubs.toolInfos.push({ name: 'warm_tool', description: 'does warm', source: 'builtin' });
+    const service = buildService(stubs);
+    await parkInstance(stubs, service);
+
+    // Not yet expired.
+    await vi.advanceTimersByTimeAsync(WARM_INTERVAL - 1);
+    expect(stubs.warmRequest).not.toHaveBeenCalled();
+
+    // Fire: one request assembled from the instance's exact prefix.
+    await vi.advanceTimersByTimeAsync(1);
+    expect(stubs.warmRequest).toHaveBeenCalledTimes(1);
+    const input = stubs.warmRequest.mock.calls[0]?.[0] as {
+      systemPrompt: string;
+      messages: readonly ContextMessage[];
+      tools: readonly { name: string; description: string; parameters: Record<string, unknown> }[];
+    };
+    const params = stubs.warmRequest.mock.calls[0]?.[2] as {
+      cacheKey: string;
+      thinkingEffort: 'off';
+      maxCompletionTokens: number;
+    };
+    expect(input).toMatchObject({
+      systemPrompt: WARM_SYSTEM_PROMPT,
+      messages: stubs.contextMessages, // full context — never appended
+      tools: [{ name: 'warm_tool', description: 'does warm', parameters: { type: 'object', properties: {} } }],
+    });
+    expect(params).toEqual({ cacheKey: WARM_CACHE_KEY, thinkingEffort: 'off', maxCompletionTokens: 1 });
+
+    // Periodic: the next fire lands one full interval later.
+    await vi.advanceTimersByTimeAsync(WARM_INTERVAL);
+    expect(stubs.warmRequest).toHaveBeenCalledTimes(2);
+  });
+
+  it('skips the warm (no request) when the instance is running at fire time', async () => {
+    const stubs = buildStubs({ teamMode: true, warmIntervalMs: WARM_INTERVAL });
+    stubs.contextMessages.push(ctxMessage());
+    const service = buildService(stubs);
+    await parkInstance(stubs, service);
+
+    // A TeamMessage-style wake puts a turn in flight without a new run().
+    stubs.loopState.state = 'running';
+
+    await vi.advanceTimersByTimeAsync(WARM_INTERVAL * 2);
+    expect(stubs.warmRequest).not.toHaveBeenCalled();
+  });
+
+  it('skips the warm when the instance was removed before the fire', async () => {
+    const stubs = buildStubs({ teamMode: true, warmIntervalMs: WARM_INTERVAL });
+    stubs.contextMessages.push(ctxMessage());
+    const service = buildService(stubs);
+    await parkInstance(stubs, service);
+
+    // Reaped (idle TTL) or TaskStop'd — the instance no longer exists.
+    (stubs.agentLifecycle.get as unknown as Mock).mockReturnValue(undefined);
+
+    await vi.advanceTimersByTimeAsync(WARM_INTERVAL);
+    expect(stubs.warmRequest).not.toHaveBeenCalled();
+  });
+
+  it('skips the warm when the instance has no context (nothing to keep warm)', async () => {
+    const stubs = buildStubs({ teamMode: true, warmIntervalMs: WARM_INTERVAL });
+    const service = buildService(stubs); // contextMessages stays empty
+    await parkInstance(stubs, service);
+
+    await vi.advanceTimersByTimeAsync(WARM_INTERVAL * 2);
+    expect(stubs.warmRequest).not.toHaveBeenCalled();
+  });
+
+  it('disables the warmer entirely when warm_interval_ms is 0', async () => {
+    const stubs = buildStubs({ teamMode: true, warmIntervalMs: 0 });
+    stubs.contextMessages.push(ctxMessage());
+    const service = buildService(stubs);
+    await parkInstance(stubs, service);
+
+    await vi.advanceTimersByTimeAsync(WARM_INTERVAL * 10);
+    expect(stubs.warmRequest).not.toHaveBeenCalled();
+  });
+
+  it('cancels the warm timer when a new run starts', async () => {
+    const stubs = buildStubs({ teamMode: true, warmIntervalMs: WARM_INTERVAL });
+    stubs.contextMessages.push(ctxMessage());
+    const service = buildService(stubs);
+    await parkInstance(stubs, service);
+
+    // A second dispatch (reuse / resume / fresh spawn) cancels the warm timer.
+    const d2 = deferredCompletion();
+    mockRunAgentTurn.mockResolvedValue({
+      agentId: AGENT_ID,
+      turn: {} as never,
+      completion: d2.promise, // stays in flight — no re-arm on settle
+    });
+    await service.run(AGENT_ID, request, opts);
+
+    await vi.advanceTimersByTimeAsync(WARM_INTERVAL * 3);
+    expect(stubs.warmRequest).not.toHaveBeenCalled();
+  });
+
+  it('aborts an in-flight warm when a new run starts', async () => {
+    const stubs = buildStubs({ teamMode: true, warmIntervalMs: WARM_INTERVAL });
+    stubs.contextMessages.push(ctxMessage());
+    const service = buildService(stubs);
+    await parkInstance(stubs, service);
+
+    await vi.advanceTimersByTimeAsync(WARM_INTERVAL);
+    expect(stubs.warmRequest).toHaveBeenCalledTimes(1);
+    const signal = stubs.warmRequest.mock.calls[0]?.[1] as AbortSignal | undefined;
+    expect(signal?.aborted).toBe(false);
+
+    // A new run cancels the instance's warm → the in-flight request is aborted.
+    const d2 = deferredCompletion();
+    mockRunAgentTurn.mockResolvedValue({
+      agentId: AGENT_ID,
+      turn: {} as never,
+      completion: d2.promise,
+    });
+    await service.run(AGENT_ID, request, opts);
+    expect(signal?.aborted).toBe(true);
+  });
+
+  it('reconcile re-hangs the warm timer for a resumed resting instance', async () => {
+    const stubs = buildStubs({ teamMode: true, warmIntervalMs: WARM_INTERVAL });
+    stubs.contextMessages.push(ctxMessage());
+    buildService(stubs);
+    (stubs.status.list as Mock).mockResolvedValue({
+      [PROFILE_NAME]: {
+        state: 'resting',
+        agentId: AGENT_ID,
+        updatedAt: '2025-01-01T00:00:00.000Z',
+        restExpiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+      },
+    });
+
+    // Simulate the resume path: lifecycle.create() cold-materialized the agent
+    // and fired onDidRestore → the warmer reconciles the resting entry.
+    stubs.onDidRestore.fire(AGENT_ID);
+    await vi.advanceTimersByTimeAsync(0); // reconcile reads status and arms
+
+    await vi.advanceTimersByTimeAsync(WARM_INTERVAL - 1);
+    expect(stubs.warmRequest).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(stubs.warmRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it('reconcile does not hang the warm timer when the resting horizon already elapsed', async () => {
+    const stubs = buildStubs({ teamMode: true, warmIntervalMs: WARM_INTERVAL });
+    stubs.contextMessages.push(ctxMessage());
+    buildService(stubs);
+    (stubs.status.list as Mock).mockResolvedValue({
+      [PROFILE_NAME]: {
+        state: 'resting',
+        agentId: AGENT_ID,
+        updatedAt: '2025-01-01T00:00:00.000Z',
+        restExpiresAt: new Date(Date.now() - 1_000).toISOString(), // expired while down
+      },
+    });
+
+    stubs.onDidRestore.fire(AGENT_ID);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(WARM_INTERVAL * 2);
+    expect(stubs.warmRequest).not.toHaveBeenCalled();
+  });
+
+  it('reconcile never reads status for the main agent', async () => {
+    const stubs = buildStubs({ teamMode: true });
+    buildService(stubs);
+
+    stubs.onDidRestore.fire(MAIN_AGENT_ID);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(stubs.status.list).not.toHaveBeenCalled();
+  });
+});
+
+describe('SubagentIdleReaper — duty members are never reaped', () => {
+  const request: AgentRunRequest = { kind: 'prompt', prompt: 'do something' };
+  const opts: RunAgentOptions = { signal: new AbortController().signal };
+  const IDLE_TTL = 3_000;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('does not reap a duty profile when duty_idle_ttl_ms is 0 (default)', async () => {
+    const stubs = buildStubs({ teamMode: true, duty: true, idleTtlMs: IDLE_TTL });
+    const service = buildService(stubs);
+    const deferred = deferredCompletion();
+    mockRunAgentTurn.mockResolvedValue({
+      agentId: AGENT_ID,
+      turn: {} as never,
+      completion: deferred.promise,
+    });
+
+    await service.run(AGENT_ID, request, opts);
+    deferred.resolve({ summary: 'ok' });
+    await vi.advanceTimersByTimeAsync(0); // settle → duty arm() skipped
+
+    // Twice the normal idle TTL — a duty member is never reaped proactively.
+    await vi.advanceTimersByTimeAsync(IDLE_TTL * 2);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(stubs.agentLifecycle.remove).not.toHaveBeenCalled();
+    expect(stubs.status.removeProfile).not.toHaveBeenCalled();
+  });
+
+  it('reaps a duty profile at the configured duty_idle_ttl_ms horizon', async () => {
+    const stubs = buildStubs({
+      teamMode: true,
+      duty: true,
+      idleTtlMs: IDLE_TTL,
+      dutyIdleTtlMs: 10_000,
+    });
+    const service = buildService(stubs);
+    const deferred = deferredCompletion();
+    mockRunAgentTurn.mockResolvedValue({
+      agentId: AGENT_ID,
+      turn: {} as never,
+      completion: deferred.promise,
+    });
+
+    await service.run(AGENT_ID, request, opts);
+    deferred.resolve({ summary: 'ok' });
+    await vi.advanceTimersByTimeAsync(0); // settle → duty armed at 10s, not 3s
+
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(stubs.agentLifecycle.remove).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(0); // flush reap microtasks
+    expect(stubs.agentLifecycle.remove).toHaveBeenCalledWith(AGENT_ID);
+    expect(stubs.status.removeProfile).toHaveBeenCalledWith(PROFILE_NAME);
+  });
+
+  it('reconcile never reaps a duty profile whose resting horizon elapsed while down', async () => {
+    const stubs = buildStubs({ teamMode: true, duty: true });
+    buildService(stubs);
+    (stubs.status.list as Mock).mockResolvedValue({
+      [PROFILE_NAME]: {
+        state: 'resting',
+        agentId: AGENT_ID,
+        updatedAt: '2025-01-01T00:00:00.000Z',
+        restExpiresAt: new Date(Date.now() - 1_000).toISOString(), // expired
+      },
+    });
+
+    // A duty member goes off duty only via TaskStop — never on a stale horizon.
+    stubs.onDidRestore.fire(AGENT_ID);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(stubs.agentLifecycle.remove).not.toHaveBeenCalled();
+    expect(stubs.status.removeProfile).not.toHaveBeenCalled();
+  });
+
+  it('reconcile re-hangs a duty profile at the duty TTL when configured', async () => {
+    const stubs = buildStubs({ teamMode: true, duty: true, dutyIdleTtlMs: 10_000 });
+    buildService(stubs);
+    (stubs.status.list as Mock).mockResolvedValue({
+      [PROFILE_NAME]: {
+        state: 'resting',
+        agentId: AGENT_ID,
+        updatedAt: '2025-01-01T00:00:00.000Z',
+        restExpiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+      },
+    });
+
+    stubs.onDidRestore.fire(AGENT_ID);
+    await vi.advanceTimersByTimeAsync(0); // reconcile → arm() at the duty TTL
+
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(stubs.agentLifecycle.remove).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(0); // flush reap microtasks
+    expect(stubs.agentLifecycle.remove).toHaveBeenCalledWith(AGENT_ID);
   });
 });

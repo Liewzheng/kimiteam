@@ -22,8 +22,10 @@ import { IConfigService } from '#/app/config/config';
 import { IAgentLoopService } from '#/agent/loop/loop';
 import { IAgentLifecycleService, MAIN_AGENT_ID } from '#/session/agentLifecycle/agentLifecycle';
 import { IRuntimeStatusService } from '#/app/runtimeStatus/runtimeStatus';
+import { ISessionAgentProfileCatalog } from '#/session/sessionAgentProfileCatalog/sessionAgentProfileCatalog';
 import {
   DEFAULT_SUBAGENT_IDLE_TTL_MS,
+  resolveSubagentDutyIdleTtlMs,
   resolveSubagentIdleTtlMs,
 } from './configSection';
 
@@ -59,6 +61,7 @@ export class SubagentIdleReaper extends Disposable {
     private readonly status: IRuntimeStatusService,
     private readonly log: ILogService,
     private readonly config: IConfigService,
+    private readonly catalog: ISessionAgentProfileCatalog,
   ) {
     super();
     this._register({
@@ -71,18 +74,37 @@ export class SubagentIdleReaper extends Disposable {
 
   /**
    * Start (or restart) the idle countdown for `agentId` after its run settled.
-   * The main agent is never armed. No-op when a countdown is already pending
-   * for another reason — it is simply restarted. `ttlMs` defaults to the
-   * resolved `[subagent] idle_ttl_ms` (falling back to the default idle TTL);
-   * callers that re-hang a partially-elapsed horizon (see {@link reconcile})
-   * pass the remaining time instead.
+   * The main agent is never armed. Duty members (`duty: true` in their agent
+   * file) go off duty only through an explicit TaskStop — never through the
+   * idle TTL: `[subagent] duty_idle_ttl_ms` (default `0`) decides, `0` meaning
+   * the member is never armed hence never reaped, a non-zero value arming it
+   * at that longer horizon instead of the normal idle TTL. No-op when a
+   * countdown is already pending for another reason — it is simply restarted.
+   * `ttlMs` defaults to the resolved `[subagent] idle_ttl_ms` (falling back to
+   * the default idle TTL); callers that re-hang a partially-elapsed horizon
+   * (see {@link reconcile}) pass the remaining time instead.
    */
   arm(agentId: string, profileName: string | undefined, ttlMs?: number): void {
     if (agentId === MAIN_AGENT_ID) return;
+    if (this.isDutyProfile(profileName)) {
+      const dutyTtlMs = resolveSubagentDutyIdleTtlMs(this.config);
+      if (dutyTtlMs <= 0) return; // never reaped — duty member stays parked
+      this.schedule(agentId, profileName, dutyTtlMs);
+      return;
+    }
+    this.schedule(agentId, profileName, ttlMs ?? resolveSubagentIdleTtlMs(this.config));
+  }
+
+  private schedule(agentId: string, profileName: string | undefined, ttlMs: number): void {
     this.cancel(agentId);
-    const effectiveTtl = ttlMs ?? resolveSubagentIdleTtlMs(this.config);
-    const timeout = setTimeout(() => this.onTimerFired(agentId), effectiveTtl);
+    const timeout = setTimeout(() => this.onTimerFired(agentId), ttlMs);
     this.timers.set(agentId, { profileName, timeout });
+  }
+
+  /** Whether `profileName` names an on-duty member — same semantics as `isDutyProfile` in the Agent tool. */
+  private isDutyProfile(profileName: string | undefined): boolean {
+    if (profileName === undefined) return false;
+    return this.catalog.get(profileName)?.duty === true;
   }
 
   /**
@@ -102,6 +124,14 @@ export class SubagentIdleReaper extends Disposable {
     const raw = await this.status.list();
     for (const [profileName, entry] of Object.entries(raw)) {
       if (entry.state !== 'resting' || entry.agentId !== agentId) continue;
+      if (this.isDutyProfile(profileName)) {
+        // Duty members go off duty only via TaskStop. The persisted
+        // `restExpiresAt` was written with the normal idle TTL and does not
+        // apply to them — re-hang through arm() (duty_idle_ttl_ms policy,
+        // default 0 = never armed hence never reaped).
+        this.arm(agentId, profileName);
+        return;
+      }
       const remainingMs = Date.parse(entry.restExpiresAt ?? '') - Date.now();
       if (Number.isFinite(remainingMs) && remainingMs > 0) {
         this.arm(agentId, profileName, remainingMs);

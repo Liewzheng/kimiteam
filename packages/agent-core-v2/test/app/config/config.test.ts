@@ -65,12 +65,21 @@ import {
 import { applyPrintModeConfigDefaults } from '#/agent/task/printDefaults';
 import '#/session/subagent/configSection';
 import {
+  DEFAULT_SUBAGENT_DUTY_IDLE_TTL_MS,
+  DEFAULT_SUBAGENT_MAX_STANDBY,
+  DEFAULT_SUBAGENT_STANDBY_KEEPALIVE_MS,
   DEFAULT_SUBAGENT_TIMEOUT_MS,
+  DEFAULT_SUBAGENT_WARM_INTERVAL_MS,
   resolveSecondaryModel,
   resolveSubagentBinding,
+  resolveSubagentDutyIdleTtlMs,
+  resolveSubagentMaxStandby,
+  resolveSubagentStandbyKeepaliveMs,
   resolveSubagentTimeoutMs,
+  resolveSubagentWarmIntervalMs,
   SUBAGENT_SECTION,
   SUBAGENT_TIMEOUT_ENV,
+  SubagentConfigSchema,
   type SubagentConfig,
   wrapSubagentModelError,
 } from '#/session/subagent/configSection';
@@ -1426,6 +1435,71 @@ describe('subagent config section', () => {
     });
 
     disposables.dispose();
+  });
+
+  it('resolves pipeline/keepalive defaults when the section is unset', async () => {
+    const { config, disposables } = await createConfig({});
+    expect(resolveSubagentWarmIntervalMs(config)).toBe(DEFAULT_SUBAGENT_WARM_INTERVAL_MS);
+    expect(resolveSubagentDutyIdleTtlMs(config)).toBe(DEFAULT_SUBAGENT_DUTY_IDLE_TTL_MS);
+    expect(resolveSubagentMaxStandby(config)).toBe(DEFAULT_SUBAGENT_MAX_STANDBY);
+    expect(resolveSubagentStandbyKeepaliveMs(config)).toBe(DEFAULT_SUBAGENT_STANDBY_KEEPALIVE_MS);
+    disposables.dispose();
+  });
+
+  it('parses the pipeline/keepalive keys from config.toml (snake_case wire names)', async () => {
+    const { config, disposables } = await createConfig(
+      {},
+      [
+        '[subagent]',
+        'warm_interval_ms = 60000',
+        'duty_idle_ttl_ms = 120000',
+        'max_standby = 3',
+        'standby_keepalive_ms = 300000',
+        '',
+      ].join('\n'),
+    );
+    expect(resolveSubagentWarmIntervalMs(config)).toBe(60_000);
+    expect(resolveSubagentDutyIdleTtlMs(config)).toBe(120_000);
+    expect(resolveSubagentMaxStandby(config)).toBe(3);
+    expect(resolveSubagentStandbyKeepaliveMs(config)).toBe(300_000);
+    // The parsed section surfaces the camelCase keys for programmatic readers.
+    expect(config.get<SubagentConfig>(SUBAGENT_SECTION)).toMatchObject({
+      warmIntervalMs: 60_000,
+      dutyIdleTtlMs: 120_000,
+      maxStandby: 3,
+      standbyKeepaliveMs: 300_000,
+    });
+    disposables.dispose();
+  });
+
+  it('accepts 0 for the pipeline/keepalive knobs (off / never-reap semantics)', async () => {
+    const { config, disposables } = await createConfig(
+      {},
+      ['[subagent]', 'warm_interval_ms = 0', 'max_standby = 0', 'standby_keepalive_ms = 0', ''].join('\n'),
+    );
+    expect(resolveSubagentWarmIntervalMs(config)).toBe(0);
+    expect(resolveSubagentMaxStandby(config)).toBe(0);
+    expect(resolveSubagentStandbyKeepaliveMs(config)).toBe(0);
+    disposables.dispose();
+  });
+
+  it('validates the pipeline/keepalive schema: optional, non-negative integers', () => {
+    // All four keys are optional and default through the resolve functions.
+    expect(SubagentConfigSchema.parse({})).toEqual({});
+    // `0` is legal on every knob (off / never-reap / zero-length window).
+    expect(
+      SubagentConfigSchema.parse({
+        warmIntervalMs: 0,
+        dutyIdleTtlMs: 0,
+        maxStandby: 0,
+        standbyKeepaliveMs: 0,
+      }),
+    ).toEqual({ warmIntervalMs: 0, dutyIdleTtlMs: 0, maxStandby: 0, standbyKeepaliveMs: 0 });
+    // Negative durations are rejected (a keepalive/ttl cannot be negative).
+    expect(() => SubagentConfigSchema.parse({ warmIntervalMs: -1 })).toThrow();
+    expect(() => SubagentConfigSchema.parse({ dutyIdleTtlMs: -1 })).toThrow();
+    expect(() => SubagentConfigSchema.parse({ maxStandby: -1 })).toThrow();
+    expect(() => SubagentConfigSchema.parse({ standbyKeepaliveMs: -1 })).toThrow();
   });
 
   it('resolves the spawn binding: secondary by default, primary on request, inherit otherwise', async () => {

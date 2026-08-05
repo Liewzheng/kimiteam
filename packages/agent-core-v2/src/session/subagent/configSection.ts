@@ -99,6 +99,36 @@ export const SubagentConfigSchema = z.object({
    * model catalog at spawn time.
    */
   modelOverrides: z.record(z.string(), z.string()).optional(),
+  /**
+   * Keep-alive wake-up period (`[subagent] warm_interval_ms`, default 30
+   * minutes; `0` disables). The keep-alive keeper wakes this often to renew
+   * the rest horizon of standby members (see `standbyKeepaliveMs`) so they
+   * stay warm in the standby pool instead of being reaped at `restExpiresAt`.
+   * Pipeline-phase-one + keepalive: consumed by the keep-alive keeper.
+   */
+  warmIntervalMs: z.number().int().min(0).optional(),
+  /**
+   * Duty-member idle TTL (`[subagent] duty_idle_ttl_ms`, default `0` = never
+   * reaped). A duty member parks without an idle countdown and is never reaped
+   * proactively; `0` keeps it on duty until the main agent sends `TaskStop`.
+   */
+  dutyIdleTtlMs: z.number().int().min(0).optional(),
+  /**
+   * Standby-pool cap (`[subagent] max_standby`, default 8). Upper bound on how
+   * many members the keep-alive keeper renews / keeps in the standby pool;
+   * beyond the cap a resting member drops back to plain `resting` and is
+   * reaped at `restExpiresAt`.
+   */
+  maxStandby: z.number().int().min(0).optional(),
+  /**
+   * Standby keep-alive window (`[subagent] standby_keepalive_ms`, default 15
+   * minutes). After a subagent run settles (`resting`), the instance stays in
+   * the standby pool (warm cache, grab-now) for this window measured from its
+   * settle time (`updatedAt`); once the window elapses it drops to plain
+   * `resting` and runs the existing idle TTL to off-duty. Consumers resolve
+   * the effective value through {@link resolveSubagentStandbyKeepaliveMs}.
+   */
+  standbyKeepaliveMs: z.number().int().min(0).optional(),
 });
 
 export type SubagentConfig = z.infer<typeof SubagentConfigSchema>;
@@ -110,6 +140,18 @@ export const DEFAULT_SUBAGENT_IDLE_TTL_MS = 2 * 60 * 60 * 1000;
 
 /** Default lead-turn timeout for the main agent in team mode: 30s (0 disables). */
 export const DEFAULT_LEAD_TURN_TIMEOUT_MS = 30_000;
+
+/** Default keep-alive wake-up period: 30 minutes (`0` disables). */
+export const DEFAULT_SUBAGENT_WARM_INTERVAL_MS = 1_800_000;
+
+/** Default duty-member idle TTL: `0` = never reaped. */
+export const DEFAULT_SUBAGENT_DUTY_IDLE_TTL_MS = 0;
+
+/** Default standby-pool cap: 8 members. */
+export const DEFAULT_SUBAGENT_MAX_STANDBY = 8;
+
+/** Default standby keep-alive window: 15 minutes. */
+export const DEFAULT_SUBAGENT_STANDBY_KEEPALIVE_MS = 900_000;
 
 export const SUBAGENT_TIMEOUT_ENV = 'KIMI_SUBAGENT_TIMEOUT_MS';
 
@@ -164,6 +206,55 @@ export function resolveLeadTurnTimeoutMs(config: IConfigService): number {
   return (
     config.get<SubagentConfig | undefined>(SUBAGENT_SECTION)?.leadTurnTimeoutMs ??
     DEFAULT_LEAD_TURN_TIMEOUT_MS
+  );
+}
+
+/**
+ * Resolve the keep-alive wake-up period (`[subagent] warm_interval_ms`,
+ * default 30 min; `0` disables). The keep-alive keeper runs on this cadence
+ * to renew standby members' rest horizon.
+ */
+export function resolveSubagentWarmIntervalMs(config: IConfigService): number {
+  return (
+    config.get<SubagentConfig | undefined>(SUBAGENT_SECTION)?.warmIntervalMs ??
+    DEFAULT_SUBAGENT_WARM_INTERVAL_MS
+  );
+}
+
+/**
+ * Resolve the duty-member idle TTL (`[subagent] duty_idle_ttl_ms`, default
+ * `0` = never reaped). Duty members park without an idle countdown and are
+ * never reaped proactively.
+ */
+export function resolveSubagentDutyIdleTtlMs(config: IConfigService): number {
+  return (
+    config.get<SubagentConfig | undefined>(SUBAGENT_SECTION)?.dutyIdleTtlMs ??
+    DEFAULT_SUBAGENT_DUTY_IDLE_TTL_MS
+  );
+}
+
+/**
+ * Resolve the standby-pool cap (`[subagent] max_standby`, default 8) — the
+ * upper bound on how many members the keep-alive keeper keeps in the standby
+ * pool.
+ */
+export function resolveSubagentMaxStandby(config: IConfigService): number {
+  return (
+    config.get<SubagentConfig | undefined>(SUBAGENT_SECTION)?.maxStandby ??
+    DEFAULT_SUBAGENT_MAX_STANDBY
+  );
+}
+
+/**
+ * Resolve the standby keep-alive window (`[subagent] standby_keepalive_ms`,
+ * default 15 min) — the horizon used by the runtime-status roster to derive
+ * `standby` from a `resting` entry whose `restExpiresAt` is within the window
+ * of `now`.
+ */
+export function resolveSubagentStandbyKeepaliveMs(config: IConfigService): number {
+  return (
+    config.get<SubagentConfig | undefined>(SUBAGENT_SECTION)?.standbyKeepaliveMs ??
+    DEFAULT_SUBAGENT_STANDBY_KEEPALIVE_MS
   );
 }
 
