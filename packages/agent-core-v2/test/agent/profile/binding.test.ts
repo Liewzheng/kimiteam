@@ -1,20 +1,22 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'pathe';
+import { join, normalize } from 'pathe';
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { Event } from '#/_base/event';
 import { ConfigTarget, IConfigService } from '#/app/config/config';
 import { TOOLS_SECTION } from '#/agent/toolPolicy/configSection';
-import { DEFAULT_AGENT_PROFILE_NAME } from '#/app/agentProfileCatalog/agentProfileCatalog';
+import { DEFAULT_AGENT_PROFILE_NAME, normalizeAgentProfile } from '#/app/agentProfileCatalog/agentProfileCatalog';
 import { AgentProfileRegistryService } from '#/app/agentProfileCatalog/agentProfileRegistryService';
 import { BuiltinAgentProfileLoaderService } from '#/app/agentProfileCatalog/builtinAgentProfileLoaderService';
 import { registerAgentProfile } from '#/app/agentProfileCatalog/contribution';
-import { renderSystemPrompt } from '#/app/agentProfileCatalog/profile-shared';
+import { renderSystemPromptResult } from '#/app/agentProfileCatalog/profile-shared';
 import { bootstrapSeed } from '#/app/bootstrap/bootstrap';
 import type { ToolCall } from '#/kosong/contract/message';
 import { IAgentProfileService, type ResolvedAgentProfile } from '#/agent/profile/profile';
+import { IHostClock } from '#/os/interface/hostClock';
+import { IAgentAgentsMdReminderService } from '#/agent/agentsMdReminder/agentsMdReminder';
 import { IAgentToolPolicyService } from '#/agent/toolPolicy/toolPolicy';
 import { IAgentToolExecutorService } from '#/agent/toolExecutor/toolExecutor';
 import { IAgentToolRegistryService } from '#/agent/toolRegistry/toolRegistry';
@@ -27,8 +29,12 @@ import { ISessionToolPolicyGate } from '#/session/sessionToolPolicyGate/sessionT
 import { IWireService } from '#/wire/wire';
 import type { ExecutableTool, ToolExecution, ToolResult, ToolSource } from '#/tool/toolContract';
 
+import { IAgentIdentity } from '#/app/agentIdentity/agentIdentity';
+
+import { deferredAgentIdentityStub } from '../../app/agentIdentity/stubs';
 import {
   InMemoryWireRecordPersistence,
+  agentService,
   appService,
   appServices,
   createTestAgent,
@@ -115,6 +121,45 @@ describe('AgentProfileService.bind', () => {
     expect(svc.getSystemPrompt()).toContain('Kimi Code CLI');
   });
 
+  // A fast bootstrap can bind while config is still loading; the model
+  // materialization inside bind must wait for the identity freeze instead of
+  // tripping its pre-freeze guard through the host-headers port.
+  it('waits for the identity freeze instead of racing it', async () => {
+    const deferred = deferredAgentIdentityStub();
+    ctx = createTestAgent(
+      appService(IAgentIdentity, deferred.identity),
+      hostEnvironmentServices(homeDir),
+    );
+    const svc = ctx.get(IAgentProfileService);
+
+    const bound = svc.bind({ profile: DEFAULT_AGENT_PROFILE_NAME, model: MOCK_MODEL });
+    setTimeout(() => deferred.freeze(), 20);
+    await bound;
+
+    expect(svc.data().modelAlias).toBe(MOCK_MODEL);
+    expect(svc.isRunnable()).toBe(true);
+  });
+
+  it('renders the prompt and disclosure from the injected host clock', async () => {
+    const hostClock: IHostClock = {
+      _serviceBrand: undefined,
+      now: () => new Date('2026-07-29T04:00:00.000Z'),
+      timeZone: () => 'Asia/Shanghai',
+    };
+    ctx = createTestAgent(appService(IHostClock, hostClock), hostEnvironmentServices(homeDir));
+    const svc = ctx.get(IAgentProfileService);
+
+    await svc.bind({ profile: DEFAULT_AGENT_PROFILE_NAME, model: MOCK_MODEL });
+
+    expect(svc.getSystemPrompt()).toContain('2026-07-29T04:00:00.000Z');
+    expect(svc.data().environmentDisclosure).toMatchObject({
+      date: {
+        disclosed: true,
+        value: { localDate: '2026-07-29', timeZone: 'Asia/Shanghai' },
+      },
+    });
+  });
+
   it('persists the complete binding in one journal record', async () => {
     const persistence = new InMemoryWireRecordPersistence();
     ctx = createTestAgent(
@@ -170,7 +215,8 @@ describe('AgentProfileService.bind', () => {
     });
     await ctx.get(IWireService).flush();
 
-    expect(persistence.records.find((record) => record.type === 'profile.bind')).toMatchObject({
+    const bindingRecord = persistence.records.find((record) => record.type === 'profile.bind');
+    expect(bindingRecord).toMatchObject({
       profileName: 'delegates-explore',
       subagents: ['explore'],
     });
@@ -201,6 +247,9 @@ describe('AgentProfileService.bind', () => {
       profileName: 'delegates-explore',
       subagents: ['explore'],
     });
+    expect(ctx.get(IAgentProfileService).data().agentsMdPaths).toEqual(
+      bindingRecord?.['agentsMdPaths'],
+    );
   });
 
   it('refreshes the system prompt from the session cwd after a default bind', async () => {
@@ -691,6 +740,7 @@ describe('AgentToolPolicyService.setSessionDisabledTools', () => {
         onDidChange: Event.None as Event<string>,
         load: async () => {},
         reload: async () => {},
+        list: async () => [],
       }),
     );
     const { profile, toolPolicy } = profileServices(ctx);
@@ -715,6 +765,7 @@ describe('AgentToolPolicyService.setSessionDisabledTools', () => {
         onDidChange: Event.None as Event<string>,
         load: async () => {},
         reload: async () => {},
+        list: async () => [],
       }),
     );
     const { profile, toolPolicy } = profileServices(ctx);
@@ -735,6 +786,7 @@ describe('AgentToolPolicyService.setSessionDisabledTools', () => {
         onDidChange: Event.None as Event<string>,
         load: async () => {},
         reload: async () => {},
+        list: async () => [],
       }),
     );
     const { profile, toolPolicy } = profileServices(ctx);
@@ -962,12 +1014,12 @@ describe('AgentProfileService tool-pattern warnings', () => {
   // A file-defined agent, as far as the warning path is concerned: inline so
   // its typo stays out of the builtin-profile known-name vocabulary (a
   // registerAgentProfile contribution would legitimize its own entries).
-  const fileProfile: ResolvedAgentProfile = {
+  const fileProfile: ResolvedAgentProfile = normalizeAgentProfile({
     name: 'bad-patterns',
     tools: ['Bashh', 'mcp__github'],
     disallowedTools: ['*'],
     systemPrompt: () => 'tool pattern warning test',
-  };
+  });
 
   it('warns about profile entries that can never activate anything', async () => {
     ctx = createTestAgent(hostEnvironmentServices(homeDir));
@@ -1040,17 +1092,17 @@ describe('AgentProfileService skill allowlist', () => {
     registerAgentProfile({
       name: 'skill-allow',
       skills: ['alpha-skill'],
-      systemPrompt: (ctx) => renderSystemPrompt('', ctx, { skillActive: true }),
+      systemPrompt: (ctx) => renderSystemPromptResult('', ctx, { skillActive: true }).text,
     });
     registerAgentProfile({
       name: 'skill-none',
       skills: [],
-      systemPrompt: (ctx) => renderSystemPrompt('', ctx, { skillActive: true }),
+      systemPrompt: (ctx) => renderSystemPromptResult('', ctx, { skillActive: true }).text,
     });
     registerAgentProfile({
       name: 'skill-ghost',
       skills: ['ghost-skill'],
-      systemPrompt: (ctx) => renderSystemPrompt('', ctx, { skillActive: true }),
+      systemPrompt: (ctx) => renderSystemPromptResult('', ctx, { skillActive: true }).text,
     });
   });
 
@@ -1084,6 +1136,7 @@ describe('AgentProfileService skill allowlist', () => {
       onDidChange: Event.None as Event<string>,
       load: async () => {},
       reload: async () => {},
+      list: async () => [],
     };
   }
 
@@ -1343,3 +1396,67 @@ class PolicyProbeTool implements ExecutableTool<Record<string, never>> {
     };
   }
 }
+
+describe('agentsMdReminder seeding', () => {
+  let ctx: TestAgentContext;
+  let homeDir: string;
+  let workDir: string;
+
+  beforeAll(() => {
+    registerAgentProfile({
+      name: 'throws-on-prompt',
+      systemPrompt: () => {
+        throw new Error('prompt build boom');
+      },
+    });
+  });
+
+  beforeEach(async () => {
+    homeDir = await mkdtemp(join(tmpdir(), 'kimi-seed-home-'));
+    workDir = await mkdtemp(join(tmpdir(), 'kimi-seed-work-'));
+  });
+
+  afterEach(async () => {
+    await ctx?.dispose();
+    await rm(homeDir, { recursive: true, force: true });
+    await rm(workDir, { recursive: true, force: true });
+  });
+
+  function buildSeededContext(
+    seedInjected: IAgentAgentsMdReminderService['seedInjected'],
+  ): IAgentProfileService {
+    ctx = createTestAgent(
+      { cwd: workDir },
+      hostEnvironmentServices(homeDir),
+      agentService(IAgentAgentsMdReminderService, {
+        _serviceBrand: undefined,
+        seedInjected,
+      }),
+    );
+    return ctx.get(IAgentProfileService);
+  }
+
+  it('seeds the known-set with the injected paths after a successful bind', async () => {
+    const seedInjected = vi.fn<(paths: readonly string[], cwd: string) => void>();
+    const profile = buildSeededContext(seedInjected);
+    await writeFile(join(workDir, 'AGENTS.md'), 'project instructions', 'utf-8');
+
+    seedInjected.mockClear();
+    await profile.bind({ profile: DEFAULT_AGENT_PROFILE_NAME, model: MOCK_MODEL });
+
+    expect(seedInjected).toHaveBeenCalledWith([normalize(join(workDir, 'AGENTS.md'))], workDir);
+    expect(profile.data().agentsMdPaths).toEqual([normalize(join(workDir, 'AGENTS.md'))]);
+  });
+
+  it('does not seed when the prompt build fails before the bind commits', async () => {
+    const seedInjected = vi.fn<(paths: readonly string[], cwd: string) => void>();
+    const profile = buildSeededContext(seedInjected);
+
+    seedInjected.mockClear();
+    await expect(profile.bind({ profile: 'throws-on-prompt', model: MOCK_MODEL })).rejects.toThrow(
+      'prompt build boom',
+    );
+
+    expect(seedInjected).not.toHaveBeenCalled();
+  });
+});

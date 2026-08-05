@@ -23,7 +23,10 @@
  * naturally (global thinking config → the bound model's default effort)
  * rather than inheriting the caller's level. Both tools resolve spawn
  * bindings through `resolveSubagentBinding`, advertise the pair via
- * `buildSubagentModelDescriptions`, and wrap spawn failures with
+ * `buildSubagentModelDescriptions` (each line suffixed with the entry's
+ * resolved capability flags, so the parent can route multimodal or
+ * thinking-heavy subagent tasks instead of guessing from the model id),
+ * and wrap spawn failures with
  * `wrapSubagentModelError`; while the experiment is off they also strip the
  * no-op `model` parameter from their advertised schemas via
  * `stripSubagentModelParameter`. Self-registered at module load via
@@ -53,6 +56,8 @@ import {
   type IConfigService,
 } from '#/app/config/config';
 import { registerConfigSection } from '#/app/config/configSectionContributions';
+import type { ModelCapability } from '#/kosong/contract/capability';
+import type { IModelCatalog } from '#/kosong/model/catalog';
 
 import { SECONDARY_MODEL_FLAG_ID } from './flag';
 
@@ -371,22 +376,49 @@ export function buildSubagentModelDescriptions(
   config: IConfigService,
   flags: IFlagService,
   callerModelAlias: string | undefined,
+  modelCatalog: IModelCatalog,
 ): string | undefined {
-  if (callerModelAlias === undefined) return undefined;
-  const lines: string[] = [];
-  const secondaryModel = resolveSecondaryModel(config, flags)?.model;
-  if (secondaryModel !== undefined) {
-    lines.push(
-      `- secondary: ${secondaryModel} (default) — the configured secondary model; prefer it for routine subagent tasks`,
-      `- primary: ${callerModelAlias} — the main model you are running on; use it for hard, quality-sensitive subagent tasks`,
-    );
-  }
+  const secondary = resolveSecondaryModel(config, flags);
+  const secondaryModel = secondary?.model;
+  if (secondaryModel === undefined || callerModelAlias === undefined) return undefined;
+  const boundSecondary =
+    secondaryModelPatch(secondary) === undefined ? secondaryModel : SECONDARY_DERIVED_MODEL_ID;
+  const lines = [
+    'Available models (pass via model):',
+    `- secondary: ${secondaryModel} (default) — the configured secondary model; prefer it for routine subagent tasks${capabilitiesSuffix(resolvedCapabilities(modelCatalog, boundSecondary))}`,
+    `- primary: ${callerModelAlias} — the main model you are running on; use it for hard, quality-sensitive subagent tasks${capabilitiesSuffix(resolvedCapabilities(modelCatalog, callerModelAlias))}`,
+  ];
   const catalogIds = listCatalogModelIds(config);
   if (catalogIds.length > 0) {
     lines.push(`- or any [models] id from config.toml:\n  ${catalogIds.join(', ')}`);
   }
-  if (lines.length === 0) return undefined;
-  return ['Available models (pass via model):', ...lines].join('\n');
+  return lines.join('\n');
+}
+
+const ADVERTISED_CAPABILITY_FLAGS = [
+  'image_in',
+  'video_in',
+  'audio_in',
+  'thinking',
+  'tool_use',
+  'dynamically_loaded_tools',
+] as const satisfies readonly (keyof ModelCapability)[];
+
+function capabilitiesSuffix(capability: ModelCapability | undefined): string {
+  if (capability === undefined) return '';
+  const names = ADVERTISED_CAPABILITY_FLAGS.filter((flag) => capability[flag] === true);
+  return `; capabilities: ${names.length === 0 ? 'none' : names.join(', ')}`;
+}
+
+function resolvedCapabilities(
+  modelCatalog: IModelCatalog,
+  model: string,
+): ModelCapability | undefined {
+  try {
+    return modelCatalog.get(model).capabilities;
+  } catch {
+    return undefined;
+  }
 }
 
 /**

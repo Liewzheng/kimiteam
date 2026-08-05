@@ -32,7 +32,17 @@ const tempDirs: string[] = [];
 
 afterEach(async () => {
   for (const dir of tempDirs.splice(0)) {
-    await rm(dir, { recursive: true, force: true });
+    // macOS can ENOTEMPTY an rmdir while a minidb query-store flush is still
+    // in flight after a harness teardown — retry briefly before giving up
+    // (same pattern as the kap-server teams tests).
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      try {
+        await rm(dir, { recursive: true, force: true });
+        break;
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    }
   }
 });
 

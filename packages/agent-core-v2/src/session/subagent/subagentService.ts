@@ -10,6 +10,7 @@
  */
 
 import { Disposable, type IDisposable } from '#/_base/di/lifecycle';
+import { Error2, ErrorCodes } from '#/errors';
 import {
   type IAgentScopeHandle,
   LifecycleScope,
@@ -118,7 +119,11 @@ export class SessionSubagentService extends Disposable implements ISessionSubage
 
   async run(agentId: string, request: AgentRunRequest, opts: RunAgentOptions): Promise<AgentRunHandle> {
     const handle = this.agentLifecycle.get(agentId);
-    if (handle === undefined) throw new Error(`Agent "${agentId}" does not exist`);
+    if (handle === undefined) {
+      throw new Error2(ErrorCodes.AGENT_NOT_FOUND, `Agent "${agentId}" does not exist`, {
+        details: { agentId },
+      });
+    }
 
     // Capture profile identity at call time; used for shift recording below.
     const profileData = handle.accessor.get(IAgentProfileService).data();

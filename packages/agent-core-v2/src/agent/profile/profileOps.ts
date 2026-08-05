@@ -3,10 +3,18 @@
  * Op (`configUpdate`) for the agent's persistent configuration slice.
  *
  * Declares the persistent profile config — `modelAlias`, `profileName`,
- * the resolved base thinking effort, `systemPrompt`, and the profile
- * `disallowedTools` denylist and `subagents` delegation allowlist — as a wire
- * Model (initial `defaultProfileModel()`), plus the single Op whose `apply` is
- * a pure merge of an already-resolved payload. Live records carry
+ * the resolved base thinking effort, `systemPrompt`, its injected AGENTS.md
+ * path provenance, the profile `disallowedTools` denylist and `subagents`
+ * delegation allowlist, and the environment disclosure snapshot associated
+ * with the rendered prompt — as a wire Model (initial `defaultProfileModel()`),
+ * plus the single Op whose `apply` is a pure merge of an already-resolved
+ * payload. `renderGeneration` advances on accepted system-prompt writes; on
+ * the live path an Op's `apply` is the only place that increments it (render
+ * callers omit it). The optional payload field is deprecated for new writes:
+ * legacy `config.update` records and live `profile.bind` snapshot/fork
+ * transfers may carry an explicit value, and `apply` then honors the recorded
+ * value verbatim so a replay or resumed binding rebuilds the exact generation
+ * the record was written with. Live records carry
  * `thinkingEffort` (matching the v1 wire field); legacy replay still accepts
  * `thinkingLevel`. The value is
  * resolved to a `ThinkingEffort` at the call site and carried in the
@@ -37,6 +45,7 @@
 
 import { z } from 'zod';
 
+import type { EnvironmentDisclosureSnapshot } from '#/app/agentProfileCatalog/agentProfileCatalog';
 import type { ThinkingEffort } from '#/kosong/contract/provider';
 import { defineModel } from '#/wire/model';
 import type { PayloadOf } from '#/wire/types';
@@ -48,6 +57,9 @@ export interface ProfileModelState {
   readonly profileName?: string;
   readonly thinkingLevel: string;
   readonly systemPrompt: string;
+  readonly environmentDisclosure?: EnvironmentDisclosureSnapshot;
+  readonly renderGeneration: number;
+  readonly agentsMdPaths?: readonly string[];
   readonly disallowedTools?: readonly string[];
   readonly subagents?: readonly string[];
   readonly skills?: readonly string[];
@@ -56,6 +68,7 @@ export interface ProfileModelState {
 export const ProfileModel = defineModel<ProfileModelState>('profile', () => ({
   thinkingLevel: 'off',
   systemPrompt: '',
+  renderGeneration: 0,
 }));
 
 export const profileBind = ProfileModel.defineOp('profile.bind', {
@@ -64,6 +77,9 @@ export const profileBind = ProfileModel.defineOp('profile.bind', {
     profileName: z.string().optional(),
     thinkingEffort: z.custom<ThinkingEffort>(),
     systemPrompt: z.string(),
+    environmentDisclosure: z.custom<EnvironmentDisclosureSnapshot>().optional(),
+    renderGeneration: z.number().optional(),
+    agentsMdPaths: z.array(z.string()).readonly().optional(),
     activeToolNames: z.array(z.string()).readonly().optional(),
     disallowedTools: z.array(z.string()).readonly(),
     subagents: z.array(z.string()).readonly().optional(),
@@ -74,6 +90,9 @@ export const profileBind = ProfileModel.defineOp('profile.bind', {
     profileName: p.profileName ?? s.profileName,
     thinkingLevel: p.thinkingEffort,
     systemPrompt: p.systemPrompt,
+    environmentDisclosure: p.environmentDisclosure,
+    renderGeneration: p.renderGeneration ?? s.renderGeneration + 1,
+    agentsMdPaths: p.agentsMdPaths ?? s.agentsMdPaths,
     disallowedTools: p.disallowedTools,
     subagents: p.subagents,
     skills: p.skills,
@@ -87,6 +106,9 @@ export const configUpdate = ProfileModel.defineOp('config.update', {
     thinkingEffort: z.custom<ThinkingEffort>().optional(),
     thinkingLevel: z.custom<ThinkingEffort>().optional(),
     systemPrompt: z.string().optional(),
+    environmentDisclosure: z.custom<EnvironmentDisclosureSnapshot>().optional(),
+    renderGeneration: z.number().optional(),
+    agentsMdPaths: z.array(z.string()).readonly().optional(),
     disallowedTools: z.array(z.string()).readonly().optional(),
   }),
   apply: (s, p) => {
@@ -101,8 +123,24 @@ export const configUpdate = ProfileModel.defineOp('config.update', {
     if (thinkingLevel !== undefined && thinkingLevel !== s.thinkingLevel) {
       next = { ...(next ?? s), thinkingLevel };
     }
-    if (p.systemPrompt !== undefined && p.systemPrompt !== s.systemPrompt) {
-      next = { ...(next ?? s), systemPrompt: p.systemPrompt };
+    if (
+      p.systemPrompt !== undefined &&
+      (p.systemPrompt !== s.systemPrompt ||
+        p.environmentDisclosure !== undefined ||
+        p.renderGeneration !== undefined)
+    ) {
+      next = {
+        ...(next ?? s),
+        systemPrompt: p.systemPrompt,
+        environmentDisclosure: p.environmentDisclosure,
+        renderGeneration: p.renderGeneration ?? s.renderGeneration + 1,
+      };
+    }
+    if (
+      p.agentsMdPaths !== undefined &&
+      !stringArrayEqual(p.agentsMdPaths, s.agentsMdPaths)
+    ) {
+      next = { ...(next ?? s), agentsMdPaths: p.agentsMdPaths };
     }
     if (
       p.disallowedTools !== undefined &&
