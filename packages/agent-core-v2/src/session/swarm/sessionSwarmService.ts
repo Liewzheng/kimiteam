@@ -25,7 +25,7 @@ import { LifecycleScope, ScopeActivation, registerScopedService } from '#/_base/
 import { Error2, ErrorCodes } from '#/errors';
 import { linkAbortSignal } from '#/_base/utils/abort';
 import type { IAgentScopeHandle } from '#/_base/di/scope';
-import { IAgentProfileService } from '#/agent/profile/profile';
+import { IAgentProfileService, type ProfileData } from '#/agent/profile/profile';
 import { IAgentPermissionModeService } from '#/agent/permissionMode/permissionMode';
 import { IAgentLoopService } from '#/agent/loop/loop';
 import { IAgentUserToolService } from '#/agent/userTool/userTool';
@@ -178,8 +178,15 @@ export class SessionSwarmService implements ISessionSwarmService {
         profileName: options.profileName,
         claimInto: this.reservedForReuse,
       });
-      if (reuseId !== undefined) {
+      if (reuseId !== undefined && this.parkedHonorsSpawnBinding(reuseId, options, callerData)) {
         return this.reuseIdleAttempt(callerAgentId, reuseId, options);
+      }
+      if (reuseId !== undefined) {
+        // The picked member's binding cannot honor this spawn's requested
+        // binding — release the batch claim (the member stays available to a
+        // later item whose binding it can serve) and fall through to a fresh
+        // spawn bound to the requested model.
+        this.reservedForReuse.delete(reuseId);
       }
     }
 
@@ -232,6 +239,26 @@ export class SessionSwarmService implements ISessionSwarmService {
       kind: 'prompt',
       prompt: promptText,
     }, options);
+  }
+
+  /**
+   * Whether a picked parked member can honor this spawn's requested binding.
+   * Reuse is valid only when the member's current model alias matches the
+   * binding this spawn asks for (`options.binding`, else the caller's current
+   * model). Otherwise the run would silently execute on the member's stale
+   * model — wrong usage key and tool capabilities — so reuse must be refused
+   * and a fresh spawn bound to the requested model used instead. This is the
+   * swarm-side counterpart of the `Agent` tool's reuse guard.
+   */
+  private parkedHonorsSpawnBinding(
+    reuseId: string,
+    options: AgentSpawnAttemptOptions,
+    callerData: ProfileData,
+  ): boolean {
+    const parkedAlias = this.requireHandle(reuseId, 'Agent instance')
+      .accessor.get(IAgentProfileService).data().modelAlias;
+    const requestedModel = options.binding?.model ?? callerData.modelAlias;
+    return requestedModel !== undefined && parkedAlias === requestedModel;
   }
 
   /**

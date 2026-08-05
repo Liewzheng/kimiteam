@@ -1446,6 +1446,99 @@ describe('SessionSwarmService metadata compatibility', () => {
     expect(new Set(runAgentIds)).toEqual(new Set(['agent-1', 'agent-2']));
     expect(runAgentIds).toHaveLength(2);
   });
+
+  it('does not reuse a parked member whose model differs from the requested binding — forces a fresh spawn (team mode)', async () => {
+    agents['agent-1'] = { labels: { parentAgentId: 'main' } };
+    // Parked member bound to the default 'kimi-test'.
+    handles.set('agent-1', agentHandle('agent-1', lifecycle, eventBus, { profileName: 'coder' }));
+    config.setTeamMode(true);
+    const service = ix.get(ISessionSwarmService);
+
+    await expect(
+      service.run({
+        callerAgentId: 'main',
+        tasks: [
+          {
+            ...spawnSessionTask(),
+            binding: { model: 'kimi-code/k3', thinking: 'high' },
+          },
+        ],
+      }),
+    ).resolves.toMatchObject([{ status: 'completed', agentId: 'agent-new' }]);
+
+    // The parked member (bound to 'kimi-test') is not reused: reusing it would
+    // run the requested binding's item on the stale model — wrong usage key
+    // and tool capabilities.
+    expect(runAgent).not.toHaveBeenCalledWith('agent-1', expect.anything(), expect.anything());
+    // A fresh instance is created bound to the requested model — that binding
+    // flows into the child's request.modelAlias, so the usage.record key for
+    // this run is "kimi-code/k3".
+    expect(createAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        binding: expect.objectContaining({ profile: 'coder', model: 'kimi-code/k3' }),
+      }),
+    );
+    expect(
+      lifecycle.get('agent-new')?.accessor.get(IAgentProfileService).data().modelAlias,
+    ).toBe('kimi-code/k3');
+    expect(runAgent).toHaveBeenCalledWith(
+      'agent-new',
+      expect.objectContaining({ kind: 'prompt' }),
+      expect.anything(),
+    );
+  });
+
+  it('reuses a parked member when the requested binding matches its model (team mode)', async () => {
+    agents['agent-1'] = { labels: { parentAgentId: 'main' } };
+    handles.set('agent-1', agentHandle('agent-1', lifecycle, eventBus, { profileName: 'coder' }));
+    config.setTeamMode(true);
+    const service = ix.get(ISessionSwarmService);
+
+    await expect(
+      service.run({
+        callerAgentId: 'main',
+        tasks: [
+          {
+            ...spawnSessionTask(),
+            binding: { model: 'kimi-test', thinking: 'medium' },
+          },
+        ],
+      }),
+    ).resolves.toMatchObject([{ status: 'completed', agentId: 'agent-1' }]);
+
+    expect(createAgent).not.toHaveBeenCalled();
+    expect(runAgent).toHaveBeenCalledWith(
+      'agent-1',
+      { kind: 'prompt', prompt: 'Review the file' },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+  });
+
+  it('does not reuse a parked member when the caller model (fallback binding) differs from its model (team mode)', async () => {
+    // Caller on 'primary-model'; the parked member is bound to 'kimi-test'.
+    handles.set(
+      'main',
+      agentHandle('main', lifecycle, eventBus, { profileName: 'agent', modelAlias: 'primary-model' }),
+    );
+    agents['agent-1'] = { labels: { parentAgentId: 'main' } };
+    handles.set('agent-1', agentHandle('agent-1', lifecycle, eventBus, { profileName: 'coder' }));
+    config.setTeamMode(true);
+    const service = ix.get(ISessionSwarmService);
+
+    const results = await service.run({
+      callerAgentId: 'main',
+      // No per-item binding → the requested binding is the caller's model.
+      tasks: [spawnSessionTask()],
+    });
+
+    expect(results).toMatchObject([{ status: 'completed', agentId: 'agent-new' }]);
+    expect(runAgent).not.toHaveBeenCalledWith('agent-1', expect.anything(), expect.anything());
+    expect(createAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        binding: expect.objectContaining({ profile: 'coder', model: 'primary-model' }),
+      }),
+    );
+  });
 });
 
 function spawnSessionTask(swarmItem?: string): SessionSwarmSpawnTask {
