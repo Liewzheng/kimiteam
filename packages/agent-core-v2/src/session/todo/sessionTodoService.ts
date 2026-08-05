@@ -25,9 +25,9 @@ import { IEventBus } from '#/app/event/eventBus';
 import { IAgentLifecycleService } from '#/session/agentLifecycle/agentLifecycle';
 import { IWireService } from '#/wire/wire';
 
-import { ISessionTodoService } from './sessionTodo';
+import { ISessionTodoService, type TodoCompletionUpdate } from './sessionTodo';
 import { TodoModel, todoSet } from './todoOps';
-import { TODO_LIST_TOOL_NAME, type TodoItem } from './todoItem';
+import { sanitizeTodoItem, TODO_LIST_TOOL_NAME, type TodoItem } from './todoItem';
 import { TODO_LIST_REMINDER_VARIANT, todoListStaleReminder } from './todoListReminder';
 
 const MAIN_AGENT_ID = 'main';
@@ -75,11 +75,35 @@ export class SessionTodoService extends Disposable implements ISessionTodoServic
   }
 
   setTodos(todos: readonly TodoItem[]): void {
-    const next: readonly TodoItem[] = todos.map((todo) => ({
-      title: todo.title,
-      status: todo.status,
-    }));
+    const next: readonly TodoItem[] = todos.map(sanitizeTodoItem);
     this.dispatchTodoSet(next);
+  }
+
+  getTodo(id: string): TodoItem | undefined {
+    return this.getTodos().find((todo) => todo.id === id);
+  }
+
+  hasTodo(id: string): boolean {
+    return this.getTodo(id) !== undefined;
+  }
+
+  setTodoCompleted(id: string, update: TodoCompletionUpdate): boolean {
+    const current = this.getTodos();
+    const index = current.findIndex((todo) => todo.id === id);
+    if (index === -1) return false;
+    const next: readonly TodoItem[] = current.map((todo, i) =>
+      i === index
+        ? sanitizeTodoItem({
+            ...todo,
+            status: 'done',
+            whatDone: update.whatDone ?? todo.whatDone,
+            assignee: update.assignee ?? todo.assignee,
+            completedAt: new Date().toISOString(),
+          })
+        : todo,
+    );
+    this.dispatchTodoSet(next);
+    return true;
   }
 
   clear(): void {
@@ -149,7 +173,19 @@ export class SessionTodoService extends Disposable implements ISessionTodoServic
 function todoItemsEqual(a: readonly TodoItem[], b: readonly TodoItem[]): boolean {
   return (
     a.length === b.length &&
-    a.every((item, index) => item.title === b[index]?.title && item.status === b[index]?.status)
+    a.every((item, index) => todoItemEqual(item, b[index]))
+  );
+}
+
+function todoItemEqual(a: TodoItem | undefined, b: TodoItem | undefined): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  return (
+    a.title === b.title &&
+    a.status === b.status &&
+    a.id === b.id &&
+    a.assignee === b.assignee &&
+    a.whatDone === b.whatDone &&
+    a.completedAt === b.completedAt
   );
 }
 

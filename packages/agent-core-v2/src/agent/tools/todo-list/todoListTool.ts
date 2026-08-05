@@ -19,7 +19,9 @@ import { registerAgentToolService } from '#/agent/toolRegistry/toolContribution'
 import { toInputJsonSchema } from '#/tool/input-schema';
 
 import { ISessionTodoService } from '#/session/todo/sessionTodo';
+import { ITodoService } from '#/app/todoCounter/todoCounter';
 import {
+  sanitizeTodoItem,
   TODO_LIST_TOOL_NAME,
   renderTodoList,
   type TodoItem,
@@ -39,7 +41,10 @@ export class TodoListTool implements ITodoListTool {
   readonly description: string = DESCRIPTION;
   readonly parameters: Record<string, unknown> = toInputJsonSchema(TodoListInputSchema);
 
-  constructor(@ISessionTodoService private readonly todo: ISessionTodoService) {}
+  constructor(
+    @ISessionTodoService private readonly todo: ISessionTodoService,
+    @ITodoService private readonly todoId: ITodoService,
+  ) {}
 
   resolveExecution(args: TodoListInput): ToolExecution {
     const description =
@@ -56,10 +61,20 @@ export class TodoListTool implements ITodoListTool {
           return { isError: false, output: renderTodoList(this.todo.getTodos()) };
         }
 
-        const next: readonly TodoItem[] = args.todos.map((todo) => ({
-          title: todo.title,
-          status: todo.status,
-        }));
+        // Assign a fresh id to every todo that does not carry one (the model
+        // echoes ids back on updates, so a missing/empty id means "new"). The
+        // counter is cross-session, so ids stay unique and stable for dispatch.
+        const next: TodoItem[] = [];
+        for (const todo of args.todos) {
+          const id = todo.id?.trim();
+          next.push(
+            sanitizeTodoItem({
+              title: todo.title,
+              status: todo.status,
+              id: id !== undefined && id.length > 0 ? id : await this.todoId.nextTodoId(),
+            }),
+          );
+        }
         this.todo.setTodos(next);
         const stored = this.todo.getTodos();
         const output =

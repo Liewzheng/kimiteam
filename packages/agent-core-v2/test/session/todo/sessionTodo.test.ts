@@ -29,7 +29,9 @@ import { IWireService, type WireHooks } from '#/wire/wire';
 import type { WireRecord } from '#/wire/record';
 
 interface RecordedTodoSet {
-  readonly todos: readonly TodoItem[];
+  readonly type: string;
+  readonly key?: string;
+  readonly value?: unknown;
 }
 
 interface FakeAgent {
@@ -305,6 +307,9 @@ describe('SessionTodoService', () => {
     expect(typeof service.getTodos).toBe('function');
     expect(typeof service.setTodos).toBe('function');
     expect(typeof service.clear).toBe('function');
+    expect(typeof service.getTodo).toBe('function');
+    expect(typeof service.hasTodo).toBe('function');
+    expect(typeof service.setTodoCompleted).toBe('function');
     expect(typeof service.onDidChange).toBe('function');
   });
 
@@ -340,5 +345,94 @@ describe('SessionTodoService', () => {
     ]);
 
     expect(service.getTodos()).toEqual([]);
+  });
+
+  it('getTodo/hasTodo look up items by their stable id', () => {
+    const main = makeFakeAgent('main');
+    const lifecycle = makeLifecycleStub([main.handle]);
+    const service = new SessionTodoService(lifecycle.service);
+    service.setTodos([
+      { title: 'a', status: 'pending', id: 'T1' },
+      { title: 'b', status: 'in_progress', id: 'T2' },
+    ]);
+
+    expect(service.hasTodo('T1')).toBe(true);
+    expect(service.hasTodo('T2')).toBe(true);
+    expect(service.hasTodo('T99')).toBe(false);
+    expect(service.getTodo('T2')).toEqual({ title: 'b', status: 'in_progress', id: 'T2' });
+    expect(service.getTodo('T99')).toBeUndefined();
+  });
+
+  it('setTodoCompleted marks the todo done and records completion details', () => {
+    const main = makeFakeAgent('main');
+    const lifecycle = makeLifecycleStub([main.handle]);
+    const service = new SessionTodoService(lifecycle.service);
+    service.setTodos([
+      { title: 'a', status: 'pending', id: 'T1', assignee: 'coder' },
+      { title: 'b', status: 'pending', id: 'T2' },
+    ]);
+
+    const completed = service.setTodoCompleted('T1', { whatDone: 'shipped the fix', assignee: 'explore' });
+
+    expect(completed).toBe(true);
+    const updated = service.getTodo('T1');
+    expect(updated?.status).toBe('done');
+    expect(updated?.whatDone).toBe('shipped the fix');
+    expect(updated?.assignee).toBe('explore');
+    expect(updated?.completedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(updated?.id).toBe('T1'); // id and title survive the writeback
+    expect(updated?.title).toBe('a');
+    // Unrelated todos are untouched.
+    expect(service.getTodo('T2')).toEqual({ title: 'b', status: 'pending', id: 'T2' });
+  });
+
+  it('setTodoCompleted keeps an existing whatDone/completedAt when the update omits them', () => {
+    const main = makeFakeAgent('main');
+    const lifecycle = makeLifecycleStub([main.handle]);
+    const service = new SessionTodoService(lifecycle.service);
+    service.setTodos([
+      { title: 'a', status: 'pending', id: 'T1', whatDone: 'old note', completedAt: '2025-01-01T00:00:00.000Z' },
+    ]);
+
+    service.setTodoCompleted('T1', {});
+
+    const updated = service.getTodo('T1');
+    expect(updated?.status).toBe('done');
+    expect(updated?.whatDone).toBe('old note');
+    expect(updated?.completedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+
+  it('setTodoCompleted returns false and changes nothing for an unknown id', () => {
+    const main = makeFakeAgent('main');
+    const lifecycle = makeLifecycleStub([main.handle]);
+    const service = new SessionTodoService(lifecycle.service);
+    service.setTodos([{ title: 'a', status: 'pending', id: 'T1' }]);
+
+    expect(service.setTodoCompleted('T99', { whatDone: 'nope' })).toBe(false);
+    expect(service.getTodos()).toEqual([{ title: 'a', status: 'pending', id: 'T1' }]);
+  });
+
+  it('setTodoCompleted appends a tools.update_store record for the updated list', () => {
+    const main = makeFakeAgent('main');
+    const lifecycle = makeLifecycleStub([main.handle]);
+    const service = new SessionTodoService(lifecycle.service);
+    service.setTodos([{ title: 'a', status: 'pending', id: 'T1' }]);
+    main.appended.length = 0; // reset to only observe the completion write
+
+    service.setTodoCompleted('T1', { whatDone: 'done' });
+
+    expect(main.appended).toHaveLength(1);
+    expect(main.appended[0]).toMatchObject({
+      type: 'tools.update_store',
+      key: 'todo',
+    });
+    const value = main.appended[0]!['value'] as readonly TodoItem[];
+    expect(value).toHaveLength(1);
+    expect(value[0]).toMatchObject({
+      title: 'a',
+      status: 'done',
+      id: 'T1',
+      whatDone: 'done',
+    });
   });
 });

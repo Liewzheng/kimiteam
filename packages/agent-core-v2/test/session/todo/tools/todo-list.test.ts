@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { type ISessionTodoService } from '#/session/todo/sessionTodo';
 import { TODO_LIST_TOOL_NAME, type TodoItem } from '#/session/todo/todoItem';
+import { ITodoService } from '#/app/todoCounter/todoCounter';
 import { TodoListInputSchema } from '#/agent/tools/todo-list/todo-list';
 import { TodoListTool } from '#/agent/tools/todo-list/todoListTool';
 import { executeTool } from '../../../tools/fixtures/execute-tool';
@@ -18,23 +19,43 @@ function makeTodoService(initial: readonly TodoItem[] = []): {
       _serviceBrand: undefined,
       getTodos: () => todos,
       setTodos: (next: readonly TodoItem[]) => {
-        todos = next.map((todo) => ({ title: todo.title, status: todo.status }));
+        todos = next.map((todo) => ({ ...todo }));
       },
       clear: () => {
         todos = [];
       },
+      getTodo: (id: string) => todos.find((todo) => todo.id === id),
+      hasTodo: (id: string) => todos.some((todo) => todo.id === id),
+      setTodoCompleted: () => false,
       onDidChange: () => ({ dispose: () => {} }),
     },
     getTodos: () => todos,
   };
 }
 
+function makeTodoIdService(start = 0): ITodoService & { readonly issued: string[] } {
+  let current = start;
+  const issued: string[] = [];
+  return {
+    _serviceBrand: undefined,
+    nextTodoId: async () => {
+      current += 1;
+      const id = `T${current}`;
+      issued.push(id);
+      return id;
+    },
+    issued,
+  };
+}
+
 function makeTool(initial: readonly TodoItem[] = []): {
   readonly tool: TodoListTool;
   readonly getTodos: () => readonly TodoItem[];
+  readonly issued: string[];
 } {
   const { service, getTodos } = makeTodoService(initial);
-  return { tool: new TodoListTool(service), getTodos };
+  const todoId = makeTodoIdService();
+  return { tool: new TodoListTool(service, todoId), getTodos, issued: todoId.issued };
 }
 
 describe('TodoListTool', () => {
@@ -118,8 +139,8 @@ describe('TodoListTool', () => {
     );
     expect(result.output).toContain('exactly one task in_progress');
     expect(getTodos()).toEqual([
-      { title: 'first', status: 'pending' },
-      { title: 'second', status: 'in_progress' },
+      { title: 'first', status: 'pending', id: 'T1' },
+      { title: 'second', status: 'in_progress', id: 'T2' },
     ]);
   });
 
@@ -170,5 +191,66 @@ describe('TodoListTool', () => {
     expect(readExecution.description).toBe('Reading todo list');
     expect(clearExecution.description).toBe('Clearing todo list');
     expect(updateExecution.description).toBe('Updating todo list');
+  });
+
+  it('assigns a fresh id to every todo that lacks one (T1, T2, T3, …)', async () => {
+    const { tool, getTodos, issued } = makeTool();
+
+    const result = await executeTool(tool, {
+      turnId: 1,
+      toolCallId: 'call_1',
+      args: {
+        todos: [
+          { title: 'a', status: 'pending' },
+          { title: 'b', status: 'in_progress' },
+          { title: 'c', status: 'pending' },
+        ],
+      },
+      signal,
+    });
+
+    expect(result).toMatchObject({ isError: false });
+    expect(issued).toEqual(['T1', 'T2', 'T3']);
+    expect(getTodos()).toEqual([
+      { title: 'a', status: 'pending', id: 'T1' },
+      { title: 'b', status: 'in_progress', id: 'T2' },
+      { title: 'c', status: 'pending', id: 'T3' },
+    ]);
+  });
+
+  it('keeps an explicit id and does not consume the counter for it', async () => {
+    const { tool, getTodos, issued } = makeTool();
+
+    await executeTool(tool, {
+      turnId: 1,
+      toolCallId: 'call_1',
+      args: {
+        todos: [
+          { title: 'existing', status: 'done', id: 'T42' },
+          { title: 'fresh', status: 'pending' },
+        ],
+      },
+      signal,
+    });
+
+    expect(issued).toEqual(['T1']); // only the id-less item allocates
+    expect(getTodos()).toEqual([
+      { title: 'existing', status: 'done', id: 'T42' },
+      { title: 'fresh', status: 'pending', id: 'T1' },
+    ]);
+  });
+
+  it('treats a whitespace-only id as missing and allocates a fresh one', async () => {
+    const { tool, getTodos, issued } = makeTool();
+
+    await executeTool(tool, {
+      turnId: 1,
+      toolCallId: 'call_1',
+      args: { todos: [{ title: 'blank-id', status: 'pending', id: '   ' }] },
+      signal,
+    });
+
+    expect(issued).toEqual(['T1']);
+    expect(getTodos()).toEqual([{ title: 'blank-id', status: 'pending', id: 'T1' }]);
   });
 });

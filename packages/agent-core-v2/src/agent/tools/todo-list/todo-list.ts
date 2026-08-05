@@ -21,10 +21,16 @@ import { type TodoStatus } from '#/session/todo/todoItem';
 const TodoItemSchema = z.object({
   title: z.string().min(1).describe('Short, actionable title for the todo.'),
   status: z.enum(['pending', 'in_progress', 'done']).describe('Current status of the todo.'),
+  id: z
+    .string()
+    .optional()
+    .describe(
+      'Stable todo id (e.g. "T1", "T42") returned by a previous TodoList read or update. Echo it back unchanged when updating an existing todo; omit it (or leave it empty) for a brand-new todo and one will be assigned automatically.',
+    ),
 });
 
 export interface TodoListInput {
-  todos?: Array<{ title: string; status: TodoStatus }>;
+  todos?: Array<{ title: string; status: TodoStatus; id?: string }>;
 }
 
 export const TodoListInputSchema: z.ZodType<TodoListInput> = z.object({
