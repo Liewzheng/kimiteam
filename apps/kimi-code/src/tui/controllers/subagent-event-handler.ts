@@ -344,9 +344,42 @@ export class SubAgentEventHandler {
       return;
     }
 
+    // Fallback: the `subagent.spawned` event was never seen (event race), but
+    // the agent task is still in the background registry — render the
+    // completion from the task so the notice is not swallowed.
+    const taskMeta = this.backgroundMetaFromTask(event.subagentId);
+    if (taskMeta !== undefined) {
+      const taskId = this.findAgentTaskId(event.subagentId, taskMeta, this.deps.backgroundTasks);
+      if (taskId !== undefined && this.deps.backgroundTaskTranscriptedTerminal.has(taskId)) {
+        return;
+      }
+      if (taskId !== undefined) {
+        this.deps.backgroundTaskTranscriptedTerminal.add(taskId);
+      }
+      const extras =
+        event.resultSummary === undefined ? undefined : { resultSummary: event.resultSummary };
+      this.appendBackgroundAgentEntry('completed', taskMeta, extras);
+      return;
+    }
+
     const info = this.subagentInfo.get(event.subagentId);
     if (info === undefined || info.runInBackground) return;
     this.handleForegroundSubagentCompleted(event, info);
+  }
+
+  /** Derive a background-agent meta from the task registry when the spawn event was missed. */
+  private backgroundMetaFromTask(subagentId: string): BackgroundAgentMetadata | undefined {
+    for (const task of this.deps.backgroundTasks.values()) {
+      if (task.kind !== 'agent') continue;
+      if (task.agentId !== subagentId) continue;
+      return {
+        agentId: subagentId,
+        parentToolCallId: undefined,
+        agentName: task.subagentType,
+        description: task.description,
+      };
+    }
+    return undefined;
   }
 
   private handleSubagentFailed(

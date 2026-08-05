@@ -908,8 +908,12 @@ describe('KimiTUI resume message replay', () => {
         'agent-bg-timeout',
       ),
     ).toBe(false);
+    // Agent-kind tasks no longer pre-claim the dedup slot on
+    // `background.task.terminated` — the timed_out card status is preserved by
+    // the `task.status === 'timed_out'` guard in the failed handler, and no
+    // failed transcript entry is rendered.
     expect(driver.sessionEventHandler.backgroundTaskTranscriptedTerminal.has('task-bg-timeout'))
-      .toBe(true);
+      .toBe(false);
     expect(
       driver.state.transcriptEntries.some(
         (entry) => entry.backgroundAgentStatus?.phase === 'failed',

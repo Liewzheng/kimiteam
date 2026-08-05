@@ -137,7 +137,12 @@ export interface SubagentReplayBlockData {
 
 export interface BackgroundAgentMetadata {
   readonly agentId: string;
-  readonly parentToolCallId: string;
+  /**
+   * The spawning tool call's id. Present for metadata registered from a
+   * `subagent.spawned` event; a task-registry fallback (spawn event missed)
+   * renders without one.
+   */
+  readonly parentToolCallId?: string;
   readonly agentName?: string;
   readonly description?: string;
 }

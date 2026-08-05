@@ -1125,12 +1125,15 @@ export class SessionEventHandler {
           description: info.description,
           status: info.status,
         });
-      }
-      if (!this.backgroundTaskTranscriptedTerminal.has(info.taskId)) {
-        if (info.kind === 'process' || info.kind === 'question') {
+        // An agent-kind task never renders a transcript entry here — that is
+        // `subagent.completed`'s job — so do NOT occupy the dedup slot.
+        // Pre-claiming it lets a `background.task.terminated` that races ahead
+        // of `subagent.completed` swallow the completion notice.
+      } else if (info.kind === 'process' || info.kind === 'question') {
+        if (!this.backgroundTaskTranscriptedTerminal.has(info.taskId)) {
           this.appendBackgroundTaskEntry(info);
+          this.backgroundTaskTranscriptedTerminal.add(info.taskId);
         }
-        this.backgroundTaskTranscriptedTerminal.add(info.taskId);
       }
       this.syncBackgroundTaskBadge();
       this.host.tasksBrowserController.repaint();
