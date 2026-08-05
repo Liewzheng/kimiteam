@@ -50,7 +50,7 @@ import { BugIndicatingError, ErrorCodes, Error2, isError2, toKimiErrorPayload } 
 import { OrderedHookSlot } from '#/hooks';
 
 import { IAgentContextMemoryService } from '#/agent/contextMemory/contextMemory';
-import { isVacuousContentPart } from '#/agent/contextMemory/vacuousContent';
+import { isEmptyContentPart } from '#/agent/contextMemory/vacuousContent';
 import { IAgentStateService } from '#/agent/state/agentState';
 import { IAgentTelemetryContextService } from '#/app/telemetry/agentTelemetryContext';
 import type {
@@ -1120,7 +1120,7 @@ export class AgentLoopService extends Disposable implements IAgentLoopService {
         }
       },
       drainInterruptedContent: () =>
-        partialContent.splice(0).filter((part) => !isVacuousContentPart(part)),
+        partialContent.splice(0).filter((part) => !isEmptyContentPart(part)),
     };
   }
 }

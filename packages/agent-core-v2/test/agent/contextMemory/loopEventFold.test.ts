@@ -231,7 +231,7 @@ describe('loop-event fold parity', () => {
     ]);
   });
 
-  it('seals a step whose thinking block has real content', () => {
+  it('drops a step whose only recorded part is a non-empty bare thinking block', () => {
     context.appendLoopEvent({ type: 'step.begin', uuid: 's1' });
     context.appendLoopEvent({
       type: 'content.part',
@@ -240,7 +240,38 @@ describe('loop-event fold parity', () => {
     });
     context.appendLoopEvent({ type: 'step.end', uuid: 's1' });
 
-    expect(context.get().at(-1)?.content).toEqual([{ type: 'think', think: 'real reasoning' }]);
+    // Bare (unsigned) think is internal reasoning — a frame with only that
+    // collapses to an empty assistant on the wire, so the fold drops it.
+    expect(context.get()).toEqual([]);
+  });
+
+  it('drops an aborted think-only step that never records step.end', () => {
+    context.appendLoopEvent({ type: 'step.begin', uuid: 's1' });
+    context.appendLoopEvent({
+      type: 'content.part',
+      stepUuid: 's1',
+      part: { type: 'think', think: 'interrupted reasoning' },
+    });
+    // No step.end — the step is aborted mid-think. The next step.begin closes
+    // the open partial (settleOpenStep), which must drop the bare-think frame.
+    context.appendLoopEvent({ type: 'step.begin', uuid: 's2' });
+    context.appendLoopEvent({
+      type: 'content.part',
+      stepUuid: 's2',
+      part: { type: 'text', text: 'recovered' },
+    });
+    context.appendLoopEvent({ type: 'step.end', uuid: 's2' });
+
+    expect(shapes(context.get())).toEqual([
+      {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'recovered' }],
+        toolCalls: [],
+        toolCallId: undefined,
+        isError: undefined,
+        partial: undefined,
+      },
+    ]);
   });
 
   it('seals a step whose empty thinking block carries a provider signature', () => {

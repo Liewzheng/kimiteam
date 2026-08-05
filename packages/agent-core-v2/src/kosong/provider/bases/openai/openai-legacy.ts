@@ -208,7 +208,7 @@ function convertMessage(
   toolMessageConversion: ToolMessageConversion,
   preserveThinking: boolean,
   allowToolResultExtraction: boolean,
-): OpenAIMessage {
+): OpenAIMessage | null {
   let reasoningContent = '';
   let hasReasoningPart = false;
   const nonThinkParts: ContentPart[] = [];
@@ -220,6 +220,15 @@ function convertMessage(
     } else {
       nonThinkParts.push(part);
     }
+  }
+
+  // An assistant frame whose content is all think (or empty) with no tool call
+  // collapses to `{"role":"assistant"}` on the wire — no text, no tool_calls —
+  // which some upstreams reject with a 400. Skip it outright so the outbound
+  // history never carries an empty assistant (belt-and-suspenders on top of the
+  // context fold that drops bare-think-only frames).
+  if (message.role === 'assistant' && nonThinkParts.length === 0 && message.toolCalls.length === 0) {
+    return null;
   }
 
   const result: OpenAIMessage = { role: message.role };
@@ -337,7 +346,8 @@ function convertHistoryMessages(
     if (msg.role !== 'tool') {
       appendToolResultMediaMessage(messages, pendingToolResultMedia);
     }
-    messages.push(convertMessage(msg, reasoningKey, toolMessageConversion, preserveThinking, true));
+    const converted = convertMessage(msg, reasoningKey, toolMessageConversion, preserveThinking, true);
+    if (converted !== null) messages.push(converted);
     if (msg.role === 'tool') {
       pendingToolResultMedia.push(...toolResultImageParts(msg));
     }
@@ -588,6 +598,7 @@ export class OpenAILegacyChatProvider implements ChatProvider {
     if (convertMessageHook !== undefined) {
       for (const msg of normalizedHistory) {
         const converted = convertMessage(msg, reasoningKey, null, preserveThinking, false);
+        if (converted === null) continue;
         const shaped = convertMessageHook(msg, converted);
         if (shaped !== null) {
           messages.push(shaped);

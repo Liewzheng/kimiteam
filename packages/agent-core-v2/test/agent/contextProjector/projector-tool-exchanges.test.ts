@@ -615,10 +615,12 @@ describe('projector tool-exchange normalization', () => {
       expect(repairPayloads(warnings)).toEqual([]);
     });
 
-    it('keeps a message whose think block has real content', () => {
+    it('drops a message whose think block is bare (unsigned) even with real content', () => {
       const history = [user('u1'), thinkingAssistant([{ type: 'think', think: 'real reasoning' }])];
-      expect(shape(history)).toEqual(['user', 'assistant']);
-      expect(repairPayloads(warnings)).toEqual([]);
+      // Bare (unsigned) think is internal reasoning — a frame with only that
+      // collapses to an empty assistant on the wire, so the projector drops it.
+      expect(shape(history)).toEqual(['user']);
+      expect(repairPayloads(warnings)).toEqual([expect.objectContaining({ vacuousDropped: 1 })]);
     });
 
     it('keeps a signed think block even when its text is empty', () => {

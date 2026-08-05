@@ -503,7 +503,10 @@ const PROBE_HISTORY: Message[] = [
 const THINK_HISTORY: Message[] = [
   {
     role: 'assistant',
-    content: [{ type: 'think', think: 'earlier reasoning' }],
+    content: [
+      { type: 'think', think: 'earlier reasoning' },
+      { type: 'text', text: 'continuing' },
+    ],
     toolCalls: [],
   },
   { role: 'user', content: [{ type: 'text', text: 'Hi' }], toolCalls: [] },
@@ -929,6 +932,31 @@ describe('reasoning dialect (behavior probes)', () => {
 
     const messages = captured[1]?.['messages'] as Array<Record<string, unknown>>;
     expect(messages[0]).toMatchObject({ custom_key: 'earlier reasoning' });
+  });
+
+  it('skips a think-only assistant frame that would collapse to an empty assistant', async () => {
+    // An aborted step can leave an assistant whose content is only bare
+    // (unsigned) think. On the openai wire that collapses to an assistant with
+    // no text and no tool_calls, which some upstreams reject with a 400 — the
+    // converter must drop it so the outbound history never carries one.
+    const provider = new OpenAILegacyChatProvider({
+      model: 'gpt-4.1',
+      apiKey: 'sk-probe',
+      stream: false,
+    });
+    const thinkOnlyHistory: Message[] = [
+      {
+        role: 'assistant',
+        content: [{ type: 'think', think: 'interrupted reasoning' }],
+        toolCalls: [],
+      },
+      { role: 'user', content: [{ type: 'text', text: 'Hi' }], toolCalls: [] },
+    ];
+
+    const body = await captureOpenAIBody(provider, undefined, thinkOnlyHistory);
+    const messages = body['messages'] as Array<Record<string, unknown>>;
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({ role: 'user', content: 'Hi' });
   });
 });
 

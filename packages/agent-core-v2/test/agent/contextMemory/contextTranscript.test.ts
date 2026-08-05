@@ -271,7 +271,7 @@ describe('reduceContextTranscript', () => {
     expect(result.foldedLength).toBe(2);
   });
 
-  it('keeps settled steps that carry any sendable output', () => {
+  it('keeps settled steps that carry any sendable output (encrypted think or text)', () => {
     const result = reduceContextTranscript([
       appendMessage(userMessage('q')),
       loopEvent({ type: 'step.begin', uuid: 's1' }),
@@ -289,7 +289,9 @@ describe('reduceContextTranscript', () => {
       loopEvent({ type: 'content.part', stepUuid: 's3', part: { type: 'text', text: 'answer' } }),
       loopEvent({ type: 'step.end', uuid: 's3' }),
     ]);
-    expect(result.entries.map((m) => m.role)).toEqual(['user', 'assistant', 'assistant', 'assistant']);
-    expect(result.foldedLength).toBe(4);
+    // s1 (bare think only) is now dropped as internal reasoning; s2 (encrypted
+    // think) and s3 (text) are sendable and kept.
+    expect(result.entries.map((m) => m.role)).toEqual(['user', 'assistant', 'assistant']);
+    expect(result.foldedLength).toBe(3);
   });
 });
