@@ -728,6 +728,18 @@ describe('runPrompt', () => {
     expect(stderr.text()).toBe('');
   });
 
+  it('uses KIMI_CODE_BIN_NAME in the resume hint when set', async () => {
+    vi.stubEnv('KIMI_CODE_BIN_NAME', 'kimiteam');
+    const stdout = writer();
+    const stderr = writer();
+
+    await runPrompt(opts({ outputFormat: 'stream-json' }), '1.2.3-test', { stdout, stderr });
+
+    expect(stdout.text()).toContain(
+      '"command":"kimiteam -r ses_prompt","content":"To resume this session: kimiteam -r ses_prompt"',
+    );
+  });
+
   it('writes stream-json tool calls and tool results as JSONL messages', async () => {
     mocks.session.prompt.mockImplementationOnce(async () => {
       for (const handler of mocks.eventHandlers) {

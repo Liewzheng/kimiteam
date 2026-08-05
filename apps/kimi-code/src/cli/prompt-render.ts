@@ -393,7 +393,7 @@ export function writeResumeHint(
   stdout: PromptOutput,
   stderr: PromptOutput,
 ): void {
-  const command = `kimi -r ${sessionId}`;
+  const command = `${process.env['KIMI_CODE_BIN_NAME'] ?? 'kimi'} -r ${sessionId}`;
   const content = `To resume this session: ${command}`;
   if (outputFormat === 'stream-json') {
     const message: PromptJsonResumeMetaMessage = {
