@@ -592,6 +592,76 @@ describe('Agent resume', () => {
     }
   });
 
+  it('does not re-append an already-delivered terminal notification on resume', async () => {
+    const persistence = new RecordingAgentPersistence([
+      {
+        type: 'metadata',
+        protocol_version: '1.4',
+        created_at: 1,
+      },
+      {
+        type: 'turn.prompt',
+        input: [{ type: 'text', text: 'Historical prompt' }],
+        origin: { kind: 'user' },
+      },
+      // The completion notification was already delivered in the previous
+      // session: it is recorded in the wire log, so the delivery model rebuilds
+      // with the key and the context already carries the message.
+      {
+        type: 'context.append_message',
+        message: {
+          role: 'user',
+          content: [{ type: 'text', text: 'Background bash completed.' }],
+          toolCalls: [],
+          origin: {
+            kind: 'task',
+            taskId: 'bash-seen0000',
+            status: 'completed',
+            notificationId: 'task:bash-seen0000:completed',
+          },
+        },
+      },
+    ] as unknown as WireRecord[]);
+    const homeDir = await mkdtemp(join(tmpdir(), 'kimi-bg-resume-delivered-'));
+    try {
+      const backgroundPersistence = createAgentTaskPersistence(homeDir);
+      const ctx = testAgent(homeDirServices(homeDir), { autoConfigure: false, persistence });
+      await backgroundPersistence.writeTask({
+        taskId: 'bash-seen0000',
+        kind: 'process',
+        command: 'echo done',
+        description: 'already delivered',
+        pid: 1,
+        startedAt: 1_700_000_000,
+        endedAt: 1_700_000_010,
+        exitCode: 0,
+        status: 'completed',
+      });
+
+      await ctx.restorePersisted();
+
+      // The delivered notification is not replayed: the context keeps exactly
+      // the one seeded message, and no new task-origin append is persisted.
+      const taskMessages = ctx.context.get().filter((message) => message.origin?.kind === 'task');
+      expect(taskMessages).toHaveLength(1);
+      expect(taskMessages[0]?.origin).toEqual({
+        kind: 'task',
+        taskId: 'bash-seen0000',
+        status: 'completed',
+        notificationId: 'task:bash-seen0000:completed',
+      });
+      expect(
+        persistence.appended.filter(
+          (record) =>
+            record.type === 'context.append_message' &&
+            (record as { message?: { origin?: { kind?: string } } }).message?.origin?.kind === 'task',
+        ),
+      ).toHaveLength(0);
+    } finally {
+      await rm(homeDir, { recursive: true, force: true });
+    }
+  });
+
 
   it('drops an orphan tool result whose call was never recorded', async () => {
     const persistence = new RecordingAgentPersistence([
