@@ -747,6 +747,25 @@ describe('handleTeamCommand', () => {
     expect(host.showNotice).toHaveBeenCalledWith('Team mode: OFF');
   });
 
+  it('toggles auto initiative on with /team auto when it is currently off', async () => {
+    const { host, harness } = makeHost(); // getConfig returns no teamAuto → off
+
+    await handleTeamCommand(host, 'auto');
+
+    expect(harness.setConfig).toHaveBeenCalledWith({ subagent: { teamAuto: true } });
+    expect(host.showNotice).toHaveBeenCalledWith('Auto initiative: ON');
+  });
+
+  it('toggles auto initiative off with /team auto when it is currently on', async () => {
+    const { host, harness } = makeHost();
+    harness.getConfig = vi.fn(async () => ({ subagent: { teamMode: false, teamAuto: true } }));
+
+    await handleTeamCommand(host, 'auto');
+
+    expect(harness.setConfig).toHaveBeenCalledWith({ subagent: { teamAuto: false } });
+    expect(host.showNotice).toHaveBeenCalledWith('Auto initiative: OFF');
+  });
+
   it('triggers the team-onboarding skill with /team init', async () => {
     const { host } = makeHost();
     host.session = { cancel: vi.fn() } as unknown as NonNullable<SlashCommandHost['session']>;

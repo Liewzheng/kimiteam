@@ -53,12 +53,17 @@ export async function handleTeamCommand(host: SlashCommandHost, args: string): P
     return;
   }
 
+  if (subcmd === 'auto') {
+    await toggleTeamAuto(host);
+    return;
+  }
+
   if (subcmd.length === 0) {
     await showTeamPanel(host);
     return;
   }
 
-  host.showError('Usage: /team [on|off|init] — toggle team mode, run team onboarding, or open the team panel.');
+  host.showError('Usage: /team [on|off|init|auto] — toggle team mode, run team onboarding, toggle auto initiative, or open the team panel.');
 }
 
 // ---------------------------------------------------------------------------
@@ -965,4 +970,29 @@ async function applyTeamMode(host: SlashCommandHost, enabled: boolean): Promise<
   }
 
   host.showNotice(`Team mode: ${enabled ? 'ON' : 'OFF'}`);
+}
+
+/**
+ * `/team auto` — toggle the proactive auto-initiative switch
+ * (`[subagent] team_auto`). Reads the current value and writes the inverse,
+ * mirroring the `/team on|off` config-write pattern.
+ */
+async function toggleTeamAuto(host: SlashCommandHost): Promise<void> {
+  let current = false;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const config: any = await host.harness.getConfig();
+    current = config?.subagent?.teamAuto ?? false;
+  } catch {
+    // default to off on read failure — the write below still applies
+  }
+  const next = !current;
+  try {
+    await host.harness.setConfig({ subagent: { teamAuto: next } } as Record<string, unknown>);
+  } catch (error) {
+    host.showError(`Failed to set auto initiative: ${formatErrorMessage(error)}`);
+    return;
+  }
+
+  host.showNotice(`Auto initiative: ${next ? 'ON' : 'OFF'}`);
 }
