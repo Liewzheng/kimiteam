@@ -108,6 +108,7 @@ Write-Host "sha256 校验通过: ${actualHash}"
 $launcherContent = @"
 `$env:KIMI_CODE_EXPERIMENTAL_SECONDARY_MODEL = '1'
 `$env:KIMI_CODE_EXPERIMENTAL_FLAG = '1'
+`$env:KIMI_CODE_BIN_NAME = 'kimiteam'
 & node "`$HOME\.kimi-code\lib\kimi\main-team.cjs" @args
 "@
 [System.IO.File]::WriteAllText($LauncherPath, $launcherContent, (New-Object System.Text.UTF8Encoding($false)))
