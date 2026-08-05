@@ -385,6 +385,8 @@ timeout_ms = 7200000
 # max_concurrency: integer
 # team_mode: boolean
 # idle_ttl_ms: integer
+# team_auto: boolean
+# auto_idle_ms: integer
 # lead_turn_timeout_ms: integer
 # model_overrides: record<string, string>
 # warm_interval_ms: integer

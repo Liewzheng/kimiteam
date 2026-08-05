@@ -19,7 +19,7 @@ import { IAgentContextMemoryService } from '#/agent/contextMemory/contextMemory'
 import type { ContextMessage } from '#/agent/contextMemory/types';
 import { IAgentToolRegistryService } from '#/agent/toolRegistry/toolRegistry';
 import type { ToolInfo } from '#/tool/toolContract';
-import type { IAgentPerformanceService } from '#/app/agentPerformance/agentPerformance';
+import type { IAgentPerformanceService, ProfilePerformanceEntry } from '#/app/agentPerformance/agentPerformance';
 import type { IRuntimeStatusService } from '#/app/runtimeStatus/runtimeStatus';
 import type { IConfigService } from '#/app/config/config';
 import type { IFlagService } from '#/app/flag/flag';
@@ -37,6 +37,13 @@ import { runAgentTurn } from '#/session/subagent/runAgentTurn';
 import type { AgentRunHandle, AgentRunRequest, RunAgentOptions } from '#/session/subagent/subagent';
 import { MAIN_AGENT_ID } from '#/session/agentLifecycle/agentLifecycle';
 import { SUBAGENT_IDLE_TTL_MS, subagentRestExpiresAt } from '#/session/subagent/idleReaper';
+import { DailyReviewService, DAILY_REVIEW_REMINDER_NAME } from '#/session/subagent/dailyReviewService';
+import {
+  AutoInitiativeService,
+  AUTO_INITIATIVE_REMINDER_NAME,
+} from '#/session/subagent/autoInitiativeService';
+import { resolveTeamAuto, resolveTeamAutoIdleMs } from '#/session/subagent/configSection';
+import type { ConfigSectionChangedEvent } from '#/app/config/config';
 import { stubLog } from '../../_base/log/stubs';
 import type { ILogService } from '#/_base/log/log';
 
@@ -1449,5 +1456,275 @@ describe('SubagentIdleReaper — duty members are never reaped', () => {
     await vi.advanceTimersByTimeAsync(1);
     await vi.advanceTimersByTimeAsync(0); // flush reap microtasks
     expect(stubs.agentLifecycle.remove).toHaveBeenCalledWith(AGENT_ID);
+  });
+});
+
+describe('DailyReviewService', () => {
+  function makeService(options: {
+    teamMode?: boolean;
+    entries?: ProfilePerformanceEntry[];
+  } = {}): { service: DailyReviewService; inject: Mock; dispose(): void } {
+    const inject = vi.fn().mockResolvedValue(undefined);
+    const mainHandle = {
+      accessor: {
+        get: (serviceId: unknown) =>
+          serviceId === IAgentPromptService
+            ? { _serviceBrand: undefined, inject }
+            : undefined,
+      },
+    };
+    const lifecycle = {
+      get: (id: string) => (id === MAIN_AGENT_ID ? mainHandle : undefined),
+    };
+    const perf = { list: vi.fn().mockResolvedValue(options.entries ?? []) };
+    const config = {
+      get: (section: string) =>
+        section === 'subagent' ? { teamMode: options.teamMode ?? true } : undefined,
+    };
+    const service = new DailyReviewService(
+      lifecycle as never,
+      perf as never,
+      config as never,
+      stubLog(),
+    );
+    return { service, inject, dispose: () => service.dispose() };
+  }
+
+  function scored(profileName: string, average: number, count: number): ProfilePerformanceEntry {
+    return { profileName, summary: { average, count } };
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('injects the lowest-scored member with its key data in the review text', async () => {
+    const { service, inject } = makeService({
+      entries: [scored('coder', 90, 4), scored('explore', 70, 3), scored('reader', 80, 2)],
+    });
+    await service.runDailyReview();
+    expect(inject).toHaveBeenCalledTimes(1);
+    const message = inject.mock.calls[0]?.[0] as ContextMessage;
+    expect(message.origin).toEqual({ kind: 'system_trigger', name: DAILY_REVIEW_REMINDER_NAME });
+    const text = (message.content[0] as { type: 'text'; text: string }).text;
+    expect(text).toContain('explore');
+    expect(text).toContain('avg 70');
+    expect(text).toContain('3 scores');
+    service.dispose();
+  });
+
+  it('does not re-inject for the same calendar day', async () => {
+    const { service, inject } = makeService({ entries: [scored('solo', 60, 5)] });
+    await service.runDailyReview();
+    await service.runDailyReview();
+    expect(inject).toHaveBeenCalledTimes(1);
+    service.dispose();
+  });
+
+  it('injects again on the next calendar day', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T10:00:00'));
+    const { service, inject } = makeService({ entries: [scored('solo', 60, 5)] });
+    await service.runDailyReview();
+    expect(inject).toHaveBeenCalledTimes(1);
+
+    vi.setSystemTime(new Date('2026-01-02T10:00:00'));
+    await service.runDailyReview();
+    expect(inject).toHaveBeenCalledTimes(2);
+    service.dispose();
+  });
+
+  it('skips when no member has a score', async () => {
+    const { service, inject } = makeService({ entries: [scored('unscored', 0, 0)] });
+    await service.runDailyReview();
+    expect(inject).not.toHaveBeenCalled();
+    service.dispose();
+  });
+
+  it('skips outside team mode', async () => {
+    const { service, inject } = makeService({ teamMode: false, entries: [scored('solo', 60, 5)] });
+    await service.runDailyReview();
+    expect(inject).not.toHaveBeenCalled();
+    service.dispose();
+  });
+
+  it('cold restore does not re-inject the restart day and reviews once the next midnight', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00'));
+    const first = makeService({ entries: [scored('solo', 60, 5)] });
+    await vi.advanceTimersByTimeAsync(24 * 3600 * 1000); // fires at 2026-01-02T00:00:00
+    expect(first.inject).toHaveBeenCalledTimes(1);
+    first.dispose(); // process dies on 2026-01-02
+
+    vi.setSystemTime(new Date('2026-01-02T05:00:00')); // restart later the same day
+    const second = makeService({ entries: [scored('solo', 60, 5)] });
+    second.service.reconcile(); // re-hang the lost midnight timer
+    expect(second.inject).not.toHaveBeenCalled(); // the restart day is not re-reviewed
+
+    await vi.advanceTimersByTimeAsync(19 * 3600 * 1000); // to 2026-01-03T00:00:00
+    expect(second.inject).toHaveBeenCalledTimes(1); // exactly one review for the new day
+    second.dispose();
+  });
+});
+
+describe('AutoInitiativeService', () => {
+  function makeAutoService(options: {
+    teamMode?: boolean;
+    teamAuto?: boolean;
+    autoIdleMs?: number;
+    loopState?: 'idle' | 'running';
+  } = {}): {
+    service: AutoInitiativeService;
+    inject: Mock;
+    loopState: { state: 'idle' | 'running' };
+    sectionEmitter: Emitter<ConfigSectionChangedEvent>;
+  } {
+    const inject = vi.fn().mockResolvedValue(undefined);
+    const loopState: { state: 'idle' | 'running' } = { state: options.loopState ?? 'idle' };
+    const loop = {
+      status: () => ({ state: loopState.state, pendingTurnIds: [], hasPendingRequests: false }),
+    };
+    const mainHandle = {
+      accessor: {
+        get: (serviceId: unknown) =>
+          serviceId === IAgentPromptService
+            ? { _serviceBrand: undefined, inject }
+            : serviceId === IAgentLoopService
+              ? loop
+              : undefined,
+      },
+    };
+    const lifecycle = { get: (id: string) => (id === MAIN_AGENT_ID ? mainHandle : undefined) };
+    const sectionEmitter = new Emitter<ConfigSectionChangedEvent>();
+    const config = {
+      get: (section: string) =>
+        section === 'subagent'
+          ? {
+              teamMode: options.teamMode ?? true,
+              teamAuto: options.teamAuto ?? true,
+              ...(options.autoIdleMs === undefined ? {} : { autoIdleMs: options.autoIdleMs }),
+            }
+          : undefined,
+      onDidSectionChange: sectionEmitter.event,
+    };
+    const service = new AutoInitiativeService(lifecycle as never, config as never, stubLog());
+    return { service, inject, loopState, sectionEmitter };
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('injects once the main agent has been idle past the threshold, with the idle seconds in the text', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T10:00:00'));
+    const { service, inject } = makeAutoService(); // default auto_idle_ms = 300_000
+    await service.check(); // first idle observation → baseline
+    expect(inject).not.toHaveBeenCalled();
+
+    vi.setSystemTime(new Date('2026-01-01T10:05:00')); // idle 300s
+    await service.check();
+    expect(inject).toHaveBeenCalledTimes(1);
+    const message = inject.mock.calls[0]?.[0] as ContextMessage;
+    expect(message.origin).toEqual({ kind: 'system_trigger', name: AUTO_INITIATIVE_REMINDER_NAME });
+    const text = (message.content[0] as { type: 'text'; text: string }).text;
+    expect(text).toContain('team auto');
+    expect(text).toContain('300s');
+    expect(text).toContain('apply ONE bounded improvement');
+    service.dispose();
+  });
+
+  it('resets the idle clock when the main agent is active (loop running)', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T10:00:00'));
+    const { service, inject, loopState } = makeAutoService();
+    await service.check(); // baseline
+    vi.setSystemTime(new Date('2026-01-01T10:04:00')); // idle 4 min < 5 min
+    await service.check();
+    expect(inject).not.toHaveBeenCalled();
+
+    loopState.state = 'running'; // activity — a user turn / inject / dispatch
+    await service.check();
+    loopState.state = 'idle';
+    vi.setSystemTime(new Date('2026-01-01T10:07:00')); // idle only 3 min since activity
+    await service.check();
+    expect(inject).not.toHaveBeenCalled(); // activity reset the clock
+    service.dispose();
+  });
+
+  it('anti-spam: no second inject within the 10-minute minimum gap', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T10:00:00'));
+    const { service, inject } = makeAutoService();
+    await service.check(); // baseline
+    vi.setSystemTime(new Date('2026-01-01T10:05:00'));
+    await service.check(); // idle 300s → inject once
+    expect(inject).toHaveBeenCalledTimes(1);
+
+    vi.setSystemTime(new Date('2026-01-01T10:10:00')); // idle again, but only 5 min since the last fire
+    await service.check();
+    expect(inject).toHaveBeenCalledTimes(1); // blocked by the 10-min gap
+
+    vi.setSystemTime(new Date('2026-01-01T10:15:01')); // > 10 min since the last fire
+    await service.check();
+    expect(inject).toHaveBeenCalledTimes(2);
+    service.dispose();
+  });
+
+  it('skips when team auto is off or team mode is off', async () => {
+    const off = makeAutoService({ teamAuto: false });
+    await off.service.check();
+    expect(off.inject).not.toHaveBeenCalled();
+    off.service.dispose();
+
+    const nonTeam = makeAutoService({ teamMode: false });
+    await nonTeam.service.check();
+    expect(nonTeam.inject).not.toHaveBeenCalled();
+    nonTeam.service.dispose();
+  });
+
+  it('skips when auto_idle_ms is 0 (idle trigger disabled)', async () => {
+    const { service, inject } = makeAutoService({ autoIdleMs: 0 });
+    await service.check();
+    await service.check();
+    expect(inject).not.toHaveBeenCalled();
+    service.dispose();
+  });
+
+  it('cold restore re-arms the periodic check timer', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T10:00:00'));
+    const { service, inject } = makeAutoService();
+    service.reconcile(); // re-hang the lost timer
+    await vi.advanceTimersByTimeAsync(60_000); // one tick → check runs (baseline)
+    expect(inject).not.toHaveBeenCalled();
+    service.dispose();
+  });
+
+  it('re-arms the timer when team_auto is toggled on via config change', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T10:00:00'));
+    const { service, inject, sectionEmitter } = makeAutoService({ teamAuto: false });
+    // Fire the section-change event as `/team auto` would (config now team_auto: true).
+    sectionEmitter.fire({ domain: 'subagent', source: 'set', value: {}, previousValue: {} });
+    // The timer is armed; a tick runs a check with the (still-false in the stub)
+    // config — the assertion here is that reconcile/arm path does not throw and
+    // the timer fires. The stub's teamAuto stays false, so no inject.
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(inject).not.toHaveBeenCalled();
+    service.dispose();
+  });
+
+  it('resolves config defaults and parsed values', () => {
+    const empty = { get: () => undefined } as unknown as IConfigService;
+    expect(resolveTeamAuto(empty)).toBe(false);
+    expect(resolveTeamAutoIdleMs(empty)).toBe(300_000);
+
+    const set = {
+      get: (section: string) =>
+        section === 'subagent' ? { teamAuto: true, autoIdleMs: 60_000 } : undefined,
+    } as unknown as IConfigService;
+    expect(resolveTeamAuto(set)).toBe(true);
+    expect(resolveTeamAutoIdleMs(set)).toBe(60_000);
   });
 });

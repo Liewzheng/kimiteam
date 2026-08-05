@@ -89,6 +89,18 @@ export const SubagentConfigSchema = z.object({
    */
   idleTtlMs: z.number().int().min(1).optional(),
   /**
+   * Team auto-initiative (`[subagent] team_auto` on disk, default off): when
+   * on and the main agent has been idle past `auto_idle_ms`, the engine
+   * injects a proactive "review the project and apply one bounded improvement"
+   * prompt (strategy / documentation / process).
+   */
+  teamAuto: z.boolean().optional(),
+  /**
+   * Idle threshold for team auto-initiative (`[subagent] auto_idle_ms` on
+   * disk, default 300_000 ms = 5 min; `0` disables the idle trigger).
+   */
+  autoIdleMs: z.number().int().min(0).optional(),
+  /**
    * Lead-turn timeout (`[subagent] lead_turn_timeout_ms` on disk, default
    * 30_000; `0` disables). In team mode the main agent's user turn is
    * interrupted once its active time exceeds this budget, nudging the
@@ -145,6 +157,9 @@ export const DEFAULT_SUBAGENT_IDLE_TTL_MS = 2 * 60 * 60 * 1000;
 
 /** Default lead-turn timeout for the main agent in team mode: 30s (0 disables). */
 export const DEFAULT_LEAD_TURN_TIMEOUT_MS = 30_000;
+
+/** Default idle threshold before team auto-initiative fires: 5 minutes (0 disables). */
+export const DEFAULT_TEAM_AUTO_IDLE_MS = 300_000;
 
 /** Default keep-alive wake-up period: 30 minutes (`0` disables). */
 export const DEFAULT_SUBAGENT_WARM_INTERVAL_MS = 1_800_000;
@@ -211,6 +226,22 @@ export function resolveLeadTurnTimeoutMs(config: IConfigService): number {
   return (
     config.get<SubagentConfig | undefined>(SUBAGENT_SECTION)?.leadTurnTimeoutMs ??
     DEFAULT_LEAD_TURN_TIMEOUT_MS
+  );
+}
+
+/** Resolve the team auto-initiative switch (`[subagent] team_auto`, default off). */
+export function resolveTeamAuto(config: IConfigService): boolean {
+  return config.get<SubagentConfig | undefined>(SUBAGENT_SECTION)?.teamAuto ?? false;
+}
+
+/**
+ * Resolve the idle threshold before team auto-initiative fires
+ * (`[subagent] auto_idle_ms`, default 5 min; `0` disables the idle trigger).
+ */
+export function resolveTeamAutoIdleMs(config: IConfigService): number {
+  return (
+    config.get<SubagentConfig | undefined>(SUBAGENT_SECTION)?.autoIdleMs ??
+    DEFAULT_TEAM_AUTO_IDLE_MS
   );
 }
 

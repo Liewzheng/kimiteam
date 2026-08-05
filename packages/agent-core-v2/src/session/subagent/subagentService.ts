@@ -49,6 +49,8 @@ import {
   subagentRestExpiresAt,
 } from './idleReaper';
 import { SubagentWarmService } from './subagentWarmService';
+import { DailyReviewService } from './dailyReviewService';
+import { AutoInitiativeService } from './autoInitiativeService';
 
 export class SessionSubagentService extends Disposable implements ISessionSubagentService {
   declare readonly _serviceBrand: undefined;
@@ -78,6 +80,21 @@ export class SessionSubagentService extends Disposable implements ISessionSubage
    * request bypasses context/usage/loop/hooks entirely.
    */
   private readonly warmService: SubagentWarmService;
+  /**
+   * Daily low-performer review: once per local calendar day, in team mode with
+   * at least one scored member, nudges the main agent to review the
+   * lowest-scored member's history and apply one optimization. Timer anchored
+   * to the next local midnight; cold resume re-hangs it via `reconcile`.
+   */
+  private readonly dailyReview: DailyReviewService;
+  /**
+   * Team auto-initiative: when `[subagent] team_auto` is on, a periodic check
+   * (every 60s) fires a proactive "review the project and apply ONE bounded
+   * improvement" prompt once the main agent has been idle past
+   * `[subagent] auto_idle_ms` (default 5 min). Timer only armed while
+   * `team_auto` is on; cold resume re-hangs it via `reconcile`.
+   */
+  private readonly autoInitiative: AutoInitiativeService;
 
   get onDidStopAgentTask() {
     return this.onDidStopAgentTaskEmitter.event;
@@ -102,17 +119,27 @@ export class SessionSubagentService extends Disposable implements ISessionSubage
     this.warmService = this._register(
       new SubagentWarmService(this.agentLifecycle, this.runtimeStatus, log, this.config, this.modelCatalog),
     );
+    this.dailyReview = this._register(
+      new DailyReviewService(this.agentLifecycle, this.performance, this.config, log),
+    );
+    this.autoInitiative = this._register(
+      new AutoInitiativeService(this.agentLifecycle, this.config, log),
+    );
     // Re-hang a resumed resting instance's idle countdown: cold materialization
     // (session resume) creates agents through `IAgentLifecycleService.create`,
     // whose `onDidRestore` fires once the handle is fully bootstrapped. The
     // reaper's in-process timers died with the previous process, so the resting
     // TTL is restored from the persisted runtime status here — or reaped
     // immediately when it already elapsed while we were down. The warmer's
-    // periodic timer is re-hung the same way.
+    // periodic timer is re-hung the same way, as are the daily-review midnight
+    // timer (anchored to the next midnight, so the restart day is never
+    // re-reviewed) and the auto-initiative periodic timer.
     this._register(
       this.agentLifecycle.onDidRestore((agentId) => {
         void this.idleReaper.reconcile(agentId);
         void this.warmService.reconcile(agentId);
+        this.dailyReview.reconcile();
+        this.autoInitiative.reconcile();
       }),
     );
   }
