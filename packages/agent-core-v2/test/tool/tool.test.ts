@@ -1817,6 +1817,178 @@ describe('Agent tool execution contract', () => {
     expect(result.output).toContain('reused result');
   });
 
+  it('forces a fresh spawn when an explicit model differs from the parked member binding (team mode)', async () => {
+    const parkedProfile = {
+      _serviceBrand: undefined,
+      data: () => ({ profileName: 'explore', modelAlias: SECONDARY_DERIVED_MODEL_ID }),
+      update: vi.fn(),
+      republishStatus: vi.fn(),
+      isToolActive: () => false,
+    } as unknown as IAgentProfileService;
+    const lifecycle = createAgentLifecycleStub({
+      createAgentIds: ['agent-child'],
+      runCompletion: async () => ({ summary: 'fresh result' }),
+    });
+    const context = createAgentToolContext(
+      lifecycle,
+      sessionService(
+        ISessionMetadata,
+        sessionMetadataStub({ 'agent-parked': subagentMeta('main', 'explore') }),
+      ),
+      modelProviderServices(
+        modelCatalogResolving(
+          'mock-model',
+          'provider/secondary',
+          'kimi-code/k3',
+          SECONDARY_DERIVED_MODEL_ID,
+        ),
+      ),
+      secondaryModelFlags(),
+      {
+        initialConfig: {
+          subagent: { teamMode: true },
+          secondaryModel: { model: 'provider/secondary', defaultEffort: 'low' },
+        },
+      },
+    );
+    lifecycle.addHandle(
+      'agent-parked',
+      'explore',
+      new Map([[IAgentProfileService, parkedProfile]]),
+    );
+
+    const result = await executeAgentTool(context, {
+      prompt: 'Architecture diagram',
+      description: 'Draw diagram',
+      subagent_type: 'explore',
+      model: 'kimi-code/k3',
+      run_in_background: false,
+    });
+
+    // The parked member is not reused: its binding (the derived secondary id)
+    // cannot honor the requested model, and the explicit model must not be
+    // silently dropped.
+    expect(lifecycle.run).not.toHaveBeenCalledWith(
+      'agent-parked',
+      expect.anything(),
+      expect.anything(),
+    );
+    // A fresh instance is created bound to the requested model — that binding
+    // is what flows into the child's request.modelAlias, so the usage.record
+    // key for this run is "kimi-code/k3".
+    expect(lifecycle.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        binding: expect.objectContaining({ profile: 'explore', model: 'kimi-code/k3' }),
+      }),
+    );
+    expect(lifecycle.run).toHaveBeenCalledWith(
+      'agent-child',
+      expect.objectContaining({ kind: 'prompt' }),
+      expect.anything(),
+    );
+    expect(result.output).toContain('agent_id: agent-child');
+    expect(result.output).toContain('actual_subagent_type: explore');
+    expect(result.output).toContain('fresh result');
+  });
+
+  it('reuses a parked member when an explicit model matches its binding (team mode)', async () => {
+    const parkedProfile = {
+      _serviceBrand: undefined,
+      data: () => ({ profileName: 'explore', modelAlias: SECONDARY_DERIVED_MODEL_ID }),
+      update: vi.fn(),
+      republishStatus: vi.fn(),
+      isToolActive: () => false,
+    } as unknown as IAgentProfileService;
+    const lifecycle = createAgentLifecycleStub({
+      runCompletion: async () => ({ summary: 'reused result' }),
+    });
+    const context = createAgentToolContext(
+      lifecycle,
+      sessionService(
+        ISessionMetadata,
+        sessionMetadataStub({ 'agent-parked': subagentMeta('main', 'explore') }),
+      ),
+      secondaryModelFlags(),
+      {
+        initialConfig: {
+          subagent: { teamMode: true },
+          secondaryModel: { model: 'provider/secondary', defaultEffort: 'low' },
+        },
+      },
+    );
+    lifecycle.addHandle(
+      'agent-parked',
+      'explore',
+      new Map([[IAgentProfileService, parkedProfile]]),
+    );
+
+    await executeAgentTool(context, {
+      prompt: 'Investigate',
+      description: 'Find cause',
+      subagent_type: 'explore',
+      model: 'secondary',
+      run_in_background: false,
+    });
+
+    // "secondary" resolves to the derived secondary id — exactly the parked
+    // member's binding — so reuse is honored and the standby benefit is kept.
+    expect(lifecycle.create).not.toHaveBeenCalled();
+    expect(lifecycle.run).toHaveBeenCalledWith(
+      'agent-parked',
+      expect.objectContaining({ kind: 'prompt' }),
+      expect.anything(),
+    );
+  });
+
+  it('reuses a parked member when an explicit "primary" matches its caller-model binding (team mode)', async () => {
+    const parkedProfile = {
+      _serviceBrand: undefined,
+      data: () => ({ profileName: 'explore', modelAlias: 'mock-model' }),
+      update: vi.fn(),
+      republishStatus: vi.fn(),
+      isToolActive: () => false,
+    } as unknown as IAgentProfileService;
+    const lifecycle = createAgentLifecycleStub({
+      runCompletion: async () => ({ summary: 'reused result' }),
+    });
+    const context = createAgentToolContext(
+      lifecycle,
+      sessionService(
+        ISessionMetadata,
+        sessionMetadataStub({ 'agent-parked': subagentMeta('main', 'explore') }),
+      ),
+      secondaryModelFlags(),
+      {
+        initialConfig: {
+          subagent: { teamMode: true },
+          secondaryModel: { model: 'provider/secondary', defaultEffort: 'low' },
+        },
+      },
+    );
+    lifecycle.addHandle(
+      'agent-parked',
+      'explore',
+      new Map([[IAgentProfileService, parkedProfile]]),
+    );
+
+    await executeAgentTool(context, {
+      prompt: 'Investigate',
+      description: 'Find cause',
+      subagent_type: 'explore',
+      model: 'primary',
+      run_in_background: false,
+    });
+
+    // "primary" resolves to the caller model ("mock-model") — the parked
+    // member is bound to it, so reuse is honored.
+    expect(lifecycle.create).not.toHaveBeenCalled();
+    expect(lifecycle.run).toHaveBeenCalledWith(
+      'agent-parked',
+      expect.objectContaining({ kind: 'prompt' }),
+      expect.anything(),
+    );
+  });
+
   it('does not cold-fallback when a parked instance is found in-process (team mode)', async () => {
     const runtimeStatus = runtimeStatusStub({
       explore: { state: 'resting', agentId: 'agent-parked' },

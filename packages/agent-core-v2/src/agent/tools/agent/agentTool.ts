@@ -435,6 +435,30 @@ export class SubagentTool implements ISubagentTool {
         }
       }
 
+      // An explicit `model` is a single-dispatch override. Reuse honors it only
+      // when the parked member's binding already matches the requested model;
+      // otherwise the run would silently keep the member's old binding (the
+      // reported bug: the requested model is ignored and its usage is never
+      // recorded) and re-binding the member would make the override sticky on
+      // a shared standby instance while running inside its previous
+      // conversation. Force a fresh spawn instead (same spirit as
+      // RESUME_WITH_TYPE_UNAVAILABLE): the override stays per-dispatch and the
+      // parked member is left untouched.
+      if (reused !== undefined && args.model !== undefined) {
+        const binding = resolveSubagentBinding(
+          this.config,
+          this.flags,
+          { modelAlias: own.modelAlias ?? '', thinkingLevel: own.thinkingLevel },
+          args.model,
+          profile.name,
+          'model-param',
+        );
+        const parkedAlias = reused.accessor.get(IAgentProfileService).data().modelAlias;
+        if (parkedAlias !== binding.model) {
+          reused = undefined;
+        }
+      }
+
       if (reused !== undefined) {
         agentId = reused.id;
         profileName =
