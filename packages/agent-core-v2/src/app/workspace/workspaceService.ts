@@ -21,6 +21,11 @@
  *    added (e.g. sessions created by the v1 TUI since the last sync),
  *    persisted if anything changed.
  *
+ * Auto-recovery (merge and rebuild) skips workDirs under the OS temp root —
+ * only ever historical harness sessions — via `readSessionIndexWorkDirs` /
+ * `isTmpRootWorkDir`; an explicit `createOrTouch` into a temp root stays
+ * legal.
+ *
  * Deletion is soft: `delete` drops the entry but records the id in
  * `deleted_workspace_ids`, and the merge never resurrects a tombstoned id.
  * An explicit `createOrTouch` clears the tombstone — the user opening the
@@ -64,6 +69,7 @@ import { IWorkspaceService, type Workspace, type WorkspaceUpdate } from './works
 import {
   collectAliasIds,
   dedupeByRoot,
+  isTmpRootWorkDir,
   readSessionIndexEntries,
   readSessionIndexWorkDirs,
 } from './workspaceAlias';
@@ -227,7 +233,7 @@ export class WorkspaceService implements IWorkspaceService {
   ): Promise<boolean> {
     let changed = false;
     const now = Date.now();
-    for (const workDir of await readSessionIndexWorkDirs(this.storage)) {
+    for (const workDir of await readSessionIndexWorkDirs(this.storage, (p) => this.hostFs.realpath(p))) {
       const id = encodeWorkDirKey(workDir);
       if (byId.has(id) || deletedIds.has(id)) continue;
       byId.set(id, {
@@ -248,6 +254,7 @@ export class WorkspaceService implements IWorkspaceService {
     const seenRootKeys = new Set<string>();
     for (const entry of await readSessionIndexEntries(this.storage)) {
       if (!isAbsolute(entry.workDir)) continue;
+      if (await isTmpRootWorkDir(entry.workDir, (p) => this.hostFs.realpath(p))) continue;
       const rootKey = workspaceRootKey(entry.workDir);
       if (seenRootKeys.has(rootKey)) continue;
       seenRootKeys.add(rootKey);

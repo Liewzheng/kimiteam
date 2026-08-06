@@ -7,10 +7,15 @@
  * spellings without owning any state: `collectAliasIds` expands one root to
  * every id that addresses it, `dedupeByRoot` collapses a catalog to one
  * representative per directory, and the session-index readers parse the
- * legacy v1 `session_index.jsonl`.
+ * legacy v1 `session_index.jsonl`. `readSessionIndexWorkDirs` — the feed for
+ * the auto-recovery merge — skips workDirs under the OS temp root, which only
+ * ever hold historical harness sessions, via `isTmpRootWorkDir`
+ * (realpath-normalized on both sides); `readSessionIndexEntries` stays
+ * unfiltered because deletion and alias folding need every line.
  */
 
 import { isAbsolute } from 'pathe';
+import { tmpdir } from 'node:os';
 
 import { encodeWorkDirKey, workspaceRootKey } from '#/_base/utils/workdir-slug';
 import type { IFileSystemStorageService } from '#/persistence/interface/storage';
@@ -85,13 +90,29 @@ export async function readSessionIndexEntries(
 
 export async function readSessionIndexWorkDirs(
   storage: IFileSystemStorageService,
+  realpath: (p: string) => Promise<string>,
 ): Promise<readonly string[]> {
   const workDirs: string[] = [];
   for (const entry of await readSessionIndexEntries(storage)) {
     if (!isAbsolute(entry.workDir)) continue;
+    if (await isTmpRootWorkDir(entry.workDir, realpath)) continue;
     workDirs.push(entry.workDir);
   }
   return workDirs;
+}
+
+export async function isTmpRootWorkDir(
+  workDir: string,
+  realpath: (p: string) => Promise<string>,
+): Promise<boolean> {
+  const [resolvedWork, resolvedTmp] = await Promise.all([
+    realpath(workDir).catch(() => workDir),
+    realpath(tmpdir()).catch(() => tmpdir()),
+  ]);
+  const workKey = workspaceRootKey(resolvedWork);
+  const tmpKey = workspaceRootKey(resolvedTmp);
+  const prefix = tmpKey.endsWith('/') ? tmpKey : `${tmpKey}/`;
+  return workKey === tmpKey || workKey.startsWith(prefix);
 }
 
 export function parseSessionIndexLine(line: string): SessionIndexLine | undefined {

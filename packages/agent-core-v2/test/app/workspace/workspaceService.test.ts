@@ -50,7 +50,12 @@ describe('WorkspaceService (file-backed)', () => {
       ScopeActivation.OnDemand,
       'workspace',
     );
-    homeDir = await fsp.mkdtemp(join(os.tmpdir(), 'ws-registry-'));
+    // The session-index workDirs these tests seed live under homeDir, and the
+    // auto-recovery merge/rebuild now skips workDirs under os.tmpdir() — so
+    // the sandbox must sit outside the temp root (falling back to homedir
+    // when the checkout itself is under it).
+    const sandboxRoot = process.cwd().startsWith(os.tmpdir()) ? os.homedir() : process.cwd();
+    homeDir = await fsp.mkdtemp(join(sandboxRoot, 'ws-registry-'));
   });
 
   afterEach(async () => {
@@ -227,6 +232,62 @@ describe('WorkspaceService (file-backed)', () => {
     expect(list.map((w) => w.id).toSorted()).toEqual(
       [encodeWorkDirKey(work), encodeWorkDirKey(fresh)].toSorted(),
     );
+  });
+
+  it('merge skips workDirs under the OS temp root (lexical and realpath forms)', async () => {
+    const realWork = join(homeDir, 'real-project');
+    const tmpWork = await fsp.mkdtemp(join(os.tmpdir(), 'ws-tmp-proj-'));
+    try {
+      await writeWorkspacesJson({});
+      await seedSessionIndex([
+        { sessionId: 's1', sessionDir: join(homeDir, 'sessions', 's1'), workDir: realWork },
+        // Lexical (symlink) form of the temp root, e.g. /var/folders/.../T.
+        { sessionId: 's2', sessionDir: join(homeDir, 'sessions', 's2'), workDir: tmpWork },
+        // Realpath form, e.g. /private/var/folders/.../T — must be skipped too.
+        { sessionId: 's3', sessionDir: join(homeDir, 'sessions', 's3'), workDir: await fsp.realpath(tmpWork) },
+      ]);
+
+      const list = await build().list();
+      // Only the non-temp workDir is merged; both temp spellings are skipped.
+      expect(list.map((w) => w.id)).toEqual([encodeWorkDirKey(realWork)]);
+    } finally {
+      await fsp.rm(tmpWork, { recursive: true, force: true });
+    }
+  });
+
+  it('rebuild skips workDirs under the OS temp root', async () => {
+    const realWork = join(homeDir, 'real-project');
+    const tmpWork = await fsp.mkdtemp(join(os.tmpdir(), 'ws-tmp-proj-'));
+    try {
+      await seedSessionIndex([
+        { sessionId: 's1', sessionDir: join(homeDir, 'sessions', 's1'), workDir: realWork },
+        { sessionId: 's2', sessionDir: join(homeDir, 'sessions', 's2'), workDir: tmpWork },
+      ]);
+
+      const list = await build().list();
+      expect(list.map((w) => w.id)).toEqual([encodeWorkDirKey(realWork)]);
+    } finally {
+      await fsp.rm(tmpWork, { recursive: true, force: true });
+    }
+  });
+
+  it('merge honors deletion tombstones independently of the temp-root filter', async () => {
+    const tombstoned = join(homeDir, 'tombstoned');
+    const tmpWork = await fsp.mkdtemp(join(os.tmpdir(), 'ws-tmp-proj-'));
+    try {
+      await writeWorkspacesJson({}, { deleted_workspace_ids: [encodeWorkDirKey(tombstoned)] });
+      await seedSessionIndex([
+        { sessionId: 's1', sessionDir: join(homeDir, 'sessions', 's1'), workDir: tombstoned },
+        { sessionId: 's2', sessionDir: join(homeDir, 'sessions', 's2'), workDir: tmpWork },
+      ]);
+
+      const list = await build().list();
+      // The tombstoned non-temp workDir stays gone (tombstone, not filter),
+      // and the temp one is filtered out — nothing is resurrected.
+      expect(list).toEqual([]);
+    } finally {
+      await fsp.rm(tmpWork, { recursive: true, force: true });
+    }
   });
 
   it('delete tombstones the id and the merge never resurrects it', async () => {
