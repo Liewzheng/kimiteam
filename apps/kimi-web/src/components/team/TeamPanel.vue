@@ -14,6 +14,7 @@ import { getKimiWebApi } from '../../api';
 import type { AppTeamMember } from '../../api/types';
 import {
   averageScoreLabel,
+  filterUserTeamMembers,
   sortTeamMembers,
   summarizeTeam,
   teamStatusMeta,
@@ -78,8 +79,10 @@ async function refresh(): Promise<void> {
   pollInFlight = true;
   try {
     const data = await api.getTeamMembers(props.sessionId);
-    globalMembers.value = data.global;
-    projectMembers.value = data.project;
+    // Hide engine built-in default profiles (agent/coder/explore/plan) — they
+    // surface only as off-duty archive rows with no role/model/description.
+    globalMembers.value = filterUserTeamMembers(data.global);
+    projectMembers.value = filterUserTeamMembers(data.project);
     teamMode.value = data.teamMode;
     loadError.value = null;
   } catch (err) {

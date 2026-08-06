@@ -26,7 +26,12 @@ const props = defineProps<{
   sessionId: string;
 }>();
 
-const emit = defineEmits<{ close: [] }>();
+const emit = defineEmits<{
+  close: [];
+  /** A member row was activated (click / Enter / Space) — open its detail
+   *  (TeamMemberDetailPanel) for the active session. */
+  select: [name: string];
+}>();
 
 const { t } = useI18n();
 
@@ -119,7 +124,17 @@ const loadFailed = computed(() => error.value !== null && data.value === null);
             {{ t('usage.noRows') }}
           </div>
           <div v-else class="up-rows">
-            <div v-for="row in memberRows" :key="`p-${row.label}`" class="up-row">
+            <div
+              v-for="row in memberRows"
+              :key="`p-${row.label}`"
+              class="up-row up-row-clickable"
+              role="button"
+              tabindex="0"
+              :aria-label="t('usage.openMember', { name: row.label })"
+              @click="emit('select', row.label)"
+              @keydown.enter.prevent="emit('select', row.label)"
+              @keydown.space.prevent="emit('select', row.label)"
+            >
               <span class="up-label" :title="row.label">{{ row.label }}</span>
               <span class="up-cells">
                 <span class="up-cell-label">In</span>
@@ -225,6 +240,17 @@ const loadFailed = computed(() => error.value !== null && data.value === null);
 }
 .up-row + .up-row {
   border-top: 1px solid var(--color-line);
+}
+/* Member rows open the member detail — affordance mirrors the roster cards. */
+.up-row-clickable {
+  cursor: pointer;
+}
+.up-row-clickable:hover {
+  background: var(--color-surface-sunken);
+}
+.up-row-clickable:focus-visible {
+  outline: none;
+  box-shadow: inset var(--p-focus-ring);
 }
 .up-label {
   flex: 1;

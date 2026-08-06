@@ -10,4 +10,5 @@ export default {
   loadFailed: 'Could not load usage: {error}',
   empty: 'No usage recorded yet',
   emptyHint: 'Subagent runs will show up here as they happen.',
+  openMember: 'Open {name}',
 } as const;

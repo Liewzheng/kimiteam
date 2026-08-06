@@ -1,8 +1,8 @@
 export default {
-  authBannerMessage: '未登录 · 需要登录 Kimi Code 才能开始对话',
+  authBannerMessage: '未登录 · 需要登录 Kimi Team 才能开始对话',
   authBannerLogin: '登录',
-  authPageTitle: '登录 Kimi Code',
-  authPageMessage: '先连接 Kimi Code 账号，然后再开始或继续对话。',
+  authPageTitle: '登录 Kimi Team',
+  authPageMessage: '先连接 Kimi Team 账号，然后再开始或继续对话。',
   authPageLogin: '登录',
   connecting: '连接中…',
   connectRetrying: '无法连接服务器，正在重试…',

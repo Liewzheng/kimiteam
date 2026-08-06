@@ -142,4 +142,71 @@ describe('useDetailPanel — team/usage branches', () => {
     await nextTick();
     expect(detailTarget.value).toBe('usage');
   });
+
+  it('openTeamMemberPanel claims the slot and close returns to the roster', () => {
+    const { detailTarget, panel } = makePanel();
+
+    panel.openTeamMemberPanel('s1', 'coder');
+    expect(detailTarget.value).toBe('teamMember');
+    expect(panel.teamMemberVisible.value).toBe(true);
+    expect(panel.teamMemberName.value).toBe('coder');
+    expect(panel.sidePanelVisible.value).toBe(true);
+
+    // Close steps back up one level to the roster (teamTarget is preserved).
+    panel.closeTeamMemberPanel();
+    expect(detailTarget.value).toBe('team');
+    expect(panel.teamMemberVisible.value).toBe(false);
+  });
+
+  it('openTeamMemberPanel on the same member toggles back to the roster', () => {
+    const { detailTarget, panel } = makePanel();
+
+    panel.openTeamPanel('s1');
+    panel.openTeamMemberPanel('s1', 'coder');
+    expect(detailTarget.value).toBe('teamMember');
+
+    panel.openTeamMemberPanel('s1', 'coder');
+    expect(detailTarget.value).toBe('team');
+
+    // A different member opens instead of closing.
+    panel.openTeamMemberPanel('s1', 'reviewer');
+    expect(detailTarget.value).toBe('teamMember');
+    expect(panel.teamMemberName.value).toBe('reviewer');
+  });
+
+  it('opening a member detail replaces the roster / usage occupants', () => {
+    const { detailTarget, panel } = makePanel();
+
+    panel.openTeamPanel('s1');
+    panel.openTeamMemberPanel('s1', 'coder');
+    expect(detailTarget.value).toBe('teamMember');
+
+    panel.closeTeamMemberPanel();
+    panel.openUsagePanel('s1');
+    panel.openTeamMemberPanel('s1', 'coder');
+    expect(detailTarget.value).toBe('teamMember');
+  });
+
+  it('closeOpenSidePanel on the member detail returns to the roster, not idle', () => {
+    const { detailTarget, panel } = makePanel();
+
+    panel.openTeamPanel('s1');
+    panel.openTeamMemberPanel('s1', 'coder');
+    expect(panel.closeOpenSidePanel()).toBe(true);
+    expect(detailTarget.value).toBe('team');
+  });
+
+  it('remembers an open member detail per session and restores it on switch-back', async () => {
+    const { client, detailTarget, panel } = makePanel();
+
+    panel.openTeamMemberPanel('s1', 'coder');
+    client.activeSessionId.value = 's2';
+    await nextTick();
+    expect(detailTarget.value).toBeNull();
+
+    client.activeSessionId.value = 's1';
+    await nextTick();
+    expect(detailTarget.value).toBe('teamMember');
+    expect(panel.teamMemberName.value).toBe('coder');
+  });
 });

@@ -5,13 +5,14 @@
      streaming its progress here, and the progress list follows the bottom as long
      as the user hasn't scrolled up. -->
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue';
+import { computed, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import type { AgentMember, FilePreviewRequest } from '../../types';
 import { formatUsage, hasUsage } from '../../lib/agentUsage';
 import { shouldRenderMarkdown } from '../../lib/messageFormatting';
-import Badge from '../ui/Badge.vue';
+import AgentWorkflow from './AgentWorkflow.vue';
 import Markdown from './Markdown.vue';
+import Badge from '../ui/Badge.vue';
 import PanelHeader from '../ui/PanelHeader.vue';
 
 const props = defineProps<{ member: AgentMember }>();
@@ -24,16 +25,6 @@ const emit = defineEmits<{
 
 const { t } = useI18n();
 
-const progressLines = computed(() =>
-  (props.member.outputLines ?? [])
-    .map((line) => line.trimEnd())
-    .filter((line) => line.length > 0),
-);
-
-// The subagent's concatenated live output (assistant deltas). Trim trailing
-// whitespace for display; grows in real time as deltas stream in.
-const liveText = computed(() => (props.member.text ?? '').trimEnd());
-
 // Token-usage strip: formatted input/output/total when the server supplied a
 // usage aggregate with any real consumption, null otherwise (hidden entirely —
 // a queued/not-yet-run subagent shows no "0 tokens" strip).
@@ -41,65 +32,13 @@ const usageText = computed(() =>
   props.member.usage && hasUsage(props.member.usage) ? formatUsage(props.member.usage) : null,
 );
 
-// Rendering policy for the panel's prose fields: the task prompt, live output
-// and final summary are agent-facing prose (a TeamMessage the lead sent, the
-// subagent's formatted reply) and render Markdown — bold / lists / tables /
-// code. Tool-progress lines stay a mono log. The decision lives in the tested
-// lib/messageFormatting contract; the v-else keeps a plain fallback path.
+// Rendering policy for the panel's prose fields: the final summary is
+// agent-facing prose and renders Markdown — bold / lists / tables / code. The
+// task prompt, live output and tool-progress stream live in the shared
+// AgentWorkflow block (same policy, decided in lib/messageFormatting).
 const mdFields = {
-  task: shouldRenderMarkdown('subagent-task'),
-  output: shouldRenderMarkdown('subagent-output'),
   result: shouldRenderMarkdown('subagent-result'),
 };
-
-interface ProgressGroup {
-  key: string;
-  /** The "Calling …" tool-call line, or '' for output with no preceding call. */
-  call: string;
-  output: string[];
-}
-
-/** Group flat progress lines into tool-call groups: a "Calling …" line starts a
- *  group and subsequent non-call lines are its output. */
-function groupProgress(lines: string[]): ProgressGroup[] {
-  const groups: ProgressGroup[] = [];
-  let current: ProgressGroup | null = null;
-  let idx = 0;
-  for (const line of lines) {
-    if (line.startsWith('Calling ')) {
-      current = { key: `g${idx++}`, call: line, output: [] };
-      groups.push(current);
-    } else if (current) {
-      current.output.push(line);
-    } else {
-      current = { key: `g${idx++}`, call: '', output: [line] };
-      groups.push(current);
-    }
-  }
-  return groups;
-}
-
-const progressGroups = computed(() => groupProgress(progressLines.value));
-
-/** Group keys whose folded output is expanded. */
-const expandedGroups = ref<Set<string>>(new Set());
-
-const OUTPUT_FOLD_THRESHOLD = 8;
-const OUTPUT_HEAD = 5;
-const OUTPUT_TAIL = 2;
-
-function isExpanded(key: string): boolean {
-  return expandedGroups.value.has(key);
-}
-function toggleGroup(key: string): void {
-  const next = new Set(expandedGroups.value);
-  if (next.has(key)) next.delete(key);
-  else next.add(key);
-  expandedGroups.value = next;
-}
-function foldCount(group: ProgressGroup): number {
-  return group.output.length - OUTPUT_HEAD - OUTPUT_TAIL;
-}
 
 function phaseLabel(phase: AgentMember['phase']): string {
   switch (phase) {
@@ -112,21 +51,6 @@ function phaseLabel(phase: AgentMember['phase']): string {
 }
 
 const bodyEl = ref<HTMLElement | null>(null);
-watch(
-  // Follow the bottom as either the tool progress or the live text grows, as
-  // long as the user hasn't scrolled up.
-  () => progressLines.value.length + liveText.value.length,
-  () => {
-    const el = bodyEl.value;
-    if (!el) return;
-    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
-    if (!atBottom) return;
-    void nextTick(() => {
-      if (bodyEl.value) bodyEl.value.scrollTop = bodyEl.value.scrollHeight;
-    });
-  },
-  { immediate: true },
-);
 </script>
 
 <template>
@@ -148,43 +72,16 @@ watch(
       </div>
       <div v-if="member.subagentType" class="ap-type">{{ member.subagentType }}</div>
       <div v-if="member.suspendedReason" class="ap-reason">{{ member.suspendedReason }}</div>
-      <div v-if="member.prompt" class="ap-field">
-        <span class="ap-field-label">Task</span>
-        <div v-if="mdFields.task" class="ap-field-body ap-md">
-          <Markdown :text="member.prompt" :open-file="(target) => emit('openFile', target)" />
-        </div>
-        <div v-else class="ap-field-body">{{ member.prompt }}</div>
-      </div>
-      <div v-if="liveText" class="ap-field">
-        <span class="ap-field-label">Output</span>
-        <div v-if="mdFields.output" class="ap-field-body ap-md">
-          <Markdown :text="liveText" :open-file="(target) => emit('openFile', target)" />
-        </div>
-        <div v-else class="ap-field-body ap-live">{{ liveText }}</div>
-      </div>
-      <div v-if="progressGroups.length > 0" class="ap-field">
-        <span class="ap-field-label">Progress</span>
-        <div class="ap-field-body ap-progress">
-          <div v-for="group in progressGroups" :key="group.key" class="ap-group">
-            <div v-if="group.call" class="ap-call">
-              <span class="ap-glyph" aria-hidden="true">▶</span>
-              {{ group.call }}
-            </div>
-            <div v-if="group.output.length > 0" class="ap-output">
-              <template v-if="group.output.length <= OUTPUT_FOLD_THRESHOLD || isExpanded(group.key)">
-                <div v-for="(line, li) in group.output" :key="li" class="ap-out-line">{{ line }}</div>
-              </template>
-              <template v-else>
-                <div v-for="(line, li) in group.output.slice(0, OUTPUT_HEAD)" :key="li" class="ap-out-line">{{ line }}</div>
-                <button type="button" class="ap-fold" @click="toggleGroup(group.key)">
-                  … ({{ foldCount(group) }} more)
-                </button>
-                <div v-for="(line, li) in group.output.slice(-OUTPUT_TAIL)" :key="'t' + li" class="ap-out-line">{{ line }}</div>
-              </template>
-            </div>
-          </div>
-        </div>
-      </div>
+
+      <!-- Task / live output / tool-progress stream — shared with the
+           team-member detail (AgentWorkflow), so the streaming render + fold
+           logic live in one tested place. -->
+      <AgentWorkflow
+        :member="member"
+        :scroll-target="bodyEl"
+        @open-file="(target) => emit('openFile', target)"
+      />
+
       <div v-if="member.summary" class="ap-field">
         <span class="ap-field-label">Result</span>
         <div v-if="mdFields.result" class="ap-field-body ap-md">
@@ -254,6 +151,12 @@ watch(
 .ap-field + .ap-field {
   margin-top: 12px;
 }
+/* Spacing between the shared workflow block (AgentWorkflow — task / live
+   output / tool progress) and the trailing Result field. The workflow block
+   handles its own internal field spacing. */
+.aw + .ap-field {
+  margin-top: 12px;
+}
 .ap-field-label {
   display: block;
   color: var(--color-text-muted);
@@ -266,74 +169,10 @@ watch(
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-/* Markdown-rendered prose field (task / live output / result). The inner
-   Markdown.vue provides its own prose styles; this wrapper only keeps wide
-   tables/code from pushing the panel's horizontal layout (they scroll inside
-   their own containers). */
+/* Markdown-rendered prose field (final result). The inner Markdown.vue
+   provides its own prose styles; this wrapper only keeps wide tables/code from
+   pushing the panel's horizontal layout (they scroll inside their containers). */
 .ap-md {
   min-width: 0;
-}
-.ap-progress {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  font: var(--text-base)/var(--leading-relaxed) var(--font-mono);
-  color: var(--color-text);
-  min-width: 0;
-}
-.ap-live {
-  font: var(--text-base)/var(--leading-relaxed) var(--font-mono);
-  color: var(--color-text);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-.ap-group {
-  min-width: 0;
-}
-.ap-call {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  min-width: 0;
-  font-weight: var(--weight-medium);
-  color: var(--color-text);
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
-}
-.ap-glyph {
-  flex: none;
-  color: var(--color-accent);
-  font-size: 0.85em;
-}
-.ap-output {
-  margin: 2px 0 0 16px;
-  padding-left: 8px;
-  color: var(--color-text-muted);
-  font-size: var(--text-sm);
-  line-height: var(--leading-normal);
-  border-left: 2px solid var(--color-line);
-  min-width: 0;
-}
-.ap-out-line {
-  min-width: 0;
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
-}
-.ap-fold {
-  display: inline-block;
-  margin: 2px 0;
-  padding: 0;
-  background: none;
-  border: none;
-  color: var(--color-accent);
-  font: inherit;
-  cursor: pointer;
-}
-.ap-fold:hover {
-  text-decoration: underline;
-}
-.ap-fold:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 1px;
 }
 </style>

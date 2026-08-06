@@ -295,6 +295,37 @@ export function useDetailPanel({
   }
 
   // ---------------------------------------------------------------------------
+  // Team member detail — drill-in from a TeamStatusPanel card. Replaces the
+  // roster in the shared slot; closing returns to the roster (teamTarget is
+  // preserved), so Esc/close steps back up one level and a second Esc on the
+  // roster closes the whole team view.
+  // ---------------------------------------------------------------------------
+  const teamMemberTarget = ref<{ sessionId: string; name: string } | null>(null);
+
+  const teamMemberVisible = computed(() => teamMemberTarget.value !== null);
+
+  /** The inspected member's profile name (for App to render the panel). */
+  const teamMemberName = computed(() => teamMemberTarget.value?.name ?? '');
+
+  function openTeamMemberPanel(sessionId: string, name: string): void {
+    if (
+      detailTarget.value === 'teamMember' &&
+      teamMemberTarget.value?.sessionId === sessionId &&
+      teamMemberTarget.value?.name === name
+    ) {
+      closeTeamMemberPanel();
+      return;
+    }
+    teamMemberTarget.value = { sessionId, name };
+    detailTarget.value = 'teamMember';
+  }
+
+  function closeTeamMemberPanel(): void {
+    teamMemberTarget.value = null;
+    if (detailTarget.value === 'teamMember') detailTarget.value = 'team';
+  }
+
+  // ---------------------------------------------------------------------------
   // Usage panel (/usage) — same session-scoped, toggle-close semantics as team.
   // ---------------------------------------------------------------------------
   const usageTarget = ref<{ sessionId: string } | null>(null);
@@ -325,6 +356,7 @@ export function useDetailPanel({
       (detailTarget.value !== 'toolDiff' || toolDiffVisible.value) &&
       (detailTarget.value !== 'btw' || btwVisible.value) &&
       (detailTarget.value !== 'team' || teamVisible.value) &&
+      (detailTarget.value !== 'teamMember' || teamMemberVisible.value) &&
       (detailTarget.value !== 'usage' || usageVisible.value),
   );
 
@@ -350,6 +382,7 @@ export function useDetailPanel({
     | { kind: 'toolDiff'; toolId: string }
     | { kind: 'btw' }
     | { kind: 'team'; sessionId: string }
+    | { kind: 'teamMember'; sessionId: string; name: string }
     | { kind: 'usage'; sessionId: string };
 
   const snapshotBySession = ref<Record<string, PanelSnapshot>>({});
@@ -368,6 +401,8 @@ export function useDetailPanel({
         return { kind: 'btw' };
       case 'team':
         return teamTarget.value ? { kind: 'team', ...teamTarget.value } : null;
+      case 'teamMember':
+        return teamMemberTarget.value ? { kind: 'teamMember', ...teamMemberTarget.value } : null;
       case 'usage':
         return usageTarget.value ? { kind: 'usage', ...usageTarget.value } : null;
       default:
@@ -403,6 +438,13 @@ export function useDetailPanel({
         teamTarget.value = { sessionId: snap.sessionId };
         detailTarget.value = 'team';
         break;
+      case 'teamMember':
+        // Also restore the roster underneath: closing the member detail
+        // returns to the TeamStatusPanel, which requires teamVisible.
+        teamTarget.value = { sessionId: snap.sessionId };
+        teamMemberTarget.value = { sessionId: snap.sessionId, name: snap.name };
+        detailTarget.value = 'teamMember';
+        break;
       case 'usage':
         usageTarget.value = { sessionId: snap.sessionId };
         detailTarget.value = 'usage';
@@ -419,6 +461,7 @@ export function useDetailPanel({
     if (detailTarget.value === 'file') { closeFilePreview(); return true; }
     if (detailTarget.value === 'diff') { closeDiffDetail(); return true; }
     if (detailTarget.value === 'btw') { closeSideChat(); return true; }
+    if (detailTarget.value === 'teamMember') { closeTeamMemberPanel(); return true; }
     if (detailTarget.value === 'team') { closeTeamPanel(); return true; }
     if (detailTarget.value === 'usage') { closeUsagePanel(); return true; }
     return false;
@@ -440,6 +483,7 @@ export function useDetailPanel({
     closeToolDiff();
     closeDiffDetail();
     hideSideChatPanel();
+    closeTeamMemberPanel();
     closeTeamPanel();
     closeUsagePanel();
     // Restore the entering session's panel, if it had one.
@@ -483,6 +527,10 @@ export function useDetailPanel({
     teamVisible,
     openTeamPanel,
     closeTeamPanel,
+    teamMemberVisible,
+    teamMemberName,
+    openTeamMemberPanel,
+    closeTeamMemberPanel,
     usageVisible,
     openUsagePanel,
     closeUsagePanel,

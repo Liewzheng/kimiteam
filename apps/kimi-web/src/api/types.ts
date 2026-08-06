@@ -704,6 +704,9 @@ export interface AppTeamMember {
   tools: string[];
   skills?: string[];
   duty?: boolean;
+  /** The profile's prompt body (Markdown after the frontmatter), when the
+   *  server ships it — editable via updateTeamMember. */
+  prompt?: string;
   status: AppTeamMemberStatus;
   score: { average: number | null; count: number };
 }
@@ -872,6 +875,8 @@ export interface KimiWebApi {
     role?: string;
     description?: string;
     whenToUse?: string;
+    /** Replaces the profile's prompt body (the Markdown after the frontmatter). */
+    prompt?: string;
   }): Promise<AppTeamMember>;
   scoreTeamMember(sessionId: string, name: string, input: {
     score: number;

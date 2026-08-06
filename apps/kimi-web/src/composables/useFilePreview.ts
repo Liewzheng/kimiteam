@@ -20,6 +20,7 @@ export type DetailTarget =
   | 'toolDiff'
   | 'btw'
   | 'team'
+  | 'teamMember'
   | 'usage';
 
 /** Whether a url can feed a native <video>/<img> src. A provider reference like

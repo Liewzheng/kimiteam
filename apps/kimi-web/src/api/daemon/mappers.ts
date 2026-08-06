@@ -814,6 +814,7 @@ export function toAppTeamMember(wire: WireTeamMember): AppTeamMember {
     tools: wire.tools ?? [],
     skills: wire.skills,
     duty: wire.duty,
+    prompt: wire.prompt,
     status: wire.status,
     score: {
       average: wire.score.average,

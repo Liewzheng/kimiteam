@@ -4,4 +4,8 @@ export default {
   /** Generic confirm / cancel button labels (used by ConfirmDialog). */
   confirm: 'Confirm',
   cancel: 'Cancel',
+  /** Agent-workflow field labels (shared by AgentWorkflow). */
+  taskLabel: 'Task',
+  outputLabel: 'Output',
+  progressLabel: 'Progress',
 } as const;

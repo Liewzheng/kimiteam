@@ -15,7 +15,7 @@
 import { computed, onMounted, watch, type Ref } from 'vue';
 import { getKimiWebApi } from '../api';
 import type { AppTeamMembers } from '../api/types';
-import { summarizeTeam, type TeamRosterSummary } from '../lib/teamRows';
+import { filterUserTeamMembers, summarizeTeam, type TeamRosterSummary } from '../lib/teamRows';
 import { usePolling } from './usePolling';
 
 /** Same cadence as the TeamPanel dialog / the old in-panel poll (2.5s). */
@@ -33,11 +33,25 @@ export function useTeamRoster(sessionId: Ref<string | null>) {
     POLL_MS,
   );
 
+  /** Roster with engine built-in default profiles (agent/coder/explore/plan)
+   *  filtered out — panel + dock badge only count user-created members. Kept
+   *  as a separate computed so the raw polled `data` stays the source of truth
+   *  (edit-realtime patching / future consumers can still see it). */
+  const members = computed<AppTeamMembers | null>(() => {
+    const raw = roster.data.value;
+    if (!raw) return null;
+    return {
+      ...raw,
+      global: filterUserTeamMembers(raw.global),
+      project: filterUserTeamMembers(raw.project),
+    };
+  });
+
   /** working / total for the badge, aggregated across global + project scopes. */
   const summary = computed<TeamRosterSummary>(() => {
-    const members = roster.data.value;
-    if (!members) return EMPTY_SUMMARY;
-    return summarizeTeam([...members.global, ...members.project]);
+    const m = members.value;
+    if (!m) return EMPTY_SUMMARY;
+    return summarizeTeam([...m.global, ...m.project]);
   });
 
   // Poll only while a session is active; on session switch drop the previous
@@ -67,5 +81,5 @@ export function useTeamRoster(sessionId: Ref<string | null>) {
     if (!sessionId.value) roster.stop();
   });
 
-  return { data: roster.data, loading: roster.loading, error: roster.error, summary };
+  return { data: roster.data, members, loading: roster.loading, error: roster.error, summary };
 }

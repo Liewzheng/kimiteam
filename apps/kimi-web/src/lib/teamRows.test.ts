@@ -2,9 +2,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   averageScoreLabel,
+  filterUserTeamMembers,
+  isBuiltinTeamProfileName,
   sortTeamMembers,
   summarizeTeam,
   teamStatusMeta,
+  toMemberCard,
+  toMemberCards,
   type TeamMemberStatus,
 } from './teamRows';
 
@@ -106,5 +110,96 @@ describe('sortTeamMembers', () => {
     const snapshot = [...members];
     sortTeamMembers(members);
     expect(members).toEqual(snapshot);
+  });
+});
+
+describe('toMemberCard / toMemberCards — TeamStatusPanel card grid', () => {
+  const member = (overrides: Record<string, unknown> = {}) => ({
+    name: 'Alice',
+    role: 'Architect',
+    model: 'kimi-k2',
+    status: 'working' as const,
+    score: { average: 4.25, count: 2 },
+    ...overrides,
+  });
+
+  it('builds the four card rows: name, statusKey, title (role), model, score', () => {
+    expect(toMemberCard(member())).toEqual({
+      name: 'Alice',
+      statusKey: 'working',
+      title: 'Architect',
+      model: 'kimi-k2',
+      scoreLabel: '4.3',
+    });
+  });
+
+  it('uses the role field as the card title (no separate title field exists)', () => {
+    expect(toMemberCard(member({ role: 'Duty engineer' })).title).toBe('Duty engineer');
+  });
+
+  it('passes the status key through for i18n resolution', () => {
+    expect(toMemberCard(member({ status: 'off-duty' })).statusKey).toBe('off-duty');
+  });
+
+  it('renders a null score label when there are no scores yet (card shows empty state)', () => {
+    expect(toMemberCard(member({ score: { average: null, count: 0 } })).scoreLabel).toBeNull();
+  });
+
+  it('maps a roster 1:1 — N members → N cards, order preserved (grid card count)', () => {
+    const roster = [
+      member({ name: 'alpha' }),
+      member({ name: 'beta' }),
+      member({ name: 'gamma' }),
+    ];
+    const cards = toMemberCards(roster);
+    expect(cards).toHaveLength(3);
+    expect(cards.map((c) => c.name)).toEqual(['alpha', 'beta', 'gamma']);
+  });
+
+  it('returns zero cards for an empty roster', () => {
+    expect(toMemberCards([])).toEqual([]);
+  });
+});
+
+describe('filterUserTeamMembers / isBuiltinTeamProfileName — hide engine built-ins', () => {
+  const member = (name: string) => ({ name, status: 'off-duty' as const });
+
+  it('flags exactly the four engine built-in default profiles', () => {
+    expect(isBuiltinTeamProfileName('agent')).toBe(true);
+    expect(isBuiltinTeamProfileName('coder')).toBe(true);
+    expect(isBuiltinTeamProfileName('explore')).toBe(true);
+    expect(isBuiltinTeamProfileName('plan')).toBe(true);
+    expect(isBuiltinTeamProfileName('mail-checker')).toBe(false);
+    expect(isBuiltinTeamProfileName('')).toBe(false);
+  });
+
+  it('drops engine built-ins and keeps user-created members', () => {
+    const roster = [
+      member('agent'),
+      member('coder'),
+      member('explore'),
+      member('plan'),
+      member('mail-checker'),
+      member('yan-ge'),
+    ];
+    expect(filterUserTeamMembers(roster).map((m) => m.name)).toEqual([
+      'mail-checker',
+      'yan-ge',
+    ]);
+  });
+
+  it('keeps user-fired archive rows (non-built-in names) intact', () => {
+    const roster = [member('agent'), member('retired-member')];
+    const filtered = filterUserTeamMembers(roster);
+    expect(filtered.map((m) => m.name)).toEqual(['retired-member']);
+    expect(filtered[0]!.status).toBe('off-duty');
+  });
+
+  it('keeps an empty list empty and does not mutate the input', () => {
+    expect(filterUserTeamMembers([])).toEqual([]);
+    const roster = [member('coder'), member('ok')];
+    const snapshot = [...roster];
+    filterUserTeamMembers(roster);
+    expect(roster).toEqual(snapshot);
   });
 });

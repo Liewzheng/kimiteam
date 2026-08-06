@@ -92,6 +92,49 @@ export function averageScoreLabel(score: { average: number | null; count: number
   return String(rounded);
 }
 
+// ---------------------------------------------------------------------------
+// TeamStatusPanel card view-model
+// ---------------------------------------------------------------------------
+
+/** The four display rows of a team-member card in TeamStatusPanel:
+ *  `Name (status)` / `Title` / `Model` / `Score`. Pure derivation so the card
+ *  structure is unit-testable; the component resolves the `statusKey` i18n
+ *  label (`team.status.<statusKey>`) and renders `scoreLabel` (null → the
+ *  `team.scoreNone` empty state). */
+export interface TeamMemberCard {
+  name: string;
+  statusKey: TeamMemberStatus;
+  /** The card's "Title" row — the member's role/职位 field. */
+  title: string;
+  model: string;
+  scoreLabel: string | null;
+}
+
+/** One card per member (1:1 — no filtering or limiting, so a roster of N
+ *  members always renders exactly N cards). */
+export function toMemberCard(member: {
+  name: string;
+  role: string;
+  model: string;
+  status: TeamMemberStatus;
+  score: { average: number | null; count: number };
+}): TeamMemberCard {
+  return {
+    name: member.name,
+    statusKey: member.status,
+    title: member.role,
+    model: member.model,
+    scoreLabel: averageScoreLabel(member.score),
+  };
+}
+
+/** Build the card view-model for a whole roster (preserves input order). */
+export function toMemberCards(
+  members: ReadonlyArray<Parameters<typeof toMemberCard>[0]>,
+): TeamMemberCard[] {
+  return members.map(toMemberCard);
+}
+
 /** Stable roster order: working → resting → on-duty → off-duty; ties broken by
  *  name. Returns a new array (input is not mutated). */
 export function sortTeamMembers<T extends { name: string; status: TeamMemberStatus }>(
@@ -121,4 +164,102 @@ export function teamTabState(opts: { working: number; total: number; hasSession:
     hot: opts.working > 0 && opts.total > 0,
     disabled: !opts.hasSession,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Built-in default profiles — hidden from the team roster
+// ---------------------------------------------------------------------------
+
+/** Engine built-in default agent profiles, registered in agent-core-v2
+ *  (`session/agentLifecycle/profile/profiles.ts` agent/coder/explore and
+ *  `agent/plan/profile/plan.ts` plan). They have NO user profile file
+ *  (`~/.kimi-code/agents/<name>.md`), so the team roster only ever surfaces
+ *  them as off-duty archive rows derived from dispatched-run shift records —
+ *  with no role/model/description. The team panel hides them so it only shows
+ *  user-created members (TeamHire'd / hand-written profiles). */
+export const BUILTIN_TEAM_PROFILE_NAMES: readonly string[] = [
+  'agent',
+  'coder',
+  'explore',
+  'plan',
+];
+
+/** True when `name` is an engine built-in default profile (not a user-created
+ *  team member). */
+export function isBuiltinTeamProfileName(name: string): boolean {
+  return BUILTIN_TEAM_PROFILE_NAMES.includes(name);
+}
+
+/** Drop engine built-in default profiles from a roster array (non-mutating).
+ *  User-created members — including archive (off-duty) rows for fired members —
+ *  are preserved. */
+export function filterUserTeamMembers<T extends { name: string }>(
+  members: ReadonlyArray<T>,
+): T[] {
+  return members.filter((m) => !isBuiltinTeamProfileName(m.name));
+}
+
+// ---------------------------------------------------------------------------
+// Member lookup + roster replacement (drill-in detail + edit realtime)
+// ---------------------------------------------------------------------------
+
+/** Find a member by name across global then project scope, or null. Generic
+ *  over the member/roster shapes so callers keep their concrete types (e.g.
+ *  AppTeamMember) instead of a structural slice. */
+export function findTeamMember<T extends AppTeamMemberLike>(
+  members: { global: T[]; project: T[] } | null,
+  name: string,
+): T | null {
+  if (!members) return null;
+  return (
+    members.global.find((m) => m.name === name) ??
+    members.project.find((m) => m.name === name) ??
+    null
+  );
+}
+
+/** Replace a member in place (by name) within whichever scope holds it, and
+ *  return a NEW roster object (spread-preserving any extra fields such as
+ *  teamMode) — the source of truth (useTeamRoster.data) is patched this way so
+ *  an edit reflects immediately without waiting for the 2.5s poll. Members not
+ *  present in either scope leave the roster unchanged. */
+export function replaceTeamMember<
+  M extends { global: AppTeamMemberLike[]; project: AppTeamMemberLike[] },
+  T extends AppTeamMemberLike,
+>(members: M | null, updated: T): M | null {
+  if (!members) return members;
+  const inGlobal = members.global.some((m) => m.name === updated.name);
+  const inProject = members.project.some((m) => m.name === updated.name);
+  if (!inGlobal && !inProject) return members;
+  return {
+    ...members,
+    global: inGlobal
+      ? members.global.map((m) => (m.name === updated.name ? updated : m))
+      : members.global,
+    project: inProject
+      ? members.project.map((m) => (m.name === updated.name ? updated : m))
+      : members.project,
+  };
+}
+
+/** Structural slice of a roster member used by the lookup helpers (kept local
+ *  so the lib stays free of api/types imports — the wire and app shapes both
+ *  satisfy it). */
+interface AppTeamMemberLike {
+  name: string;
+}
+
+// ---------------------------------------------------------------------------
+// Member → live subagent task (workflow half of the member detail)
+// ---------------------------------------------------------------------------
+
+/** A live subagent task whose profile name matches the member name. The
+ *  subagent's `subagentType` IS the profile name it was spawned from, so a
+ *  roster member ("code-reviewer") joins to its running instance this way.
+ *  Returns the first match (realistically 0 or 1 live instance per member). */
+export function findMemberTask<T extends { kind: string; subagentType?: string }>(
+  tasks: ReadonlyArray<T>,
+  name: string,
+): T | undefined {
+  return tasks.find((task) => task.kind === 'subagent' && task.subagentType === name);
 }

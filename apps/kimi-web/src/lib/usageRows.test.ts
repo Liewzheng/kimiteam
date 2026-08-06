@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AppTeamTokenUsage, AppTeamUsage } from '../api/types';
 import {
+  memberSessionUsage,
   memberUsageRows,
   modelUsageRows,
   normalizeTeamUsage,
@@ -144,5 +145,20 @@ describe('memberUsageRows', () => {
       { label: 'alpha', input: 12, output: 6 },
       { label: 'beta', input: 1, output: 1 },
     ]);
+  });
+});
+
+describe('memberSessionUsage', () => {
+  it('sums all models for one member, or null when absent', () => {
+    const u = usage({
+      byMember: {
+        alpha: { 'kimi-k2': tokens(10, 5, 3), 'kimi-lite': tokens(2, 1) },
+        beta: { 'kimi-k2': tokens(0, 0) },
+      },
+    });
+    expect(memberSessionUsage(u, 'alpha')).toEqual({ input: 15, output: 6 });
+    // A member with a bucket but zero spend is still "present" (not null).
+    expect(memberSessionUsage(u, 'beta')).toEqual({ input: 0, output: 0 });
+    expect(memberSessionUsage(u, 'missing')).toBeNull();
   });
 });

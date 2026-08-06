@@ -448,6 +448,9 @@ export interface WireTeamMember {
   tools: string[];
   skills?: string[];
   duty?: boolean;
+  /** The profile's prompt body (Markdown after the frontmatter), when the
+   *  server ships it. */
+  prompt?: string;
   status: WireTeamMemberStatus;
   score: {
     average: number | null;

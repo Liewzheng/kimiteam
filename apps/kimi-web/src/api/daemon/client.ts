@@ -1379,6 +1379,8 @@ export class DaemonKimiWebApi implements KimiWebApi {
       role?: string;
       description?: string;
       whenToUse?: string;
+      /** Replaces the profile's prompt body (the Markdown after the frontmatter). */
+      prompt?: string;
     },
   ): Promise<AppTeamMember> {
     const body: Record<string, unknown> = {};
@@ -1388,6 +1390,7 @@ export class DaemonKimiWebApi implements KimiWebApi {
     if (input.role !== undefined) body['role'] = input.role;
     if (input.description !== undefined) body['description'] = input.description;
     if (input.whenToUse !== undefined) body['when_to_use'] = input.whenToUse;
+    if (input.prompt !== undefined) body['prompt'] = input.prompt;
     const data = await this.http.requestFlat<WireTeamMemberResponse>(
       'PUT',
       `/teams/${encodeURIComponent(sessionId)}/members/${encodeURIComponent(name)}`,

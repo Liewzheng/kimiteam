@@ -10,4 +10,5 @@ export default {
   loadFailed: '无法加载用量：{error}',
   empty: '暂无用量记录',
   emptyHint: '子代理运行后这里会显示用量。',
+  openMember: '打开 {name}',
 } as const;

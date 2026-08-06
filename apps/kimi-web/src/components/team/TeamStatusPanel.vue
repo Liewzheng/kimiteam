@@ -12,10 +12,10 @@ import { computed } from 'vue';
 import { useI18n } from 'vue-i18n';
 import type { AppTeamMember, AppTeamMembers } from '../../api/types';
 import {
-  averageScoreLabel,
   sortTeamMembers,
   summarizeTeam,
-  teamStatusMeta,
+  toMemberCards,
+  type TeamMemberCard,
 } from '../../lib/teamRows';
 import Badge from '../ui/Badge.vue';
 import Card from '../ui/Card.vue';
@@ -33,7 +33,13 @@ const props = defineProps<{
   error: string | null;
 }>();
 
-const emit = defineEmits<{ close: [] }>();
+const emit = defineEmits<{
+  close: [];
+  /** A member card was activated (click / Enter / Space) — open its detail.
+   *  The detail panel wiring lands in a separate change; this only exposes the
+   *  contract. */
+  select: [member: AppTeamMember];
+}>();
 
 const { t } = useI18n();
 
@@ -56,6 +62,7 @@ const sections = computed(() => [
     titleKey: 'globalTeam',
     pathKey: 'globalScopePath',
     rows: globalRows.value,
+    cards: toMemberCards(globalRows.value),
     summary: summaryGlobal.value,
   },
   {
@@ -63,12 +70,16 @@ const sections = computed(() => [
     titleKey: 'projectTeam',
     pathKey: 'projectScopePath',
     rows: projectRows.value,
+    cards: toMemberCards(projectRows.value),
     summary: summaryProject.value,
   },
 ]);
 
-function scoreLabel(member: AppTeamMember): string | null {
-  return averageScoreLabel(member.score);
+function cardAria(card: TeamMemberCard): string {
+  return t('team.memberCardAria', {
+    name: card.name,
+    status: t('team.status.' + card.statusKey),
+  });
 }
 
 // Keep last-known roster on later poll failures; surface the error only while
@@ -133,30 +144,34 @@ const loadFailed = computed(() => props.error !== null && props.members === null
             {{ t('team.noMembers') }}
           </div>
           <div v-else class="tsp-list">
+            <!-- Member cards in a responsive grid: 4/row on a wide panel,
+                 3/row at the default width, 2/row when the panel is narrowed.
+                 `cards` is a 1:1 map of `rows` (same order), so `rows[i]` is the
+                 member behind card `i` — used for the select payload + duty. -->
             <Card
-              v-for="member in sec.rows"
-              :key="`${sec.key}-${member.name}`"
+              v-for="(card, i) in sec.cards"
+              :key="`${sec.key}-${card.name}`"
               class="tsp-card"
+              role="button"
+              tabindex="0"
+              :aria-label="cardAria(card)"
+              @click="emit('select', sec.rows[i]!)"
+              @keydown.enter.prevent="emit('select', sec.rows[i]!)"
+              @keydown.space.prevent="emit('select', sec.rows[i]!)"
             >
-              <template #head>
-                <div class="tsp-card-head">
-                  <span class="tsp-name" :title="member.name">{{ member.name }}</span>
-                  <Badge
-                    :variant="teamStatusMeta(member.status).variant"
-                    size="sm"
-                    dot
-                  >{{ t('team.status.' + member.status) }}</Badge>
-                  <Badge v-if="member.duty" variant="warning" size="sm">{{ t('team.dutyBadge') }}</Badge>
-                  <span class="tsp-spacer" />
-                  <span class="tsp-role">{{ member.role }}</span>
-                  <span class="tsp-model">{{ member.model }}</span>
-                  <Badge v-if="scoreLabel(member)" size="sm" variant="neutral" class="tsp-score">
-                    <Icon name="star" size="sm" />
-                    {{ scoreLabel(member) }}
-                  </Badge>
-                  <span v-else class="tsp-score-none">{{ t('team.scoreNone') }}</span>
+              <div class="tsp-card-rows">
+                <div class="tsp-card-name">
+                  <span class="tsp-name" :title="card.name">{{ card.name }}</span>
+                  <span class="tsp-status">({{ t('team.status.' + card.statusKey) }})</span>
+                  <Badge v-if="sec.rows[i]!.duty" variant="warning" size="sm">{{ t('team.dutyBadge') }}</Badge>
                 </div>
-              </template>
+                <div class="tsp-card-row tsp-title" :title="card.title">{{ card.title }}</div>
+                <div class="tsp-card-row tsp-model" :title="card.model">{{ card.model }}</div>
+                <div class="tsp-card-row tsp-score">
+                  <Icon name="star" size="sm" />
+                  {{ card.scoreLabel ?? t('team.scoreNone') }}
+                </div>
+              </div>
             </Card>
           </div>
         </section>
@@ -172,6 +187,11 @@ const loadFailed = computed(() => props.error !== null && props.members === null
   flex-direction: column;
   min-height: 0;
   background: var(--color-bg);
+  /* Container for the member-card grid: the panel's inner width is pinned to
+     `--preview-w` (the aside content is a fixed-width column), so breakpoints
+     key off the container, not the viewport. */
+  container-type: inline-size;
+  container-name: tsp;
 }
 .tsp-count {
   flex: none;
@@ -257,49 +277,73 @@ const loadFailed = computed(() => props.error !== null && props.members === null
 }
 
 .tsp-list {
+  /* Member-card grid. Default (the panel's normal ~460px width): 3 columns.
+     Wider panel → 4; a narrowed panel (<420px) falls back to 2 so cards never
+     collapse to unusable slivers. `minmax(0, 1fr)` lets grid items shrink so
+     the per-card ellipsis truncation actually kicks in. */
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-2);
+  align-items: stretch;
+}
+/* 4 columns on a wide panel (user drags the resize handle past 640px). */
+@container tsp (min-width: 640px) {
+  .tsp-list { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+/* 2 columns on a heavily narrowed panel (down to PREVIEW_MIN 320px). */
+@container tsp (max-width: 419px) {
+  .tsp-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* Clickable member card — compact 4-row stack. */
+.tsp-card {
+  min-width: 0;
+  cursor: pointer;
+  transition: border-color var(--duration-fast) var(--ease-out);
+}
+.tsp-card:hover { border-color: var(--color-line-strong); }
+.tsp-card:focus-visible { outline: none; box-shadow: var(--p-focus-ring); }
+.tsp-card :deep(.ui-card__body) { padding: var(--space-2) var(--space-3); }
+
+.tsp-card-rows {
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: 2px;
+  min-width: 0;
 }
-.tsp-card { flex: none; }
-.tsp-card-head {
+.tsp-card-name {
   display: flex;
-  align-items: center;
-  gap: var(--space-2);
+  align-items: baseline;
+  gap: 4px;
   min-width: 0;
 }
 .tsp-name {
-  flex: none;
   font-weight: var(--weight-semibold);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 40%;
 }
-.tsp-role {
+.tsp-status {
   flex: none;
   font-size: var(--text-xs);
-  font-family: var(--font-ui);
-  font-weight: var(--weight-regular);
   color: var(--color-text-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 20%;
 }
-.tsp-model {
-  flex: 0 1 auto;
+.tsp-card-row {
   font-size: var(--text-xs);
-  color: var(--color-text-faint);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
 }
-.tsp-score { flex: none; }
+.tsp-title { color: var(--color-text-muted); }
+.tsp-model { color: var(--color-text-faint); font-family: var(--font-mono); }
+.tsp-score {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--color-text);
+  font-weight: var(--weight-medium);
+}
 .tsp-score :deep(svg) { flex: none; }
-.tsp-score-none {
-  flex: none;
-  font-size: var(--text-xs);
-  color: var(--color-text-faint);
-}
 </style>

@@ -20,6 +20,7 @@ import ConfirmDialogHost from './components/dialogs/ConfirmDialogHost.vue';
 import StatusPanel from './components/chat/StatusPanel.vue';
 import TeamPanel from './components/team/TeamPanel.vue';
 import TeamStatusPanel from './components/team/TeamStatusPanel.vue';
+import TeamMemberDetailPanel from './components/team/TeamMemberDetailPanel.vue';
 import UsagePanel from './components/usage/UsagePanel.vue';
 import WarningToasts from './components/WarningToasts.vue';
 import MobileTopBar from './components/mobile/MobileTopBar.vue';
@@ -39,6 +40,8 @@ import { useSidebarLayout } from './composables/useSidebarLayout';
 import { useFilePreview, type DetailTarget } from './composables/useFilePreview';
 import { useDetailPanel } from './composables/useDetailPanel';
 import { useTeamRoster } from './composables/useTeamRoster';
+import { replaceTeamMember } from './lib/teamRows';
+import type { AppTeamMember } from './api/types';
 import { useIsMobile } from './composables/useIsMobile';
 import { openDialogCount } from './composables/dialogStack';
 import type { SwarmMember } from './composables/swarmGroups';
@@ -310,6 +313,10 @@ const {
   teamVisible,
   openTeamPanel,
   closeTeamPanel,
+  teamMemberVisible,
+  teamMemberName,
+  openTeamMemberPanel,
+  closeTeamMemberPanel,
   usageVisible,
   openUsagePanel,
   closeUsagePanel,
@@ -327,6 +334,17 @@ const teamRoster = useTeamRoster(client.activeSessionId);
  *  without an active session this is a no-op (matches the /team command). */
 function openActiveTeamPanel(): void {
   if (client.activeSessionId.value) openTeamPanel(client.activeSessionId.value);
+}
+
+/** TeamStatusPanel card / UsagePanel member row → open the member detail. */
+function openMemberDetail(name: string): void {
+  if (client.activeSessionId.value) openTeamMemberPanel(client.activeSessionId.value, name);
+}
+
+/** A member edit saved — patch the shared roster in place so the change is
+ *  live immediately (the 2.5s poll would eventually catch it anyway). */
+function applyTeamMemberUpdate(updated: AppTeamMember): void {
+  teamRoster.data.value = replaceTeamMember(teamRoster.data.value, updated);
 }
 
 // Reference to ConversationPane so we can imperatively switch tabs
@@ -718,7 +736,7 @@ function openPr(url: string): void {
     <ServerAuthDialog v-if="showServerAuth" />
     <section v-if="showAuthGate" class="auth-page">
       <div class="auth-page-inner">
-        <svg ref="authLogoRef" class="auth-page-logo ch-logo" viewBox="0 0 32 22" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Kimi Code" @mousedown.prevent @click="blinkAuthLogo">
+        <svg ref="authLogoRef" class="auth-page-logo ch-logo" viewBox="0 0 32 22" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Kimi Team" @mousedown.prevent @click="blinkAuthLogo">
           <defs>
             <mask id="authKimiEyes" maskUnits="userSpaceOnUse">
               <rect x="0" y="0" width="32" height="22" fill="#fff" />
@@ -988,15 +1006,27 @@ function openPr(url: string): void {
       />
       <TeamStatusPanel
         v-else-if="detailTarget === 'team' && teamVisible"
-        :members="teamRoster.data.value"
+        :members="teamRoster.members.value"
         :loading="teamRoster.loading.value"
         :error="teamRoster.error.value"
         @close="closeTeamPanel"
+        @select="(member) => openMemberDetail(member.name)"
+      />
+      <TeamMemberDetailPanel
+        v-else-if="detailTarget === 'teamMember' && teamMemberVisible"
+        :session-id="client.activeSessionId.value ?? ''"
+        :name="teamMemberName"
+        :members="teamRoster.data.value"
+        :tasks="client.activeAppTasks.value"
+        @close="closeTeamMemberPanel"
+        @member-updated="applyTeamMemberUpdate"
+        @open-file="openFilePreview"
       />
       <UsagePanel
         v-else-if="detailTarget === 'usage' && usageVisible"
         :session-id="client.activeSessionId.value ?? ''"
         @close="closeUsagePanel"
+        @select="openMemberDetail"
       />
       <FilePreview
         v-else-if="detailTarget === 'file'"

@@ -126,6 +126,24 @@ export function memberUsageRows(usage: AppTeamUsage): UsageAmountRow[] {
     .sort(byTotalThenLabel);
 }
 
+/** A single member's current-session token spend (all models summed), or null
+ *  when the member has no recorded usage this session. Used by the member
+ *  detail's token-usage section. */
+export function memberSessionUsage(
+  usage: AppTeamUsage,
+  name: string,
+): { input: number; output: number } | null {
+  const bucket = usage.byMember[name];
+  if (!bucket) return null;
+  let input = 0;
+  let output = 0;
+  for (const row of Object.values(bucket)) {
+    input += tokenInputTotal(row);
+    output += row.output;
+  }
+  return { input, output };
+}
+
 function byTotalThenLabel(a: UsageAmountRow, b: UsageAmountRow): number {
   const byTotal = b.input + b.output - (a.input + a.output);
   if (byTotal !== 0) return byTotal;
