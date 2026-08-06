@@ -10,6 +10,13 @@
  * timeouts resolve through `resolveSubagentTimeoutMs`, and the timeout
  * message renders with `formatSubagentTimeoutDescription`.
  *
+ * Team mode resolves through `resolveTeamMode` with precedence: an explicit
+ * `[subagent] team_mode` value wins, then the `KIMI_CODE_TEAM_MODE` env var
+ * (set to `1` by the kimiteam launcher so the team build starts in team
+ * mode), then off. `teamMode` has no `envBindings` entry — the env default
+ * lives outside the config file, so `/team off` and the web toggle persist
+ * `team_mode = false` and override the env until the value is cleared.
+ *
  * The model half of the spawn binding is the secondary model (the
  * `[secondary_model]` section on disk): when its
  * experiment is enabled and the model is set, newly spawned subagents bind to
@@ -35,6 +42,7 @@
 
 import { z } from 'zod';
 
+import { parseBooleanEnv } from '#/_base/utils/env';
 import { Error2, ErrorCodes, isError2 } from '#/errors';
 import type { AgentModelPreference } from '#/app/agentProfileCatalog/agentProfileCatalog';
 import { isPlainObject } from '#/app/config/toml';
@@ -74,11 +82,13 @@ export const SubagentConfigSchema = z.object({
    */
   maxConcurrency: z.number().int().min(1).optional(),
   /**
-   * Team mode (`[subagent] team_mode` on disk, default off). When off, the
+   * Team mode (`[subagent] team_mode` on disk). When off, the
    * five Team* management tools (TeamHire/TeamFire/TeamScore/TeamMessage/
    * TeamConcurrency) are hidden from the main agent's tool list by the tool
    * policy. Only tool visibility is gated — model binding, item_models,
-   * model_overrides, role/duty profile fields work regardless.
+   * model_overrides, role/duty profile fields work regardless. An explicit
+   * value wins over the `KIMI_CODE_TEAM_MODE` env default (see
+   * `resolveTeamMode`).
    */
   teamMode: z.boolean().optional(),
   /**
@@ -303,9 +313,25 @@ export const TEAM_TOOL_NAMES: readonly string[] = [
   'TeamConcurrency',
 ];
 
-/** Resolve the team-mode switch (`[subagent] team_mode`, default off). */
+/**
+ * Env var carrying the kimiteam launcher's team-mode default. Set to `1` by
+ * `scripts/install-kimiteam.sh` / `install-kimiteam.ps1` so the team build
+ * starts in team mode; `resolveTeamMode` honors it only when `[subagent]
+ * team_mode` is unset.
+ */
+export const TEAM_MODE_ENV = 'KIMI_CODE_TEAM_MODE';
+
+/**
+ * Resolve the team-mode switch (`[subagent] team_mode`, default off). An
+ * explicit config value wins; otherwise the `KIMI_CODE_TEAM_MODE` env var
+ * (set to `1` by the kimiteam launcher) supplies the default; otherwise off.
+ * `/team off` and the web toggle persist `team_mode = false` and therefore
+ * override the env default until the config value is cleared.
+ */
 export function resolveTeamMode(config: IConfigService): boolean {
-  return config.get<SubagentConfig | undefined>(SUBAGENT_SECTION)?.teamMode ?? false;
+  const configured = config.get<SubagentConfig | undefined>(SUBAGENT_SECTION)?.teamMode;
+  if (configured !== undefined) return configured;
+  return parseBooleanEnv(process.env[TEAM_MODE_ENV]) ?? false;
 }
 
 export type SubagentModelChoice = AgentModelPreference;

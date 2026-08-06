@@ -134,6 +134,9 @@ export KIMI_CODE_EXPERIMENTAL_SECONDARY_MODEL=1
 # TeamScore/TeamMessage/TeamConcurrency, arbitrary subagent model ids,
 # session-wide subagent concurrency pool).
 export KIMI_CODE_EXPERIMENTAL_FLAG=1
+# Start in team mode by default. Users can /team off or set
+# [subagent] team_mode = false in config.toml to override (config wins).
+export KIMI_CODE_TEAM_MODE=1
 exec node "$KIMI_BUNDLE" "$@"
 LAUNCHER_EOF
 

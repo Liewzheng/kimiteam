@@ -85,10 +85,12 @@ import {
   resolveSubagentMaxStandby,
   resolveSubagentStandbyKeepaliveMs,
   resolveSubagentTimeoutMs,
+  resolveTeamMode,
   resolveSubagentWarmIntervalMs,
   SUBAGENT_SECTION,
   SUBAGENT_TIMEOUT_ENV,
   SubagentConfigSchema,
+  TEAM_MODE_ENV,
   type SubagentConfig,
   wrapSubagentModelError,
 } from '#/session/subagent/configSection';
@@ -1684,6 +1686,44 @@ describe('subagent config section', () => {
     await config.ready;
     return { config, disposables };
   }
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('defaults team mode to off and honours the env default', async () => {
+    const { config, disposables } = await createConfig({});
+
+    expect(resolveTeamMode(config)).toBe(false);
+
+    // The kimiteam launcher sets KIMI_CODE_TEAM_MODE=1 → team mode on.
+    vi.stubEnv(TEAM_MODE_ENV, '1');
+    expect(resolveTeamMode(config)).toBe(true);
+
+    // Any truthy spelling the launcher/user may use.
+    vi.stubEnv(TEAM_MODE_ENV, 'true');
+    expect(resolveTeamMode(config)).toBe(true);
+
+    // An unparseable env value degrades to off, like the timeout env.
+    vi.stubEnv(TEAM_MODE_ENV, 'garbage');
+    expect(resolveTeamMode(config)).toBe(false);
+
+    disposables.dispose();
+  });
+
+  it('an explicit config team_mode wins over the env default', async () => {
+    // /team off persists team_mode = false, which overrides the env default.
+    vi.stubEnv(TEAM_MODE_ENV, '1');
+    const off = await createConfig({}, '[subagent]\nteam_mode = false\n');
+    expect(resolveTeamMode(off.config)).toBe(false);
+    off.disposables.dispose();
+
+    // /team on persists team_mode = true — on even with the env default off.
+    vi.stubEnv(TEAM_MODE_ENV, '0');
+    const on = await createConfig({}, '[subagent]\nteam_mode = true\n');
+    expect(resolveTeamMode(on.config)).toBe(true);
+    on.disposables.dispose();
+  });
 
   it('defaults to two hours and honours the env override', async () => {
     const env: Record<string, string> = {};
