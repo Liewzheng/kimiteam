@@ -238,6 +238,10 @@ exports[`API surface snapshot > matches the documented v2 route table and meta e
     ],
     [
       "GET",
+      "/api/v1/teams/{session_id}/usage",
+    ],
+    [
+      "GET",
       "/api/v1/tools",
     ],
     [

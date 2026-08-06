@@ -131,6 +131,7 @@ export * from '#/kosong/model/modelRequester';
 import '#/kosong/model/errors';
 export {
   MODEL_CATALOG_SECTION,
+  SECONDARY_MODEL_SECTION,
   ModelCatalogConfigSchema,
   type ModelCatalogConfig,
 } from '#/app/kosongConfig/configSection';

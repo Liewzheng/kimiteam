@@ -14,9 +14,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
+  closeSessionById,
+  ConfigTarget,
   getLiveSessionById,
   IAgentLifecycleService,
+  IAgentProfileService,
+  IAgentUsageService,
   IBootstrapOptions,
+  IConfigService,
   IRuntimeStatusService,
   resolveBootstrapOptions,
 } from '@moonshot-ai/agent-core-v2';
@@ -37,6 +42,7 @@ interface MemberWire {
   duty?: boolean;
   status: 'working' | 'resting' | 'on-duty' | 'off-duty';
   score: { average: number | null; count: number };
+  usage: { input: number; output: number; total: number };
 }
 
 interface MembersBody {
@@ -390,5 +396,110 @@ describe('server-v2 /api/v1/teams/{session_id}', () => {
     });
     expect(clear.status).toBe(200);
     expect(clear.body.ok).toBe(true);
+  });
+
+  it('returns aggregated subagent usage for a live session (byModel/byMember/runs)', async () => {
+    const id = await createSession();
+    const live = getLiveSessionById(server!.core.accessor, id);
+    expect(live).toBeDefined();
+    const sub = await live!.accessor.get(IAgentLifecycleService).create({ agentId: 'sub-usage-1' });
+    const usage = sub.accessor.get(IAgentUsageService);
+    usage.record('provider/x', { inputOther: 100, output: 50, inputCacheRead: 20, inputCacheCreation: 10 });
+    usage.record('__secondary__', { inputOther: 200, output: 40, inputCacheRead: 0, inputCacheCreation: 0 });
+
+    const { status, body } = await teamFetch(`/api/v1/teams/${id}/usage`);
+    expect(status).toBe(200);
+    expect(body['stale']).toBe(false);
+    expect(body['runs']).toBe(1);
+    // input = inputOther + inputCacheRead + inputCacheCreation; total = input + output.
+    expect(body['byModel']).toEqual({
+      'provider/x': { input: 130, output: 50, total: 180 },
+      '__secondary__': { input: 200, output: 40, total: 240 },
+    });
+    // The unbound subagent buckets under `unknown`; the main agent is excluded.
+    expect(body['byMember']).toEqual({
+      unknown: {
+        'provider/x': { input: 130, output: 50, total: 180 },
+        '__secondary__': { input: 200, output: 40, total: 240 },
+      },
+    });
+  });
+
+  it('normalizes __secondary__ keys to the configured secondary model id', async () => {
+    const id = await createSession();
+    await server!.core.accessor
+      .get(IConfigService)
+      .set('secondaryModel', { model: 'provider/secondary' }, ConfigTarget.Memory);
+    const live = getLiveSessionById(server!.core.accessor, id);
+    expect(live).toBeDefined();
+    const sub = await live!.accessor.get(IAgentLifecycleService).create({ agentId: 'sub-usage-2' });
+    sub.accessor.get(IAgentUsageService).record('__secondary__', {
+      inputOther: 10,
+      output: 5,
+      inputCacheRead: 0,
+      inputCacheCreation: 0,
+    });
+    sub.accessor.get(IAgentUsageService).record('provider/x', {
+      inputOther: 3,
+      output: 2,
+      inputCacheRead: 0,
+      inputCacheCreation: 0,
+    });
+
+    const { status, body } = await teamFetch(`/api/v1/teams/${id}/usage`);
+    expect(status).toBe(200);
+    // The derived alias is renamed to the real secondary model id, both in
+    // byModel and inside each byMember bucket; the plain model key stays.
+    expect(body['byModel']).toEqual({
+      'provider/secondary': { input: 10, output: 5, total: 15 },
+      'provider/x': { input: 3, output: 2, total: 5 },
+    });
+    expect(body['byMember']).toEqual({
+      unknown: {
+        'provider/secondary': { input: 10, output: 5, total: 15 },
+        'provider/x': { input: 3, output: 2, total: 5 },
+      },
+    });
+  });
+
+  it('returns stale:true with empty usage for a cold session instead of erroring', async () => {
+    const id = await createSession();
+    await closeSessionById(server!.core.accessor, id);
+
+    const { status, body } = await teamFetch(`/api/v1/teams/${id}/usage`);
+    expect(status).toBe(200);
+    expect(body).toMatchObject({ byModel: {}, byMember: {}, runs: 0, stale: true });
+  });
+
+  it('404s usage for a session that never existed', async () => {
+    const { status, body } = await teamFetch('/api/v1/teams/never-created/usage');
+    expect(status).toBe(404);
+    expect(body.ok).toBe(false);
+  });
+
+  it('carries per-member token usage on the members list', async () => {
+    const id = await createSession();
+    await teamFetch(`/api/v1/teams/${id}/members`, {
+      method: 'POST',
+      body: { name: 'code-reviewer', description: 'd', prompt: 'p' },
+    });
+    const live = getLiveSessionById(server!.core.accessor, id);
+    expect(live).toBeDefined();
+    const sub = await live!.accessor.get(IAgentLifecycleService).create({ agentId: 'sub-member-1' });
+    sub.accessor.get(IAgentProfileService).update({ profileName: 'code-reviewer' });
+    sub.accessor.get(IAgentUsageService).record('provider/x', {
+      inputOther: 30,
+      output: 20,
+      inputCacheRead: 0,
+      inputCacheCreation: 0,
+    });
+
+    const { status, body } = await teamFetch(`/api/v1/teams/${id}/members`);
+    expect(status).toBe(200);
+    const members = body as unknown as MembersBody;
+    const reviewer = members.global.find((m) => m.name === 'code-reviewer');
+    expect(reviewer?.usage).toEqual({ input: 30, output: 20, total: 50 });
+    // Members without live usage still expose the field (zeroed).
+    expect(reviewer?.usage).toBeDefined();
   });
 });

@@ -6,6 +6,7 @@
  * snake_case wire contract consumed by the Web TeamPanel:
  *
  *   GET    /teams/{session_id}/members                          data: { team_mode, global[], project[] }
+ *   GET    /teams/{session_id}/usage                            data: { byModel, byMember, runs, stale }
  *   POST   /teams/{session_id}/members                          body: hire(+scope)  data: { ok, member }
  *   DELETE /teams/{session_id}/members/{name}                   data: { ok }
  *   PUT    /teams/{session_id}/members/{name}                   body: patch     data: { ok, member }
@@ -32,23 +33,32 @@
 
 import {
   AgentProfileFileError,
+  addUsage,
+  emptyUsage,
   getLiveSessionById,
   IAgentLifecycleService,
   IAgentLoopService,
   IAgentPerformanceService,
-  IAgentPromptService,
   IAgentProfileFileService,
+  IAgentProfileService,
+  IAgentPromptService,
+  IAgentUsageService,
   IBootstrapService,
   IConfigService,
   IHostFileSystem,
   IRuntimeStatusService,
   ISessionContext,
+  ISessionIndex,
   ISubagentPoolService,
+  MAIN_AGENT_ID,
   parseAgentFileText,
+  SECONDARY_DERIVED_MODEL_ID,
+  SECONDARY_MODEL_SECTION,
   type AgentProfileCreateInput,
   type Scope,
   type RuntimeStatusEntry,
   type RuntimeStatusRaw,
+  type TokenUsage,
 } from '@moonshot-ai/agent-core-v2';
 import {
   AGENT_NAME_PATTERN,
@@ -118,6 +128,15 @@ const concurrencyBodySchema = z.object({
 // Flat response schemas (documented in OpenAPI, not envelope-wrapped)
 // ---------------------------------------------------------------------------
 
+const tokenUsageWireSchema = {
+  type: 'object',
+  properties: {
+    input: { type: 'number' },
+    output: { type: 'number' },
+    total: { type: 'number' },
+  },
+} as const;
+
 const memberWireSchema = {
   type: 'object',
   properties: {
@@ -137,6 +156,7 @@ const memberWireSchema = {
         count: { type: 'number' },
       },
     },
+    usage: tokenUsageWireSchema,
   },
 } as const;
 
@@ -146,6 +166,19 @@ const membersResponseSchema = {
     team_mode: { type: 'boolean' },
     global: { type: 'array', items: memberWireSchema },
     project: { type: 'array', items: memberWireSchema },
+  },
+} as const;
+
+const usageResponseSchema = {
+  type: 'object',
+  properties: {
+    byModel: { type: 'object', additionalProperties: tokenUsageWireSchema },
+    byMember: {
+      type: 'object',
+      additionalProperties: { type: 'object', additionalProperties: tokenUsageWireSchema },
+    },
+    runs: { type: 'number' },
+    stale: { type: 'boolean' },
   },
 } as const;
 
@@ -176,6 +209,12 @@ const errorResponseSchema = {
 // Wire types
 // ---------------------------------------------------------------------------
 
+interface TokenUsageWire {
+  input: number;
+  output: number;
+  total: number;
+}
+
 interface TeamMemberWire {
   name: string;
   role?: string;
@@ -187,6 +226,7 @@ interface TeamMemberWire {
   duty?: boolean;
   status: 'working' | 'resting' | 'on-duty' | 'off-duty';
   score: { average: number | null; count: number };
+  usage: TokenUsageWire;
 }
 
 type FlatReply = { code(status: number): FlatReply; send(payload: unknown): unknown };
@@ -270,6 +310,7 @@ async function buildMemberWire(
   statuses: RuntimeStatusRaw,
   roots: readonly string[],
   name: string,
+  usage?: TokenUsageWire,
 ): Promise<TeamMemberWire | undefined> {
   const def = await readMemberDef(hostFs, roots, name);
   if (def === undefined) return undefined;
@@ -287,6 +328,7 @@ async function buildMemberWire(
     duty: def.duty,
     status,
     score: { average: summary.average ?? null, count: summary.count },
+    usage: usage ?? { input: 0, output: 0, total: 0 },
   };
 }
 
@@ -310,10 +352,11 @@ async function listMembersInScope(
   perf: IAgentPerformanceService,
   statuses: RuntimeStatusRaw,
   roots: readonly string[],
+  usageByMember?: Record<string, TokenUsageWire>,
 ): Promise<TeamMemberWire[]> {
   const members: TeamMemberWire[] = [];
   for (const name of await listMemberNames(hostFs, roots)) {
-    const member = await buildMemberWire(hostFs, perf, statuses, roots, name);
+    const member = await buildMemberWire(hostFs, perf, statuses, roots, name, usageByMember?.[name]);
     if (member !== undefined) members.push(member);
   }
   return members;
@@ -458,6 +501,92 @@ function teamMode(core: Scope): boolean {
   return core.accessor.get(IConfigService).get<{ teamMode?: boolean }>('subagent')?.teamMode ?? false;
 }
 
+// ---------------------------------------------------------------------------
+// Subagent token-usage aggregation (live session) — mirrors the TUI's
+// SubAgentUsage accumulator: one bucket per model (`byModel`), one per profile
+// name (`byMember`), and a `runs` count of subagents that consumed tokens.
+// The main agent is excluded; unbound agents bucket under `unknown`.
+// ---------------------------------------------------------------------------
+
+interface SubagentUsageAggregate {
+  byModel: Record<string, TokenUsage>;
+  byMember: Record<string, Record<string, TokenUsage>>;
+  runs: number;
+}
+
+function toTokenUsageWire(usage: TokenUsage): TokenUsageWire {
+  const input = usage.inputOther + usage.inputCacheRead + usage.inputCacheCreation;
+  const output = usage.output;
+  return { input, output, total: input + output };
+}
+
+function accumulateUsage(
+  target: Record<string, TokenUsage>,
+  key: string,
+  usage: TokenUsage,
+): void {
+  const prev = target[key];
+  target[key] = prev === undefined ? usage : addUsage(prev, usage);
+}
+
+function collectSubagentUsage(lifecycle: IAgentLifecycleService): SubagentUsageAggregate {
+  const byModel: Record<string, TokenUsage> = {};
+  const byMember: Record<string, Record<string, TokenUsage>> = {};
+  let runs = 0;
+  for (const agent of lifecycle.list()) {
+    if (agent.id === MAIN_AGENT_ID) continue;
+    const byModelForAgent = agent.accessor.get(IAgentUsageService).status().byModel;
+    if (byModelForAgent === undefined || Object.keys(byModelForAgent).length === 0) continue;
+    const memberName = agent.accessor.get(IAgentProfileService).data().profileName ?? 'unknown';
+    let memberBucket = byMember[memberName];
+    if (memberBucket === undefined) {
+      memberBucket = {};
+      byMember[memberName] = memberBucket;
+    }
+    for (const [model, usage] of Object.entries(byModelForAgent)) {
+      accumulateUsage(byModel, model, usage);
+      accumulateUsage(memberBucket, model, usage);
+    }
+    runs += 1;
+  }
+  return { byModel, byMember, runs };
+}
+
+/** The real model id the derived `__secondary__` entry points at, when set. */
+function resolveSecondaryModelId(core: Scope): string | undefined {
+  return core.accessor.get(IConfigService).get<{ model?: string }>(SECONDARY_MODEL_SECTION)?.model;
+}
+
+/** Rename `__secondary__` → the real secondary model id, merging on collision. */
+function normalizeDerivedSecondary(
+  aggregate: SubagentUsageAggregate,
+  secondaryId: string | undefined,
+): SubagentUsageAggregate {
+  if (secondaryId === undefined || secondaryId === SECONDARY_DERIVED_MODEL_ID) return aggregate;
+  const rename = (source: Record<string, TokenUsage>): Record<string, TokenUsage> => {
+    const out: Record<string, TokenUsage> = {};
+    for (const [key, usage] of Object.entries(source)) {
+      accumulateUsage(out, key === SECONDARY_DERIVED_MODEL_ID ? secondaryId : key, usage);
+    }
+    return out;
+  };
+  const byMember: Record<string, Record<string, TokenUsage>> = {};
+  for (const [memberName, bucket] of Object.entries(aggregate.byMember)) {
+    byMember[memberName] = rename(bucket);
+  }
+  return { byModel: rename(aggregate.byModel), byMember, runs: aggregate.runs };
+}
+
+/** Per-profile total token usage, for the members list `usage` field. */
+function memberUsageWire(aggregate: SubagentUsageAggregate): Record<string, TokenUsageWire> {
+  const out: Record<string, TokenUsageWire> = {};
+  for (const [memberName, bucket] of Object.entries(aggregate.byMember)) {
+    const total = Object.values(bucket).reduce((acc, usage) => addUsage(acc, usage), emptyUsage());
+    out[memberName] = toTokenUsageWire(total);
+  }
+  return out;
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -515,10 +644,13 @@ export function registerTeamsRoutes(app: TeamsRouteHost, core: Scope): void {
       const hostFs = core.accessor.get(IHostFileSystem);
       const perf = core.accessor.get(IAgentPerformanceService);
       const statuses = await core.accessor.get(IRuntimeStatusService).list();
+      const usageByMember = memberUsageWire(
+        collectSubagentUsage(session.accessor.get(IAgentLifecycleService)),
+      );
       const globalRoots = memberRoots(core, sessionCwd, 'global');
       const projectRoots = memberRoots(core, sessionCwd, 'project');
-      const global = await listMembersInScope(hostFs, perf, statuses, globalRoots);
-      const project = await listMembersInScope(hostFs, perf, statuses, projectRoots);
+      const global = await listMembersInScope(hostFs, perf, statuses, globalRoots, usageByMember);
+      const project = await listMembersInScope(hostFs, perf, statuses, projectRoots, usageByMember);
       // Archived (fired) members: performance history but no profile file →
       // listed as `off-duty` in the global team, same as the TUI's dimmed
       // archive rows. Perf history is per-profile and scope-independent.
@@ -536,6 +668,7 @@ export function registerTeamsRoutes(app: TeamsRouteHost, core: Scope): void {
           tools: [],
           status: 'off-duty',
           score: { average: entry.summary.average ?? null, count: entry.summary.count },
+          usage: usageByMember[entry.profileName] ?? { input: 0, output: 0, total: 0 },
         });
       }
       reply.send({ team_mode: teamMode(core), global, project });
@@ -787,4 +920,48 @@ export function registerTeamsRoutes(app: TeamsRouteHost, core: Scope): void {
     },
   );
   app.post(concurrencyRoute.path, concurrencyRoute.options, concurrencyRoute.handler as never);
+
+  // GET /teams/{session_id}/usage --------------------------------
+  const usageRoute = defineRoute(
+    {
+      method: 'GET',
+      path: '/teams/{session_id}/usage',
+      params: sessionIdParamSchema,
+      rawResponse: { 200: usageResponseSchema, 404: errorResponseSchema },
+      description: 'Subagent token usage aggregated by model and member; stale:true when the session is not live',
+      tags: ['teams'],
+    },
+    async (req, reply) => {
+      const { session_id } = req.params as { session_id: string };
+      const session = getLiveSessionById(core.accessor, session_id);
+      if (session === undefined) {
+        // A persisted-but-cold session reports stale (empty) instead of erroring.
+        const exists = (await core.accessor.get(ISessionIndex).get(session_id)) !== undefined;
+        if (!exists) {
+          sendError(reply as unknown as FlatReply, 404, `session ${session_id} not found`);
+          return;
+        }
+        reply.send({ byModel: {}, byMember: {}, runs: 0, stale: true });
+        return;
+      }
+      const aggregate = normalizeDerivedSecondary(
+        collectSubagentUsage(session.accessor.get(IAgentLifecycleService)),
+        resolveSecondaryModelId(core),
+      );
+      const byModel: Record<string, TokenUsageWire> = {};
+      for (const [model, usage] of Object.entries(aggregate.byModel)) {
+        byModel[model] = toTokenUsageWire(usage);
+      }
+      const byMember: Record<string, Record<string, TokenUsageWire>> = {};
+      for (const [memberName, bucket] of Object.entries(aggregate.byMember)) {
+        const memberModels: Record<string, TokenUsageWire> = {};
+        for (const [model, usage] of Object.entries(bucket)) {
+          memberModels[model] = toTokenUsageWire(usage);
+        }
+        byMember[memberName] = memberModels;
+      }
+      reply.send({ byModel, byMember, runs: aggregate.runs, stale: false });
+    },
+  );
+  app.get(usageRoute.path, usageRoute.options, usageRoute.handler as never);
 }
