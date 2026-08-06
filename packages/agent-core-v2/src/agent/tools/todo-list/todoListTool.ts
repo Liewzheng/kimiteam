@@ -5,6 +5,11 @@
  * (`todo` domain), which persists every change as a `tools.update_store`
  * (`key: 'todo'`) wire record on the main agent.
  *
+ * `TodoList` is the tech-lead's own bookkeeping: `resolveExecution` rejects
+ * every non-main agent (`IAgentScopeContext.agentId !== 'main'`) with a
+ * synthetic tool error before any approval or execution, so a subagent can
+ * never read or mutate the shared list even if a profile exposes the tool.
+ *
  * Registered via the module-level `registerAgentToolService(ITodoListTool,
  * TodoListTool)` at the bottom of this file — the same "import = register"
  * pattern used by every agent tool. `AgentToolActivationService` activates it
@@ -17,6 +22,7 @@
 import type { ToolExecution } from '#/tool/toolContract';
 import { registerAgentToolService } from '#/agent/toolRegistry/toolContribution';
 import { toInputJsonSchema } from '#/tool/input-schema';
+import { IAgentScopeContext } from '#/agent/scopeContext/scopeContext';
 
 import { ISessionTodoService } from '#/session/todo/sessionTodo';
 import { ITodoService } from '#/app/todoCounter/todoCounter';
@@ -42,11 +48,19 @@ export class TodoListTool implements ITodoListTool {
   readonly parameters: Record<string, unknown> = toInputJsonSchema(TodoListInputSchema);
 
   constructor(
+    @IAgentScopeContext private readonly scopeContext: IAgentScopeContext,
     @ISessionTodoService private readonly todo: ISessionTodoService,
     @ITodoService private readonly todoId: ITodoService,
   ) {}
 
   resolveExecution(args: TodoListInput): ToolExecution {
+    if (this.scopeContext.agentId !== 'main') {
+      return {
+        isError: true,
+        output:
+          'TodoList is reserved for the main agent (tech-lead). Subagents do not maintain the todo list — the parent does. Do not call TodoList.',
+      };
+    }
     const description =
       args.todos === undefined
         ? 'Reading todo list'

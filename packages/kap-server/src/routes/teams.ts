@@ -104,6 +104,8 @@ const hireBodySchema = z.object({
   tools: z.array(z.string()).optional(),
   skills: z.array(z.string()).optional(),
   duty: z.boolean().optional(),
+  /** Display (e.g. Chinese) name shown on the Web team card. */
+  display_name: z.string().optional(),
   prompt: z.string().min(1),
   /** Team scope: 'global' (user-level ~/.kimi-code/agents, default) or 'project' (session project root). */
   scope: z.enum(['global', 'project']).optional(),
@@ -117,6 +119,8 @@ const updateBodySchema = z
     role: z.string().optional(),
     description: z.string().optional(),
     when_to_use: z.string().optional(),
+    /** Display (e.g. Chinese) name shown on the Web team card. */
+    display_name: z.string().optional(),
     /** Replaces the profile's prompt body (the Markdown after the frontmatter). */
     prompt: z.string().min(1).optional(),
   })
@@ -164,6 +168,8 @@ const memberWireSchema = {
     role: { type: 'string' },
     description: { type: 'string' },
     when_to_use: { type: 'string' },
+    /** Display (e.g. Chinese) name shown on the Web team card. */
+    display_name: { type: 'string' },
     model: { type: 'string' },
     prompt: { type: 'string' },
     tools: { type: 'array', items: { type: 'string' } },
@@ -260,6 +266,7 @@ interface TeamMemberWire {
   role?: string;
   description: string;
   when_to_use?: string;
+  display_name?: string;
   model?: string;
   prompt?: string;
   tools: string[];
@@ -375,6 +382,7 @@ async function buildMemberWire(
     role: def.role,
     description: def.description,
     when_to_use: def.whenToUse,
+    display_name: def.displayName,
     // 实际调用模型三级回退：① 当前会话 usage 桶内用量最大的真实 modelAlias；
     // ② 历史派工记录（perf entries/shifts 聚合出的 byModel，count 最大的
     // model）；③ 配置偏好。usage 只聚合当前 live session 的 lifecycle agent，
@@ -449,6 +457,7 @@ function hireCreateInput(body: z.infer<typeof hireBodySchema>): AgentProfileCrea
     tools: body.tools,
     skills: body.skills,
     duty: body.duty,
+    displayName: body.display_name,
     prompt: body.prompt,
     scope: 'user',
   };
@@ -504,6 +513,7 @@ type MemberPatch = {
   role?: string;
   description?: string;
   whenToUse?: string;
+  displayName?: string;
   prompt?: string;
 };
 
@@ -514,6 +524,7 @@ const PATCH_KEY_TO_FRONTMATTER: Record<Exclude<keyof MemberPatch, 'prompt'>, str
   role: 'role',
   description: 'description',
   whenToUse: 'whenToUse',
+  displayName: 'display_name',
 };
 
 /**
@@ -981,6 +992,7 @@ export function registerTeamsRoutes(app: TeamsRouteHost, core: Scope): void {
       if (body.role !== undefined) patch.role = body.role;
       if (body.description !== undefined) patch.description = body.description;
       if (body.when_to_use !== undefined) patch.whenToUse = body.when_to_use;
+      if (body.display_name !== undefined) patch.displayName = body.display_name;
       if (body.prompt !== undefined) patch.prompt = body.prompt;
       const sessionCwd = session.accessor.get(ISessionContext).cwd;
       const hostFs = core.accessor.get(IHostFileSystem);

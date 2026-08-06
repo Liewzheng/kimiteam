@@ -56,6 +56,7 @@ const KNOWN_FRONTMATTER_FIELDS: ReadonlySet<string> = new Set([
   'model_preference',
   'role',
   'duty',
+  'display_name',
 ]);
 
 /** Common misspellings → the canonical key, so the warn can point at the fix. */
@@ -128,6 +129,7 @@ export function parseAgentFileText(options: ParseAgentFileOptions): AgentFileDef
   const modelPreference = parseModelPreference(frontmatter['model_preference'], options.path);
   const role = nonEmptyString(frontmatter['role']);
   const duty = parseBoolean(frontmatter['duty'], 'duty', options.path);
+  const displayName = nonEmptyString(frontmatter['display_name']);
 
   const prompt = parsed.body.trim();
   if (prompt.length === 0) {
@@ -163,6 +165,7 @@ export function parseAgentFileText(options: ParseAgentFileOptions): AgentFileDef
     modelPreference,
     role,
     duty,
+    displayName,
     prompt,
     path: options.path,
     source: options.source,

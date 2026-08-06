@@ -71,7 +71,6 @@ const CODER_TOOLS = [
   'TaskList',
   'TaskOutput',
   'TaskStop',
-  'TodoList',
   'WebSearch',
   'FetchURL',
   'Write',

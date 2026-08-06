@@ -3,11 +3,21 @@ import { describe, expect, it } from 'vitest';
 import { type ISessionTodoService } from '#/session/todo/sessionTodo';
 import { TODO_LIST_TOOL_NAME, type TodoItem } from '#/session/todo/todoItem';
 import { ITodoService } from '#/app/todoCounter/todoCounter';
+import { IAgentScopeContext } from '#/agent/scopeContext/scopeContext';
 import { TodoListInputSchema } from '#/agent/tools/todo-list/todo-list';
 import { TodoListTool } from '#/agent/tools/todo-list/todoListTool';
 import { executeTool } from '../../../tools/fixtures/execute-tool';
 
 const signal = new AbortController().signal;
+
+function makeScopeContext(agentId: string): IAgentScopeContext {
+  return {
+    _serviceBrand: undefined,
+    agentId,
+    scope: (subKey?: string): string =>
+      subKey === undefined || subKey === '' ? `agents/${agentId}` : `agents/${agentId}/${subKey}`,
+  };
+}
 
 function makeTodoService(initial: readonly TodoItem[] = []): {
   readonly service: ISessionTodoService;
@@ -48,14 +58,21 @@ function makeTodoIdService(start = 0): ITodoService & { readonly issued: string[
   };
 }
 
-function makeTool(initial: readonly TodoItem[] = []): {
+function makeTool(
+  initial: readonly TodoItem[] = [],
+  agentId: string = 'main',
+): {
   readonly tool: TodoListTool;
   readonly getTodos: () => readonly TodoItem[];
   readonly issued: string[];
 } {
   const { service, getTodos } = makeTodoService(initial);
   const todoId = makeTodoIdService();
-  return { tool: new TodoListTool(service, todoId), getTodos, issued: todoId.issued };
+  return {
+    tool: new TodoListTool(makeScopeContext(agentId), service, todoId),
+    getTodos,
+    issued: todoId.issued,
+  };
 }
 
 describe('TodoListTool', () => {
@@ -252,5 +269,69 @@ describe('TodoListTool', () => {
 
     expect(issued).toEqual(['T1']);
     expect(getTodos()).toEqual([{ title: 'blank-id', status: 'pending', id: 'T1' }]);
+  });
+
+  it('rejects a non-main (subagent) caller with a synthetic tool error before execution', async () => {
+    const { tool, getTodos, issued } = makeTool(
+      [{ title: 'existing', status: 'in_progress' }],
+      'agent-7',
+    );
+
+    const result = await executeTool(tool, {
+      turnId: 1,
+      toolCallId: 'call_sub',
+      args: { todos: [{ title: 'hijack', status: 'pending' }] },
+      signal,
+    });
+
+    expect(result).toMatchObject({ isError: true });
+    expect(result.output).toContain('reserved for the main agent');
+    // The list and the id counter must stay untouched — the write never ran.
+    expect(getTodos()).toEqual([{ title: 'existing', status: 'in_progress' }]);
+    expect(issued).toEqual([]);
+  });
+
+  it('rejects a non-main read with the same synthetic error and no mutation', async () => {
+    const { tool, getTodos } = makeTool(
+      [{ title: 'secret', status: 'pending' }],
+      'agent-7',
+    );
+
+    const result = await executeTool(tool, {
+      turnId: 1,
+      toolCallId: 'call_sub_read',
+      args: {},
+      signal,
+    });
+
+    expect(result).toMatchObject({ isError: true });
+    expect(result.output).toContain('reserved for the main agent');
+    expect(getTodos()).toEqual([{ title: 'secret', status: 'pending' }]);
+  });
+
+  it('keeps the main agent fully functional (read + write)', async () => {
+    const { tool, getTodos, issued } = makeTool(
+      [{ title: 'main-item', status: 'in_progress' }],
+      'main',
+    );
+
+    const read = await executeTool(tool, {
+      turnId: 1,
+      toolCallId: 'call_main_read',
+      args: {},
+      signal,
+    });
+    expect(read).toMatchObject({ isError: false });
+    expect(read.output).toContain('[in_progress] main-item');
+
+    const write = await executeTool(tool, {
+      turnId: 2,
+      toolCallId: 'call_main_write',
+      args: { todos: [{ title: 'replacement', status: 'done' }] },
+      signal,
+    });
+    expect(write).toMatchObject({ isError: false });
+    expect(issued).toEqual(['T1']);
+    expect(getTodos()).toEqual([{ title: 'replacement', status: 'done', id: 'T1' }]);
   });
 });

@@ -92,6 +92,24 @@ describe('WorkspaceService (file-backed)', () => {
     } as unknown as IHostFileSystem;
   }
 
+  /** Windows temp root the `winTmpHostFs` stub simulates `os.tmpdir()` to be. */
+  const WIN_TMP_ROOT = 'C:\\Users\\Foo\\AppData\\Local\\Temp';
+
+  /**
+   * hostFs stub simulating a Windows host: every path stats as an existing
+   * directory, and `realpath` maps the POSIX `os.tmpdir()` onto the Windows
+   * temp root. `isTmpRootWorkDir` normalizes both the workDir and tmpdir
+   * through this seam before comparing with `workspaceRootKey`, so the stub
+   * lets the merge/rebuild temp-root filter run against Windows-shaped
+   * workDirs (drive casing / slash direction) on a POSIX CI host.
+   */
+  function winTmpHostFs(): IHostFileSystem {
+    return {
+      stat: () => Promise.resolve({ isFile: false, isDirectory: true, size: 0 }),
+      realpath: (p: string) => Promise.resolve(p === os.tmpdir() ? WIN_TMP_ROOT : p),
+    } as unknown as IHostFileSystem;
+  }
+
   async function seedSessionIndex(entries: SessionIndexLine[]): Promise<void> {
     const text = `${entries.map((e) => JSON.stringify(e)).join('\n')}\n`;
     await fsp.writeFile(join(homeDir, 'session_index.jsonl'), text, 'utf8');
@@ -288,6 +306,42 @@ describe('WorkspaceService (file-backed)', () => {
     } finally {
       await fsp.rm(tmpWork, { recursive: true, force: true });
     }
+  });
+
+  it('merge skips Windows-shaped workDirs under the temp root, keeping non-tmp paths', async () => {
+    const realWork = join(homeDir, 'real-project');
+    await writeWorkspacesJson({});
+    await seedSessionIndex([
+      { sessionId: 's1', sessionDir: join(homeDir, 'sessions', 's1'), workDir: realWork },
+      // Windows temp-root spellings of one root: drive-letter casing, slash
+      // direction, trailing separator — `workspaceRootKey` folds all of them
+      // under the simulated `C:\Users\Foo\AppData\Local\Temp` temp root.
+      { sessionId: 's2', sessionDir: join(homeDir, 'sessions', 's2'), workDir: 'C:\\Users\\Foo\\AppData\\Local\\Temp\\ws-tmp-proj-a' },
+      { sessionId: 's3', sessionDir: join(homeDir, 'sessions', 's3'), workDir: 'c:\\users\\foo\\AppData\\Local\\Temp\\ws-tmp-proj-b' },
+      { sessionId: 's4', sessionDir: join(homeDir, 'sessions', 's4'), workDir: 'C:/Users/Foo/AppData/Local/Temp/ws-tmp-proj-c/' },
+      // A Windows-shaped but non-temp path (UNC share): absolute, yet not under
+      // the temp root — the filter must not over-trim it.
+      { sessionId: 's5', sessionDir: join(homeDir, 'sessions', 's5'), workDir: '\\\\HOST\\Share\\Temp\\ws-tmp-proj-d' },
+    ]);
+
+    const list = await build(winTmpHostFs()).list();
+    // Only the non-temp workDirs are merged; every Windows tmp spelling is
+    // skipped regardless of casing / slash direction.
+    expect(list.map((w) => w.id).toSorted()).toEqual(
+      [encodeWorkDirKey(realWork), encodeWorkDirKey('\\\\HOST\\Share\\Temp\\ws-tmp-proj-d')].toSorted(),
+    );
+  });
+
+  it('rebuild skips Windows-shaped workDirs under the temp root', async () => {
+    const realWork = join(homeDir, 'real-project');
+    await seedSessionIndex([
+      { sessionId: 's1', sessionDir: join(homeDir, 'sessions', 's1'), workDir: realWork },
+      { sessionId: 's2', sessionDir: join(homeDir, 'sessions', 's2'), workDir: 'C:\\Users\\Foo\\AppData\\Local\\Temp\\ws-tmp-proj-a' },
+      { sessionId: 's3', sessionDir: join(homeDir, 'sessions', 's3'), workDir: 'c:\\users\\foo\\AppData\\Local\\Temp\\ws-tmp-proj-b' },
+    ]);
+
+    const list = await build(winTmpHostFs()).list();
+    expect(list.map((w) => w.id)).toEqual([encodeWorkDirKey(realWork)]);
   });
 
   it('delete tombstones the id and the merge never resurrects it', async () => {

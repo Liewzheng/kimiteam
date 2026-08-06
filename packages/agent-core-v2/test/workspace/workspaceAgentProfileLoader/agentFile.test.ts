@@ -63,6 +63,7 @@ describe('parseAgentFileText', () => {
     expect(def.disallowedTools).toBeUndefined();
     expect(def.subagents).toBeUndefined();
     expect(def.whenToUse).toBeUndefined();
+    expect(def.displayName).toBeUndefined();
     expect(def.prompt).toBe('body');
   });
 
@@ -95,6 +96,14 @@ describe('parseAgentFileText', () => {
 
     expect(def.role).toBe('后端工程师·数据层');
     expect(def.duty).toBe(true);
+  });
+
+  it('parses a display_name (Chinese display name) frontmatter field', () => {
+    const def = parse('---\nname: solo\ndescription: d\ndisplay_name: 顾晚晴\n---\n\nbody\n');
+
+    expect(def.displayName).toBe('顾晚晴');
+    // The file name stays the identity; display_name is a presentation field.
+    expect(def.name).toBe('solo');
   });
 
   it('rejects missing frontmatter', () => {
@@ -206,11 +215,12 @@ describe('parseAgentFileText', () => {
     const def = parseAgentFileText({
       path: '/tmp/agents/reviewer.md',
       source: 'project',
-      text: '---\nname: solo\ndescription: d\nwhenToUse: reviews\ntools: Read\ndisallowedTools: Bash\nmodel_preference: primary\nrole: r\nduty: true\n---\n\nbody\n',
+      text: '---\nname: solo\ndescription: d\nwhenToUse: reviews\ntools: Read\ndisallowedTools: Bash\nmodel_preference: primary\nrole: r\nduty: true\ndisplay_name: 顾晚晴\n---\n\nbody\n',
       warn: (message) => warnings.push(message),
     });
 
     expect(def.whenToUse).toBe('reviews');
+    expect(def.displayName).toBe('顾晚晴');
     expect(warnings).toHaveLength(0);
   });
 

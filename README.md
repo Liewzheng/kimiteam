@@ -62,6 +62,14 @@ kimiteam                    # 启动交互式会话（与官方 kimi 参数兼�
 
   (把 `~\.kimi-code\bin` 加入 PATH 后可直接运行 `kimiteam`。)
 
+  卸载(移除 kimiteam 程序文件,保留个人数据;官方 kimi 不受影响):
+
+  ```powershell
+  powershell -ExecutionPolicy Bypass -File scripts/uninstall-kimiteam.ps1
+  ```
+
+  先预览再卸载:`-WhatIf` 仅显示将删除的文件,不实际删除;`-Confirm` 逐个动作确认。
+
 - **WSL(完整交互推荐)**:原生 Windows 的 TUI 交互(流式刷新、Ctrl+C 中断等)尚未实测;若在意完整交互体验或遇到交互异常,建议优先使用 WSL(或 Git Bash)。安装 WSL 后,在 WSL 终端里执行与 Linux 相同的安装命令:
 
   ```sh

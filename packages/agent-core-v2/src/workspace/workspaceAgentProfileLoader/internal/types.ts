@@ -34,6 +34,8 @@ export interface AgentFileDefinition {
   readonly role?: string;
   /** On-duty member: its subagent runs are exempt from the subagent timeout. */
   readonly duty?: boolean;
+  /** Display (e.g. Chinese) name shown on the Web team card; defaults to `name`. */
+  readonly displayName?: string;
   readonly prompt: string;
   readonly path: string;
   readonly source: AgentFileSource;

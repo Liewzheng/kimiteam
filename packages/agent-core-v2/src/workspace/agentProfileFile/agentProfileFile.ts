@@ -27,6 +27,7 @@ export interface AgentProfileCreateInput {
   readonly subagents?: readonly string[];
   readonly skills?: readonly string[];
   readonly duty?: boolean;
+  readonly displayName?: string;
   readonly scope?: AgentProfileScope;
 }
 
@@ -46,6 +47,7 @@ export interface AgentProfileFilePatch {
   readonly subagents?: readonly string[] | undefined;
   readonly skills?: readonly string[] | undefined;
   readonly duty?: boolean | undefined;
+  readonly displayName?: string;
   readonly prompt?: string;
 }
 

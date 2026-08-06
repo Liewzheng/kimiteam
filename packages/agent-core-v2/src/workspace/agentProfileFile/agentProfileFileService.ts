@@ -96,6 +96,9 @@ export function renderFrontmatter(input: AgentProfileCreateInput): string {
   if (input.role !== undefined) {
     fields.push(`role: ${quoteScalar(input.role)}`);
   }
+  if (input.displayName !== undefined) {
+    fields.push(`display_name: ${quoteScalar(input.displayName)}`);
+  }
   if (input.modelPreference !== undefined) {
     fields.push(`model_preference: ${quoteScalar(input.modelPreference)}`);
   }
@@ -134,6 +137,7 @@ const PATCH_KEY_TO_FRONTMATTER: Record<
   subagents: 'subagents',
   skills: 'skills',
   duty: 'duty',
+  displayName: 'display_name',
 };
 
 export class AgentProfileFileService implements IAgentProfileFileService {

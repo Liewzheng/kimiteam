@@ -39,6 +39,7 @@ interface MemberWire {
   role?: string;
   description: string;
   when_to_use?: string;
+  display_name?: string;
   model?: string;
   prompt?: string;
   tools: string[];
@@ -193,6 +194,48 @@ describe('server-v2 /api/v1/teams/{session_id}', () => {
     expect(members.global).toHaveLength(1);
     expect(members.global[0]!.name).toBe('code-reviewer');
     expect(members.project).toEqual([]);
+  });
+
+  it('carries display_name from hire through the roster and the PUT patch path', async () => {
+    const id = await createSession();
+    // Hire with a Chinese display name — the hire response and roster carry it.
+    const hire = await teamFetch(`/api/v1/teams/${id}/members`, {
+      method: 'POST',
+      body: {
+        name: 'code-reviewer',
+        description: 'Reviews code',
+        prompt: 'You review code.',
+        display_name: '顾晚晴',
+      },
+    });
+    expect(hire.status).toBe(200);
+    expect(hire.body.member?.display_name).toBe('顾晚晴');
+
+    const list = await teamFetch(`/api/v1/teams/${id}/members`);
+    const members = list.body as unknown as MembersBody;
+    expect(members.global.find((m) => m.name === 'code-reviewer')?.display_name).toBe('顾晚晴');
+
+    // PUT patch rewrites the display name (Web edit form channel).
+    const updated = await teamFetch(`/api/v1/teams/${id}/members/code-reviewer`, {
+      method: 'PUT',
+      body: { display_name: '韩述' },
+    });
+    expect(updated.status).toBe(200);
+    expect(updated.body.member?.display_name).toBe('韩述');
+
+    const reloaded = allMembers((await teamFetch(`/api/v1/teams/${id}/members`)).body);
+    expect(reloaded.find((m) => m.name === 'code-reviewer')?.display_name).toBe('韩述');
+  });
+
+  it('omits display_name when the profile has none', async () => {
+    const id = await createSession();
+    await teamFetch(`/api/v1/teams/${id}/members`, {
+      method: 'POST',
+      body: { name: 'plain', description: 'd', prompt: 'p' },
+    });
+
+    const members = allMembers((await teamFetch(`/api/v1/teams/${id}/members`)).body);
+    expect(members.find((m) => m.name === 'plain')?.display_name).toBeUndefined();
   });
 
   it('hires a member into the project team when scope=project', async () => {
