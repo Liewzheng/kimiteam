@@ -16,6 +16,11 @@ import {
 } from '../api/devBackend';
 import { copyTextToClipboard } from '../lib/clipboard';
 import {
+  applySessionSelection,
+  sessionMenuActions,
+  type SessionSelectionAction,
+} from '../lib/sessionSelection';
+import {
   loadCollapsedWorkspaces,
   saveCollapsedWorkspaces,
 } from '../lib/storage';
@@ -108,6 +113,7 @@ const emit = defineEmits<{
   addWorkspace: [];
   rename: [id: string, title: string];
   archive: [id: string];
+  archiveMany: [ids: string[]];
   fork: [id: string];
   export: [id: string];
   renameWorkspace: [id: string, name: string];
@@ -378,6 +384,127 @@ function deleteFromMenu(): void {
 }
 
 // ---------------------------------------------------------------------------
+// Session multi-select + right-click context menu
+// ---------------------------------------------------------------------------
+// Selection is a UI-local batch set (file-manager style), distinct from the
+// single `activeId` that drives the conversation pane: plain click selects the
+// row and opens it, Ctrl/Cmd+click toggles membership, Shift+click range-selects
+// within a workspace group, right-click selects the row (or keeps an existing
+// multi-selection) and opens the context menu. The pure model lives in
+// lib/sessionSelection so the Ctrl/Shift rules are unit-testable.
+const selectedIds = ref<Set<string>>(new Set());
+const selectionAnchorId = ref<string | null>(null);
+/** Context-menu "Rename" request — forwarded down to the matching SessionRow,
+ *  which starts its inline rename and replies via `renameRequestHandled`. */
+const renameRequestId = ref<string | null>(null);
+
+const ssMenuOpen = ref(false);
+/** Snapshot of the selection the open menu acts on (stable while open). */
+const ssMenuTargetIds = ref<string[]>([]);
+const ssMenuStyle = ref<Record<string, string>>({});
+const ssMenuRef = ref<InstanceType<typeof Menu> | null>(null);
+const ssCopied = ref(false);
+const ssCopyFailed = ref(false);
+const ssMenuItems = computed(() => sessionMenuActions(ssMenuTargetIds.value.length));
+
+function applySessionSelectionAction(action: SessionSelectionAction): void {
+  selectedIds.value = new Set(applySessionSelection([...selectedIds.value], action));
+  selectionAnchorId.value = action.id;
+}
+
+function onSessionSelectIntent(intent: SessionSelectionAction): void {
+  applySessionSelectionAction(intent);
+  // Every click opens the session (plain / ctrl / shift) — matches the existing
+  // "click a session row to switch to it" mental model.
+  emit('select', intent.id);
+}
+
+function onSessionContextmenu(id: string, e: MouseEvent): void {
+  // Right-click rule: an already-selected row keeps the whole selection (bulk
+  // menu); an unselected row is selected alone.
+  applySessionSelectionAction({ kind: 'contextmenu', id });
+  ssMenuTargetIds.value = [...selectedIds.value];
+  openSessionMenu(e);
+}
+
+function openSessionMenu(e: MouseEvent): void {
+  e.preventDefault();
+  e.stopPropagation();
+  ssMenuStyle.value = {
+    top: `${e.clientY}px`,
+    left: `${e.clientX}px`,
+  };
+  ssMenuOpen.value = true;
+  document.addEventListener('mousedown', onSessionMenuDocClick, true);
+  window.addEventListener('keydown', onSessionMenuKeydown);
+}
+
+function onSessionMenuDocClick(e: MouseEvent): void {
+  if (ssMenuRef.value?.el && !ssMenuRef.value.el.contains(e.target as Node)) {
+    closeSessionMenu();
+  }
+}
+
+function onSessionMenuKeydown(e: KeyboardEvent): void {
+  if (e.key === 'Escape') closeSessionMenu();
+}
+
+function closeSessionMenu(): void {
+  ssMenuOpen.value = false;
+  ssCopied.value = false;
+  ssCopyFailed.value = false;
+  document.removeEventListener('mousedown', onSessionMenuDocClick, true);
+  window.removeEventListener('keydown', onSessionMenuKeydown);
+}
+
+function clearSessionSelection(): void {
+  selectedIds.value = new Set();
+  selectionAnchorId.value = null;
+}
+
+async function copyIdsFromMenu(): Promise<void> {
+  const ids = ssMenuTargetIds.value;
+  if (ids.length === 0) return;
+  const text = ids.length === 1 ? ids[0]! : ids.join('\n');
+  const ok = await copyTextToClipboard(text);
+  ssCopied.value = ok;
+  ssCopyFailed.value = !ok;
+  // Keep the menu open briefly so the feedback label is visible, then close.
+  setTimeout(() => {
+    closeSessionMenu();
+    clearSessionSelection();
+  }, 1500);
+}
+
+function renameFromMenu(): void {
+  const id = ssMenuTargetIds.value[0];
+  if (id) renameRequestId.value = id;
+  closeSessionMenu();
+}
+
+function forkFromMenu(): void {
+  const id = ssMenuTargetIds.value[0];
+  if (id) emit('fork', id);
+  closeSessionMenu();
+  clearSessionSelection();
+}
+
+function exportFromMenu(): void {
+  const id = ssMenuTargetIds.value[0];
+  if (id) emit('export', id);
+  closeSessionMenu();
+  clearSessionSelection();
+}
+
+function archiveFromMenu(): void {
+  const ids = ssMenuTargetIds.value;
+  if (ids.length > 1) emit('archiveMany', ids);
+  else if (ids[0]) emit('archive', ids[0]);
+  closeSessionMenu();
+  clearSessionSelection();
+}
+
+// ---------------------------------------------------------------------------
 // Workspace inline more-menu (kebab, hover-triggered). Rendered position:fixed
 // and anchored to the ⋯ button so the scrolling session list can't clip it.
 // It stays open on scroll (so a streaming turn doesn't dismiss it) and closes
@@ -570,9 +697,11 @@ onBeforeUnmount(() => {
   document.removeEventListener('mousedown', onWsMenuDocClick);
   document.removeEventListener('mousedown', onSectionMenuDocClick);
   document.removeEventListener('mousedown', onBackendMenuDocClick);
+  document.removeEventListener('mousedown', onSessionMenuDocClick, true);
   window.removeEventListener('resize', closeWsMenu);
   window.removeEventListener('resize', closeSectionMenu);
   window.removeEventListener('resize', closeBackendMenu);
+  window.removeEventListener('keydown', onSessionMenuKeydown);
 });
 
 // Logo easter-egg: clicking the Kimi mark plays one quick blink. It's a one-shot
@@ -767,6 +896,9 @@ onBeforeUnmount(() => {
               :pending-by-session="pendingBySession"
               :unread-by-session="unreadBySession"
               :ws-menu-open-id="wsMenuOpenId"
+              :selected-ids="selectedIds"
+              :selection-anchor-id="selectionAnchorId"
+              :rename-request-id="renameRequestId"
               :dragging="draggingWsId === g.workspace.id"
               :is-collapsed="isCollapsed"
               :is-expanded="isExpanded"
@@ -774,7 +906,9 @@ onBeforeUnmount(() => {
               @group-contextmenu="openGhMenu"
               @toggle-ws-menu="toggleWsMenu"
               @create-in-workspace="(id) => emit('createInWorkspace', id)"
-              @select-session="onSelectSession"
+              @session-select="onSessionSelectIntent"
+              @session-contextmenu="onSessionContextmenu"
+              @rename-request-handled="renameRequestId = null"
               @rename-session="(id, title) => emit('rename', id, title)"
               @archive-session="(id) => emit('archive', id)"
               @fork-session="(id) => emit('fork', id)"
@@ -811,6 +945,54 @@ onBeforeUnmount(() => {
       <MenuItem @click="copyPathFromMenu">{{ t('sidebar.copyPath') }}</MenuItem>
       <MenuItem @click="startRenameFromMenu">{{ t('sidebar.rename') }}</MenuItem>
       <MenuItem danger @click="deleteFromMenu">{{ t('sidebar.removeWorkspace') }}</MenuItem>
+    </Menu>
+
+    <!-- Session right-click menu (position:fixed, follows the pointer). Single
+         rows get the full op set; a multi-selection collapses to the batch ops
+         (copy IDs, archive) — keys come from sessionMenuActions. -->
+    <Menu
+      v-if="ssMenuOpen"
+      ref="ssMenuRef"
+      class="ss-menu"
+      :style="ssMenuStyle"
+      @click.stop
+    >
+      <MenuItem :danger="ssCopyFailed" @click="copyIdsFromMenu">
+        <Icon :name="ssCopied ? 'check' : 'copy'" size="sm" />
+        {{
+          ssCopyFailed
+            ? t('sidebar.copyFailed')
+            : ssCopied
+              ? t('sidebar.copied')
+              : ssMenuTargetIds.length > 1
+                ? t('sidebar.copySessionIds', { count: ssMenuTargetIds.length })
+                : t('sidebar.copySessionId')
+        }}
+      </MenuItem>
+      <template v-if="ssMenuItems.includes('rename')">
+        <MenuItem separator />
+        <MenuItem @click="renameFromMenu">
+          <Icon name="pencil" size="sm" />
+          {{ t('sidebar.rename') }}
+        </MenuItem>
+        <MenuItem @click="forkFromMenu">
+          <Icon name="git-fork" size="sm" />
+          {{ t('sidebar.fork') }}
+        </MenuItem>
+        <MenuItem @click="exportFromMenu">
+          <Icon name="download" size="sm" />
+          {{ t('sidebar.export') }}
+        </MenuItem>
+      </template>
+      <MenuItem separator />
+      <MenuItem danger @click="archiveFromMenu">
+        <Icon name="archive" size="sm" />
+        {{
+          ssMenuTargetIds.length > 1
+            ? t('sidebar.archiveSessionsTitle', { count: ssMenuTargetIds.length })
+            : t('sidebar.archive')
+        }}
+      </MenuItem>
     </Menu>
 
     <!-- Workspace kebab menu (position:fixed, anchored to the ⋯ button so the
@@ -1237,12 +1419,13 @@ onBeforeUnmount(() => {
   line-height: 1.6;
 }
 
-/* Workspace menus — surface + items come from Menu / MenuItem; only the
-   fixed positioning stays here (anchored to the ⋯ trigger / cursor). */
+/* Workspace + session menus — surface + items come from Menu / MenuItem; only
+   the fixed positioning stays here (anchored to the ⋯ trigger / cursor). */
 .ws-menu,
 .gh-menu,
 .section-menu,
-.backend-menu {
+.backend-menu,
+.ss-menu {
   position: fixed;
   top: 0;
   left: 0;

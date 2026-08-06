@@ -476,6 +476,19 @@ async function confirmArchiveSession(id: string): Promise<void> {
   });
 }
 
+/** Batch archive (sidebar multi-select) — one shared confirm for the whole
+ *  selection, then each session archives through the same client call as the
+ *  single-session path. */
+async function confirmArchiveSessions(ids: string[]): Promise<void> {
+  const count = ids.length;
+  await confirm({
+    title: t('sidebar.archiveSessionsTitle', { count }),
+    message: t('sidebar.archiveSessionsConfirm', { count }),
+    variant: 'danger',
+    action: () => Promise.all(ids.map((id) => client.archiveSession(id))),
+  });
+}
+
 async function confirmDeleteWorkspace(id: string): Promise<void> {
   const name = client.workspacesView.value.find((w) => w.id === id)?.name ?? id;
   await confirm({
@@ -791,6 +804,7 @@ function openPr(url: string): void {
         @add-workspace="showAddWorkspace = true"
         @rename="(id, title) => client.renameSession(id, title)"
         @archive="confirmArchiveSession($event)"
+        @archive-many="confirmArchiveSessions($event)"
         @fork="(id) => client.forkSession(id)"
         @export="(id) => client.exportSession(id)"
         @rename-workspace="(id, name) => client.renameWorkspace(id, name)"

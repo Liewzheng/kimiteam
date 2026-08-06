@@ -16,6 +16,7 @@ import Spinner from '../ui/Spinner.vue';
 import Tooltip from '../ui/Tooltip.vue';
 import { getVisibleWorkspaces } from '../../lib/workspacePicker';
 import { safeRemove, STORAGE_KEYS } from '../../lib/storage';
+import { findActiveTurnIndex } from '../../lib/tocActive';
 
 const { t } = useI18n();
 
@@ -299,6 +300,8 @@ const conversationTocItems = computed<ConversationTocItem[]>(() =>
 const activeTurnId = ref<string | null>(null);
 
 function updateActiveTocQuery(): void {
+  // TOC off → nothing to highlight; skip all layout work on scroll.
+  if (!props.conversationToc) return;
   const pane = panesRef.value;
   if (!pane) return;
   const anchors = pane.querySelectorAll<HTMLElement>('.turn-anchor[data-turn-id]');
@@ -318,15 +321,19 @@ function updateActiveTocQuery(): void {
   const paneRect = pane.getBoundingClientRect();
   const paneMiddle = paneRect.height / 2;
   // Otherwise the active highlight tracks the query that owns the current
-  // viewport: the last user-turn anchor at or above the middle.
-  let bestId: string | null = null;
-  anchors.forEach((el) => {
-    const id = el.dataset.turnId;
-    if (!id || !userIds.has(id)) return;
-    const top = el.getBoundingClientRect().top - paneRect.top;
-    if (top <= paneMiddle) bestId = id;
-  });
-  activeTurnId.value = bestId ?? items[0]!.id;
+  // viewport: the last user-turn anchor at or above the middle, found by binary
+  // search (O(log N) rect reads — the old loop forced one layout per anchor on
+  // every scroll tick).
+  const idx = findActiveTurnIndex(
+    anchors.length,
+    (i) => {
+      const id = anchors[i]!.dataset.turnId;
+      return !!id && userIds.has(id);
+    },
+    (i) => anchors[i]!.getBoundingClientRect().top - paneRect.top,
+    paneMiddle,
+  );
+  activeTurnId.value = idx !== null ? anchors[idx]!.dataset.turnId! : items[0]!.id;
 }
 
 // --- TOC occlusion by wide tables -------------------------------------------

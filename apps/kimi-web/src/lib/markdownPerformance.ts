@@ -13,7 +13,22 @@ const HEAVY_SINGLE_FENCE_CHARS = 30_000;
 
 const CODE_FENCE_RE = /(^|\n)(`{3,}|~{3,})[^\n]*\n([\s\S]*?)(?:\n)?\2(?=\n|$)/g;
 
-export function markdownRenderPlan(text: string): MarkdownRenderPlan {
+/**
+ * Choose the code renderer for a piece of markdown.
+ *
+ * While a turn is actively streaming, code renders as plain `<pre>`: shiki
+ * tokenization runs on the main thread and is the input-lag hot path during
+ * fast output — keeping it off the stream keeps keystrokes responsive. The
+ * settled plan (below) upgrades light messages to `shiki` once the turn has
+ * settled ("settle 后再高亮"); heavy messages stay `pre`. The one-time
+ * renderer flip at settle remounts code blocks once on light messages —
+ * accepted in exchange for removing per-delta tokenization while typing.
+ */
+export function markdownRenderPlan(
+  text: string,
+  opts?: { streaming?: boolean },
+): MarkdownRenderPlan {
+  if (opts?.streaming) return { codeRenderer: 'pre', codeFenceCount: 0, codeChars: 0 };
   let codeFenceCount = 0;
   let codeChars = 0;
   let longestFence = 0;

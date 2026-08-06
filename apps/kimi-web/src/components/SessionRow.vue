@@ -2,7 +2,7 @@
 <!-- A single session row: status dot + title + time + attention pill + kebab. -->
 <!-- Inline rename (dblclick) and delete-confirm live here. -->
 <script setup lang="ts">
-import { computed, nextTick, onUnmounted, ref } from 'vue';
+import { computed, nextTick, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import type { Session } from '../types';
 import { copyTextToClipboard } from '../lib/clipboard';
@@ -20,6 +20,13 @@ const props = withDefaults(
   defineProps<{
     session: Session;
     active: boolean;
+    /** Multi-select membership (sidebar batch selection) — accent highlight,
+     *  visually distinct from the active-row fill. */
+    selected?: boolean;
+    /** When this session's id arrives here, start inline rename (context-menu
+     *  "Rename" → the same flow as dblclick / kebab). The parent clears the
+     *  request once handled via `renameRequested`. */
+    renameRequestId?: string | null;
     /** Pending permission requests waiting for the user's approval. */
     approvalCount?: number;
     /** Pending askUserQuestion prompts waiting for the user's answer. */
@@ -27,16 +34,39 @@ const props = withDefaults(
     /** A background turn finished here that the user hasn't opened — blue dot. */
     unread?: boolean;
   }>(),
-  { approvalCount: 0, questionCount: 0, unread: false },
+  { approvalCount: 0, questionCount: 0, unread: false, selected: false, renameRequestId: null },
 );
 
 const emit = defineEmits<{
-  select: [id: string];
+  select: [id: string, event: MouseEvent];
   rename: [id: string, title: string];
   archive: [id: string];
   fork: [id: string];
   export: [id: string];
+  contextmenu: [id: string, event: MouseEvent];
+  renameRequested: [];
 }>();
+
+// Right-click on the row: suppress the native browser menu and surface the
+// intent — Sidebar owns the selection rule + the fixed context menu.
+function onContextmenu(e: MouseEvent): void {
+  e.preventDefault();
+  e.stopPropagation();
+  emit('contextmenu', props.session.id, e);
+}
+
+// Context-menu "Rename" request from Sidebar → trigger this row's inline rename
+// (identical to dblclick / kebab rename). The parent clears the request once
+// we've handled it, so a repeat request (null → id) fires again.
+watch(
+  () => props.renameRequestId,
+  (id) => {
+    if (id && id === props.session.id) {
+      void startRename();
+      emit('renameRequested');
+    }
+  },
+);
 
 // Full, absolute timestamp shown on hover (the row's `time` is a short relative
 // string like "2h"/"1d" — see formatTime in useKimiWebClient).
@@ -178,7 +208,7 @@ defineExpose({ closeMenu });
 </script>
 
 <template>
-  <div class="se" :class="{ on: active }" @click="emit('select', session.id)">
+  <div class="se" :class="{ on: active, sel: selected }" @click="emit('select', session.id, $event)" @contextmenu="onContextmenu">
     <div class="row">
       <!-- Leading status slot (in the gutter left of the title): a spinner
            while the session runs, otherwise an unread blue dot. Fixed width
@@ -319,6 +349,23 @@ defineExpose({ closeMenu });
 .se.on {
   background: var(--color-selected);
   color: var(--color-text);
+}
+/* Multi-select (batch): accent-tinted fill + a left accent bar — visually
+   distinct from the active-row fill (--color-selected), so "where I am" and
+   "what I've batched" never read as the same state. */
+.se.sel {
+  background: var(--color-accent-soft);
+  color: var(--color-text);
+}
+.se.sel::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  border-radius: var(--radius-full);
+  background: var(--color-accent);
 }
 
 .row {

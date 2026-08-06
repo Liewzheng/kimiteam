@@ -8,6 +8,7 @@
 import { computed, type ComponentPublicInstance, type Ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import type { WorkspaceGroup, WorkspaceView } from '../types';
+import { sessionRange, type SessionSelectionAction } from '../lib/sessionSelection';
 import SessionRow from './SessionRow.vue';
 import IconButton from './ui/IconButton.vue';
 import Icon from './ui/Icon.vue';
@@ -25,6 +26,12 @@ const props = defineProps<{
   pendingBySession: Record<string, { approvals: number; questions: number }>;
   unreadBySession: Record<string, boolean>;
   wsMenuOpenId: string | null;
+  /** Multi-select membership (batch selection) — drives the row highlight. */
+  selectedIds: Set<string>;
+  /** Last clicked/right-clicked session — the Shift+click range anchor. */
+  selectionAnchorId: string | null;
+  /** Context-menu "Rename" request — forwarded to the matching SessionRow. */
+  renameRequestId: string | null;
   /** True while this group is the active drag source (drag-to-reorder). */
   dragging: boolean;
   isCollapsed: (id: string) => boolean;
@@ -38,7 +45,11 @@ const emit = defineEmits<{
   groupContextmenu: [workspace: WorkspaceView, event: MouseEvent];
   toggleWsMenu: [workspace: WorkspaceView, event: MouseEvent];
   createInWorkspace: [workspaceId: string];
-  selectSession: [sessionId: string];
+  /** A session row was clicked (plain / ctrl / shift) — the resolved selection
+   *  intent. Sidebar owns the selection set + activation. */
+  sessionSelect: [intent: SessionSelectionAction];
+  sessionContextmenu: [sessionId: string, event: MouseEvent];
+  renameRequestHandled: [];
   renameSession: [id: string, title: string];
   archiveSession: [id: string];
   forkSession: [id: string];
@@ -101,6 +112,23 @@ function onHeaderDragStart(event: DragEvent): void {
   event.dataTransfer.effectAllowed = 'move';
   event.dataTransfer.setData('text/plain', props.group.workspace.id);
   emit('wsDragstart', props.group.workspace.id);
+}
+
+// Session row click → selection intent. Shift+click resolves the range within
+// THIS group's visible order (the anchor may live in another group — then the
+// fallback in sessionRange selects just the clicked row). Ctrl/Cmd+click is a
+// toggle; plain click is a single select. Sidebar applies the set + activates.
+function onSelectSession(id: string, e: MouseEvent): void {
+  if (e.shiftKey) {
+    const ids = sessionRange(
+      visibleSessions.value.map((s) => s.id),
+      props.selectionAnchorId ?? id,
+      id,
+    );
+    emit('sessionSelect', { kind: 'range', id, ids, additive: e.ctrlKey || e.metaKey });
+  } else {
+    emit('sessionSelect', { kind: e.ctrlKey || e.metaKey ? 'toggle' : 'select', id });
+  }
 }
 </script>
 
@@ -177,14 +205,18 @@ function onHeaderDragStart(event: DragEvent): void {
         :key="s.id"
         :session="s"
         :active="s.id === activeId"
+        :selected="selectedIds.has(s.id)"
+        :rename-request-id="renameRequestId"
         :approval-count="pendingBySession[s.id]?.approvals ?? 0"
         :question-count="pendingBySession[s.id]?.questions ?? 0"
         :unread="unreadBySession[s.id] ?? false"
-        @select="emit('selectSession', $event)"
+        @select="onSelectSession"
+        @contextmenu="(id, e) => emit('sessionContextmenu', id, e)"
         @rename="(id, title) => emit('renameSession', id, title)"
         @archive="emit('archiveSession', $event)"
         @fork="emit('forkSession', $event)"
         @export="emit('exportSession', $event)"
+        @rename-requested="emit('renameRequestHandled')"
       />
       <button
         v-if="group.hasMore || group.loadingMore"

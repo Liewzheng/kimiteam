@@ -98,14 +98,10 @@ const props = withDefaults(
 const final = computed(() => !props.streaming);
 const filePathAliases = computed(() => collectFilePathAliases(props.text ?? ''));
 const renderPlan = computed(() => {
-  // While a turn is actively streaming, never downgrade the code renderer:
-  // markstream keys each code block on the renderer value, so flipping
-  // shiki→pre mid-stream remounts every block (visible jitter + lost
-  // highlighting) right in the "fast output" scenario this is meant to fix.
-  // Plan for heaviness only once the turn has settled — already-loaded history
-  // is never `streaming`, so the large/heavy-session case still gets `pre`.
-  if (props.streaming) return { codeRenderer: 'shiki' as const, codeFenceCount: 0, codeChars: 0 };
-  return markdownRenderPlan(props.text ?? '');
+  // Streaming: plain `pre` renderer so shiki never tokenizes on the main thread
+  // during fast output (the input-lag hot path). Settled: markdownRenderPlan
+  // upgrades light messages to shiki once the turn settles; heavy stay pre.
+  return markdownRenderPlan(props.text ?? '', { streaming: props.streaming });
 });
 
 // Code blocks follow the app colour scheme (shiki re-renders on flip).
@@ -458,6 +454,8 @@ function copyDiff(code: string, idx: number) {
         :smooth-streaming="streaming"
         :batch-rendering="allowBatchRender"
         :defer-nodes-until-visible="false"
+        :max-live-nodes="0"
+        :parse-coalesce-ms="200"
         @copy="copyCodeBlockFallback"
       />
 

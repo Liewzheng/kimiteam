@@ -112,7 +112,7 @@ const { t, locale } = useI18n();
 // ---------------------------------------------------------------------------
 // Textarea + per-session draft persistence — see useComposerDraft.
 // ---------------------------------------------------------------------------
-const { text, textareaRef, autosize, loadForEdit, clearDraft } = useComposerDraft({
+const { text, textareaRef, autosize, flushDraft, loadForEdit, clearDraft } = useComposerDraft({
   sessionId: () => props.sessionId,
 });
 
@@ -918,6 +918,7 @@ function selectModel(modelId: string): void {
             @compositionstart="handleCompositionStart"
             @compositionend="handleCompositionEnd"
             @input="handleInput"
+            @blur="flushDraft"
           />
           <button
             v-if="expanded || isGrown"

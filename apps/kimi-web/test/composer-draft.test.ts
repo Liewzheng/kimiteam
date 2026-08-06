@@ -1,6 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { nextTick, ref } from 'vue';
-import { useComposerDraft } from '../src/composables/useComposerDraft';
+import {
+  DRAFT_SAVE_DELAY_MS,
+  useComposerDraft,
+} from '../src/composables/useComposerDraft';
 import { draftStorageKey } from '../src/lib/storage';
 
 function memoryStorage(): Storage {
@@ -45,9 +48,11 @@ describe('useComposerDraft', () => {
       configurable: true,
       writable: true,
     });
+    vi.useFakeTimers();
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     if (original === undefined) {
       delete (globalThis as { localStorage?: Storage }).localStorage;
     } else {
@@ -70,18 +75,60 @@ describe('useComposerDraft', () => {
     expect(text.value).toBe('');
   });
 
-  it('persists the draft when the text changes', async () => {
+  it('persists the draft debounced when the text changes', async () => {
     const { text } = setup('s1');
     text.value = 'hello';
     await nextTick();
+    // Inside the debounce window the storage is untouched (no sync write per key).
+    expect(globalThis.localStorage.getItem(draftStorageKey('s1'))).toBeNull();
+    vi.advanceTimersByTime(DRAFT_SAVE_DELAY_MS);
     expect(globalThis.localStorage.getItem(draftStorageKey('s1'))).toBe('hello');
   });
 
-  it('clears the stored draft when the text is emptied', async () => {
+  it('clears the stored draft (debounced) when the text is emptied', async () => {
     globalThis.localStorage.setItem(draftStorageKey('s1'), 'x');
     const { text } = setup('s1');
     text.value = '';
     await nextTick();
+    expect(globalThis.localStorage.getItem(draftStorageKey('s1'))).toBe('x');
+    vi.advanceTimersByTime(DRAFT_SAVE_DELAY_MS);
+    expect(globalThis.localStorage.getItem(draftStorageKey('s1'))).toBeNull();
+  });
+
+  it('debounce merges rapid changes into a single storage write', async () => {
+    const { text } = setup('s1');
+    text.value = 'a';
+    await nextTick();
+    text.value = 'ab';
+    await nextTick();
+    text.value = 'abc';
+    await nextTick();
+    // Nothing written until the window elapses — only the last value lands.
+    expect(globalThis.localStorage.getItem(draftStorageKey('s1'))).toBeNull();
+    vi.advanceTimersByTime(DRAFT_SAVE_DELAY_MS);
+    expect(globalThis.localStorage.getItem(draftStorageKey('s1'))).toBe('abc');
+  });
+
+  it('flushDraft persists immediately and cancels the pending write (blur path)', async () => {
+    const { text, draft } = setup('s1');
+    text.value = 'about to blur';
+    await nextTick();
+    expect(globalThis.localStorage.getItem(draftStorageKey('s1'))).toBeNull();
+
+    draft.flushDraft();
+    expect(globalThis.localStorage.getItem(draftStorageKey('s1'))).toBe('about to blur');
+    // The debounced write was cancelled — nothing fires later.
+    vi.advanceTimersByTime(DRAFT_SAVE_DELAY_MS * 2);
+    expect(globalThis.localStorage.getItem(draftStorageKey('s1'))).toBe('about to blur');
+  });
+
+  it('clearDraft cancels a pending debounced write', async () => {
+    const { text, draft } = setup('s1');
+    text.value = 'stale';
+    await nextTick();
+    draft.clearDraft();
+    vi.advanceTimersByTime(DRAFT_SAVE_DELAY_MS * 2);
+    // The stale timer was cancelled — nothing is resurrected.
     expect(globalThis.localStorage.getItem(draftStorageKey('s1'))).toBeNull();
   });
 
