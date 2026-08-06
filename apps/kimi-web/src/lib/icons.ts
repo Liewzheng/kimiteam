@@ -96,6 +96,7 @@ import RiTerminalBoxLine from '~icons/ri/terminal-box-line';
 import RiTimeLine from '~icons/ri/time-line';
 import RiToolsLine from '~icons/ri/tools-line';
 import RiUserLine from '~icons/ri/user-line';
+import RiTeamLine from '~icons/ri/team-line';
 
 // Raw SVG strings (Kimi collection) -----------------------------------------
 import RawKimiAddConversation from '~icons/kimi/add-conversation?raw';
@@ -168,6 +169,7 @@ import RawTerminalBoxLine from '~icons/ri/terminal-box-line?raw';
 import RawTimeLine from '~icons/ri/time-line?raw';
 import RawToolsLine from '~icons/ri/tools-line?raw';
 import RawUserLine from '~icons/ri/user-line?raw';
+import RawTeamLine from '~icons/ri/team-line?raw';
 
 // Public types -------------------------------------------------------------
 export type IconName =
@@ -228,6 +230,7 @@ export type IconName =
   | 'message'
   | 'mail'
   | 'user'
+  | 'team'
   | 'info'
   | 'help-circle'
   | 'alert-triangle'
@@ -314,6 +317,7 @@ export const ICONS: Record<IconName, IconEntry> = {
   message: entry(RiMessageLine, RawMessageLine),
   mail: entry(RiMailLine, RawMailLine),
   user: entry(RiUserLine, RawUserLine),
+  team: entry(RiTeamLine, RawTeamLine),
   info: entry(RiInformationLine, RawInformationLine),
   'help-circle': entry(RiQuestionLine, RawQuestionLine),
   'alert-triangle': entry(RiAlertLine, RawAlertLine),
@@ -421,7 +425,7 @@ export const ICON_GROUPS: ReadonlyArray<readonly [string, readonly IconName[]]> 
       'calendar-close',
     ],
   ],
-  ['Communication', ['message', 'mail', 'user']],
+  ['Communication', ['message', 'mail', 'user', 'team']],
   [
     'Status & media',
     [

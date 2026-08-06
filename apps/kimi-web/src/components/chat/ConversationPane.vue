@@ -93,6 +93,11 @@ const props = defineProps<{
   sessionTitle?: string;
   /** GitHub PR for the current branch, when known (shown in the chat header). */
   pr?: { number: number; state: string; url: string } | null;
+  /** Team roster counts for the dock's standing 「团队 (working/total)」 tab. */
+  teamWorking?: number;
+  teamTotal?: number;
+  /** True while the right-side TeamStatusPanel is open for this session. */
+  teamOpen?: boolean;
   /** Conversation outline: proportional bubbles, viewport indicator, hover tooltip. */
   conversationToc?: boolean;
 }>();
@@ -136,6 +141,8 @@ const emit = defineEmits<{
   addWorkspace: [];
   /** Chat header: open the GitHub PR in a new tab. */
   openPr: [url: string];
+  /** Dock team tab: open the right-side TeamStatusPanel for the active session. */
+  openTeam: [];
   /** Chat header / session row: rename current session. */
   renameSession: [id: string, title: string];
   /** Chat header / session row: fork current session. */
@@ -222,14 +229,7 @@ function focusGoal(): void {
 }
 
 const bashTasks = computed(() => props.tasks.filter((t) => t.kind !== 'subagent'));
-// The dock lists only BACKGROUND subagents. Foreground subagents render inline
-// in the message flow as the `Agent` tool card, so showing them here too would
-// duplicate them (and foreground ones can't be cancelled from the dock anyway).
-const subagentTasks = computed(() =>
-  props.tasks.filter((t) => t.kind === 'subagent' && t.runInBackground),
-);
 const bashRunning = computed(() => bashTasks.value.filter((t) => t.state === 'run').length);
-const subagentRunning = computed(() => subagentTasks.value.filter((t) => t.state === 'run').length);
 
 // Let AgentTool cards know whether their spawning tool-call has a matching live
 // or background subagent task, so the "Open detail" button can be hidden when
@@ -252,14 +252,13 @@ provide('pinScroll', pinScrollFor);
 const todoDoneCount = computed(() => (props.todos ?? []).filter((td) => td.status === 'done').length);
 const hasDockWork = computed(() =>
   bashTasks.value.length > 0 ||
-  subagentTasks.value.length > 0 ||
   (props.todos?.length ?? 0) > 0 ||
   (props.queued?.length ?? 0) > 0,
 );
-const dockPanel = ref<'bash' | 'subagent' | 'todos' | null>(null);
+const dockPanel = ref<'bash' | 'todos' | null>(null);
 const changesCount = computed(() => (props.gitInfo ? props.changes?.length ?? 0 : 0));
 
-function toggleDockPanel(panel: 'bash' | 'subagent' | 'todos'): void {
+function toggleDockPanel(panel: 'bash' | 'todos'): void {
   dockPanel.value = dockPanel.value === panel ? null : panel;
 }
 
@@ -1463,11 +1462,11 @@ defineExpose({ loadComposerForEdit, focusComposer });
         :goal-expand-signal="goalExpandSignal"
         :dock-panel="dockPanel"
         :bash-tasks="bashTasks"
-        :subagent-tasks="subagentTasks"
         :bash-running="bashRunning"
-        :subagent-running="subagentRunning"
         :todo-done-count="todoDoneCount"
-        :has-dock-work="hasDockWork"
+        :team-working="teamWorking ?? 0"
+        :team-total="teamTotal ?? 0"
+        :team-active="teamOpen"
         :todos="todos"
         :pending-question="pendingQuestion"
         :question-busy-kind="questionBusyKind"
@@ -1476,7 +1475,7 @@ defineExpose({ loadComposerForEdit, focusComposer });
         :mobile="mobile"
         @toggle-dock-panel="toggleDockPanel($event)"
         @close-dock-panel="closeDockPanel()"
-        @open-agent="emit('openAgent', $event)"
+        @open-team="emit('openTeam')"
         @answer="handleQuestionAnswer"
         @dismiss="emit('dismiss', $event)"
         @approval="handleApproval"

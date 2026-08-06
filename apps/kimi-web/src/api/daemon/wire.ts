@@ -464,30 +464,38 @@ export interface WireTeamMembersResponse {
   project: WireTeamMember[];
 }
 
-/** Per-model token usage row (mirrors the TUI's TokenUsage shape — the engine
- *  reports input cache read/creation separately from plain input). */
+/** Per-model token usage row as sent by the teams /usage route
+ *  (packages/kap-server/src/routes/teams.ts TokenUsageWire) — the server
+ *  collapses cache reads/creation into `input` and computes `total`. */
 export interface WireTeamTokenUsage {
-  input_other: number;
+  input: number;
   output: number;
-  input_cache_read: number;
-  input_cache_creation: number;
+  total: number;
 }
 
 /** GET /teams/{session_id}/usage — subagent token usage grouped by model and by
- *  member, plus the run count. Mirrors the TUI's SubAgentUsage contract
- *  (apps/kimi-code/src/tui/types.ts). The engine records every subagent bound to
- *  the `[secondary_model]` recipe under the synthesized `__secondary__` model
- *  key; `secondary_model_id` carries the real model id to resolve it to (the
- *  web normalizes this in lib/usageRows.ts before rendering). */
+ *  member, plus the run count. NOTE: this teams route replies in camelCase
+ *  (unlike the snake_case envelope endpoints) — `byModel` / `byMember` are the
+ *  literal wire keys, not an envelope `data` payload. `stale: true` means the
+ *  session is persisted-but-cold and the server reports empty usage instead of
+ *  erroring. The server already resolves the engine's `__secondary__`
+ *  derived-model alias (normalizeDerivedSecondary), so the keys are real model
+ *  ids and no web-side normalization is needed. */
 export interface WireTeamUsageResponse {
   runs: number;
   /** model_id -> token usage. */
-  by_model: Record<string, WireTeamTokenUsage>;
+  byModel: Record<string, WireTeamTokenUsage>;
   /** member name -> model_id -> token usage. */
-  by_member: Record<string, Record<string, WireTeamTokenUsage>>;
-  /** Real model id for the `__secondary__` key, when the engine used the
-   *  derived alias. Absent / null when the server already normalized. */
-  secondary_model_id?: string | null;
+  byMember: Record<string, Record<string, WireTeamTokenUsage>>;
+  /** True when the session is not live — persisted-but-cold reports empty usage. */
+  stale?: boolean;
+}
+
+/** POST/PUT /teams/{session_id}/members(/{name}) — hire/update reply with a
+ *  flat `{ ok: true, member }` wrapper around the full member wire shape. */
+export interface WireTeamMemberResponse {
+  ok: true;
+  member: WireTeamMember;
 }
 
 /** Mutation endpoints return an action result. `ok` may be absent on success

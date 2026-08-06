@@ -5,7 +5,7 @@ export default {
   defaultDescription: 'Background task',
   dockTasks: 'Background tasks',
   dockBash: 'Bash',
-  dockSubagent: 'Sub Agent',
+  teamTab: 'Team',
   dockTodos: 'Todos',
   running: 'running',
   closePanel: 'Close panel',

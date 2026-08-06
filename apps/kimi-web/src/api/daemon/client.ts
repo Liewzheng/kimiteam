@@ -89,7 +89,7 @@ import type {
   WireSessionRuntimeStatus,
   WireSessionSnapshot,
   WireTeamActionResult,
-  WireTeamMember,
+  WireTeamMemberResponse,
   WireTeamMembersResponse,
   WireTeamUsageResponse,
   WireWorkspace,
@@ -1307,7 +1307,8 @@ export class DaemonKimiWebApi implements KimiWebApi {
   // -------------------------------------------------------------------------
 
   async getTeamMembers(sessionId: string): Promise<AppTeamMembers> {
-    const data = await this.http.get<WireTeamMembersResponse>(
+    const data = await this.http.requestFlat<WireTeamMembersResponse>(
+      'GET',
       `/teams/${encodeURIComponent(sessionId)}/members`,
     );
     return {
@@ -1318,7 +1319,8 @@ export class DaemonKimiWebApi implements KimiWebApi {
   }
 
   async getTeamUsage(sessionId: string): Promise<AppTeamUsage> {
-    const data = await this.http.get<WireTeamUsageResponse>(
+    const data = await this.http.requestFlat<WireTeamUsageResponse>(
+      'GET',
       `/teams/${encodeURIComponent(sessionId)}/usage`,
     );
     return toAppTeamUsage(data);
@@ -1351,15 +1353,17 @@ export class DaemonKimiWebApi implements KimiWebApi {
     if (input.skills !== undefined) body['skills'] = input.skills;
     if (input.duty !== undefined) body['duty'] = input.duty;
     if (input.scope !== undefined) body['scope'] = input.scope;
-    const data = await this.http.post<WireTeamMember>(
+    const data = await this.http.requestFlat<WireTeamMemberResponse>(
+      'POST',
       `/teams/${encodeURIComponent(sessionId)}/members`,
       body,
     );
-    return toAppTeamMember(data);
+    return toAppTeamMember(data.member);
   }
 
   async fireTeamMember(sessionId: string, name: string): Promise<AppTeamActionResult> {
-    const data = await this.http.delete<WireTeamActionResult>(
+    const data = await this.http.requestFlat<WireTeamActionResult>(
+      'DELETE',
       `/teams/${encodeURIComponent(sessionId)}/members/${encodeURIComponent(name)}`,
     );
     return toAppTeamActionResult(data);
@@ -1384,11 +1388,12 @@ export class DaemonKimiWebApi implements KimiWebApi {
     if (input.role !== undefined) body['role'] = input.role;
     if (input.description !== undefined) body['description'] = input.description;
     if (input.whenToUse !== undefined) body['when_to_use'] = input.whenToUse;
-    const data = await this.http.put<WireTeamMember>(
+    const data = await this.http.requestFlat<WireTeamMemberResponse>(
+      'PUT',
       `/teams/${encodeURIComponent(sessionId)}/members/${encodeURIComponent(name)}`,
       body,
     );
-    return toAppTeamMember(data);
+    return toAppTeamMember(data.member);
   }
 
   async scoreTeamMember(
@@ -1398,7 +1403,8 @@ export class DaemonKimiWebApi implements KimiWebApi {
   ): Promise<AppTeamActionResult> {
     const body: Record<string, unknown> = { score: input.score, note: input.note };
     if (input.model !== undefined) body['model'] = input.model;
-    const data = await this.http.post<WireTeamActionResult>(
+    const data = await this.http.requestFlat<WireTeamActionResult>(
+      'POST',
       `/teams/${encodeURIComponent(sessionId)}/members/${encodeURIComponent(name)}/score`,
       body,
     );
@@ -1412,7 +1418,8 @@ export class DaemonKimiWebApi implements KimiWebApi {
   ): Promise<AppTeamActionResult> {
     const body: Record<string, unknown> = { message: input.message };
     if (input.interrupt !== undefined) body['interrupt'] = input.interrupt;
-    const data = await this.http.post<WireTeamActionResult>(
+    const data = await this.http.requestFlat<WireTeamActionResult>(
+      'POST',
       `/teams/${encodeURIComponent(sessionId)}/agents/${encodeURIComponent(agentId)}/message`,
       body,
     );
@@ -1422,7 +1429,8 @@ export class DaemonKimiWebApi implements KimiWebApi {
   async setTeamConcurrency(sessionId: string, limit?: number): Promise<AppTeamActionResult> {
     const body: Record<string, unknown> = {};
     if (limit !== undefined) body['limit'] = limit;
-    const data = await this.http.post<WireTeamActionResult>(
+    const data = await this.http.requestFlat<WireTeamActionResult>(
+      'POST',
       `/teams/${encodeURIComponent(sessionId)}/concurrency`,
       body,
     );
@@ -1430,7 +1438,9 @@ export class DaemonKimiWebApi implements KimiWebApi {
   }
 
   /** Toggle team mode via the shared config endpoint (POST /config { subagent:
-   *  { team_mode: bool } }) — same channel the TUI uses. */
+   *  { team_mode: bool } }) — same channel the TUI uses. Unlike the /teams
+   *  routes, /config is an ENVELOPE endpoint (kap-server routes/config.ts wraps
+   *  its response in okEnvelope), so this one stays on the envelope path. */
   async setTeamMode(teamMode: boolean): Promise<AppConfig> {
     const data = await this.http.post<WireConfig>('/config', {
       subagent: { team_mode: teamMode },

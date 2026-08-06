@@ -5,7 +5,7 @@ export default {
   defaultDescription: '后台任务',
   dockTasks: '后台任务',
   dockBash: '后台 Bash',
-  dockSubagent: '子 Agent',
+  teamTab: '团队',
   dockTodos: '待办',
   running: '运行中',
   closePanel: '关闭面板',

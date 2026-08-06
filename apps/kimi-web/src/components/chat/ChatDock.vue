@@ -3,7 +3,7 @@
 <!-- pending question/approval cards, and the composer. Only rendered inside a -->
 <!-- chat-pane group so it never leaks into files/tasks/preview/btw panes. -->
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import type { ActivationBadges, ApprovalBlock, ConversationStatus, PermissionMode, QueuedPromptView, TaskItem, TodoView, UIQuestion } from '../../types';
 import type { AppGoal, AppModel, AppSkill, QuestionResponse, ThinkingLevel } from '../../api/types';
@@ -17,6 +17,7 @@ import TasksPane from './TasksPane.vue';
 import TodoCard from './TodoCard.vue';
 import Icon from '../ui/Icon.vue';
 import Pill from '../ui/Pill.vue';
+import { teamTabState } from '../../lib/teamRows';
 
 const props = defineProps<{
   sessionId?: string;
@@ -39,13 +40,15 @@ const props = defineProps<{
   skills?: AppSkill[];
   goal?: AppGoal | null;
   goalExpandSignal?: number;
-  dockPanel: 'bash' | 'subagent' | 'todos' | null;
+  dockPanel: 'bash' | 'todos' | null;
   bashTasks: TaskItem[];
-  subagentTasks: TaskItem[];
   bashRunning: number;
-  subagentRunning: number;
   todoDoneCount: number;
-  hasDockWork: boolean;
+  /** Team roster counts for the standing 「团队 (working/total)」 tab. */
+  teamWorking: number;
+  teamTotal: number;
+  /** True while the right-side TeamStatusPanel is open for this session. */
+  teamActive?: boolean;
   todos?: TodoView[];
   pendingQuestion?: UIQuestion;
   /** Action kind in flight for the visible question (drives loading state). */
@@ -78,13 +81,23 @@ const emit = defineEmits<{
   dismiss: [questionId: string];
   approval: [approvalId: string, response: { decision: 'approved' | 'rejected' | 'cancelled'; scope?: 'session'; feedback?: string; selectedLabel?: string }];
   cancelTask: [taskId: string];
-  'toggle-dock-panel': [panel: 'bash' | 'subagent' | 'todos'];
+  'toggle-dock-panel': [panel: 'bash' | 'todos'];
   'close-dock-panel': [];
-  /** A background subagent chip was clicked — open its live detail panel. */
-  openAgent: [taskId: string];
+  /** The standing 「团队 (working/total)」 tab was clicked — open the
+   *  right-side TeamStatusPanel for the active session. */
+  openTeam: [];
 }>();
 
 const { t } = useI18n();
+
+/** Derived highlight / disabled state for the team tab (pure, tested). */
+const teamState = computed(() =>
+  teamTabState({
+    working: props.teamWorking,
+    total: props.teamTotal,
+    hasSession: !!props.sessionId,
+  }),
+);
 const composerRef = ref<{
   loadForEdit: (value: string) => boolean;
   loadAttachmentsForEdit: (atts: { fileId?: string; kind: 'image' | 'video' | 'file'; url: string; name?: string }[]) => void;
@@ -175,12 +188,6 @@ defineExpose({ loadForEdit, loadAttachmentsForEdit, focus });
             {{ t('tasks.dockBash') }} · {{ bashRunning }} {{ t('tasks.running') }}
           </span>
           <span
-            v-else-if="dockPanel === 'subagent'"
-            class="dock-work-tab static"
-          >
-            {{ t('tasks.dockSubagent') }} · {{ subagentRunning }} {{ t('tasks.running') }}
-          </span>
-          <span
             v-else-if="dockPanel === 'todos'"
             class="dock-work-tab static"
           >
@@ -192,12 +199,6 @@ defineExpose({ loadForEdit, loadAttachmentsForEdit, focus });
             v-if="dockPanel === 'bash'"
             :tasks="bashTasks"
             @cancel="emit('cancelTask', $event)"
-          />
-          <TasksPane
-            v-else-if="dockPanel === 'subagent'"
-            :tasks="subagentTasks"
-            @cancel="emit('cancelTask', $event)"
-            @open="emit('openAgent', $event)"
           />
           <TodoCard
             v-else-if="dockPanel === 'todos'"
@@ -213,7 +214,22 @@ defineExpose({ loadForEdit, loadAttachmentsForEdit, focus });
       :force-expanded="goalExpandSignal"
       @control-goal="emit('controlGoal', $event)"
     />
-    <div v-if="hasDockWork" ref="workbarRef" class="dock-workbar">
+    <div ref="workbarRef" class="dock-workbar">
+      <!-- Standing team entry — replaces the old conditional 子Agent tab.
+           Clicking opens the right-side TeamStatusPanel (not a dock panel), so
+           it is always visible: the dock tabs below stay conditional on work. -->
+      <Pill
+        class="dw-team"
+        :class="{ hot: teamState.hot }"
+        :active="teamActive"
+        :aria-pressed="teamActive"
+        :disabled="teamState.disabled"
+        @click="emit('openTeam')"
+      >
+        <Icon name="team" size="md" />
+        <span>{{ t('tasks.teamTab') }}</span>
+        <span class="dw-count">(<b>{{ teamWorking }}</b>/<b>{{ teamTotal }}</b>)</span>
+      </Pill>
       <Pill
         v-if="bashTasks.length > 0"
         :active="dockPanel === 'bash'"
@@ -223,16 +239,6 @@ defineExpose({ loadForEdit, loadAttachmentsForEdit, focus });
         <Icon name="clock" size="md" />
         <span>{{ t('tasks.dockBash') }}</span>
         <span class="dw-count">(<b>{{ bashTasks.length }}</b>)</span>
-      </Pill>
-      <Pill
-        v-if="subagentTasks.length > 0"
-        :active="dockPanel === 'subagent'"
-        :aria-pressed="dockPanel === 'subagent'"
-        @click="emit('toggle-dock-panel', 'subagent')"
-      >
-        <Icon name="sparkles" size="md" />
-        <span>{{ t('tasks.dockSubagent') }}</span>
-        <span class="dw-count">(<b>{{ subagentTasks.length }}</b>)</span>
       </Pill>
       <Pill
         v-if="(todos?.length ?? 0) > 0"
@@ -377,6 +383,17 @@ defineExpose({ loadForEdit, loadAttachmentsForEdit, focus });
 }
 .dock-workbar .dw-count { margin-left: 1px; }
 .dock-workbar .dw-count b { font-weight: 500; }
+
+/* Standing team tab — accent emphasis while any member is working, matching
+   the TUI footer's primary badge. Same accent family as Pill's `is-active`,
+   but keyed off the roster's working count rather than "panel open". */
+.dw-team.hot :deep(.ui-pill) {
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+.dw-team.hot :deep(.ui-pill svg) {
+  color: var(--color-accent);
+}
 
 .dock-approval {
   margin-top: 8px;

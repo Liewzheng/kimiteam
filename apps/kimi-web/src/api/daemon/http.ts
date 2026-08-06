@@ -422,6 +422,130 @@ export class DaemonHttpClient {
     return this.request<T>('DELETE', path);
   }
 
+  /** Perform a request against a FLAT (non-envelope) endpoint. The daemon's
+   *  teams routes (packages/kap-server/src/routes/teams.ts) reply with the
+   *  payload directly on 2xx (`{ team_mode, global, project }`, `{ ok, member }`,
+   *  `{ byModel, ... }`) and a flat `{ ok: false, error }` body on non-2xx —
+   *  there is no `{code,msg,data}` envelope to unwrap, so request()'s
+   *  `envelope.code !== 0` check would reject every 200. 2xx returns the parsed
+   *  body; non-2xx throws a DaemonApiError whose `msg` is `body.error ??
+   *  statusText` so callers surface the real server message (e.g.
+   *  "session … not found") instead of an empty string. */
+  async requestFlat<T>(
+    method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH',
+    path: string,
+    body?: unknown,
+    query?: Record<string, string | number | boolean | undefined>,
+  ): Promise<T> {
+    // Build URL, appending query string (omit undefined values)
+    let url = buildRestUrl(this.origin, path);
+    if (query) {
+      const params = new URLSearchParams();
+      for (const [key, value] of Object.entries(query)) {
+        if (value !== undefined) params.set(key, String(value));
+      }
+      const qs = params.toString();
+      if (qs) url = `${url}?${qs}`;
+    }
+
+    const requestId = createRequestId();
+    const headers: Record<string, string> = {
+      'X-Request-Id': requestId,
+    };
+    this.addClientHeaders(headers);
+    if (body !== undefined) {
+      headers['Content-Type'] = 'application/json; charset=utf-8';
+    }
+
+    const startedAt = Date.now();
+    traceRestRequest({ method, path, url, requestId, body });
+
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method,
+        headers,
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+        signal: timeoutSignal(),
+      });
+    } catch (err) {
+      traceRestFailure({ method, path, requestId, phase: 'fetch', durationMs: Date.now() - startedAt, error: err });
+      throw new DaemonNetworkError({
+        message: `Network error calling ${method} ${path}`,
+        cause: err,
+        method,
+        path,
+        url,
+        requestId,
+        phase: 'fetch',
+        timeoutMs: REQUEST_TIMEOUT_MS,
+        timestamp: Date.now(),
+        durationMs: Date.now() - startedAt,
+      });
+    }
+
+    let json: unknown;
+    const responseForDiagnostics = response.clone();
+    try {
+      json = await response.json();
+    } catch (err) {
+      traceRestFailure({ method, path, requestId, phase: 'parse', durationMs: Date.now() - startedAt, status: response.status, error: err });
+      throw new DaemonNetworkError({
+        message: `Failed to parse JSON response from ${method} ${path}`,
+        cause: err,
+        method,
+        path,
+        url,
+        requestId,
+        phase: 'parse',
+        timeoutMs: REQUEST_TIMEOUT_MS,
+        status: response.status,
+        statusText: response.statusText,
+        contentType: response.headers.get('content-type') ?? undefined,
+        bodyPreview: await readResponsePreview(responseForDiagnostics),
+        timestamp: Date.now(),
+        durationMs: Date.now() - startedAt,
+      });
+    }
+
+    if (response.ok) {
+      traceRestResponse({
+        method,
+        path,
+        requestId,
+        status: response.status,
+        durationMs: Date.now() - startedAt,
+        code: 0,
+        msg: '',
+      });
+      return json as T;
+    }
+
+    // Flat error body: `{ ok: false, error }` with the HTTP status code.
+    const errorBody = (typeof json === 'object' && json !== null ? json : {}) as { error?: unknown };
+    this.checkAuthRequired(response, response.status);
+    const msg =
+      typeof errorBody.error === 'string' && errorBody.error.length > 0
+        ? errorBody.error
+        : response.statusText;
+    traceRestResponse({
+      method,
+      path,
+      requestId,
+      status: response.status,
+      durationMs: Date.now() - startedAt,
+      code: response.status,
+      msg,
+    });
+    throw new DaemonApiError({
+      code: response.status,
+      msg,
+      requestId,
+      timestamp: Date.now(),
+      durationMs: Date.now() - startedAt,
+    });
+  }
+
   private async request<T>(
     method: string,
     path: string,

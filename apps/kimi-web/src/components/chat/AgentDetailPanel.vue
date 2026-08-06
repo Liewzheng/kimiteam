@@ -7,15 +7,19 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
-import type { AgentMember } from '../../types';
+import type { AgentMember, FilePreviewRequest } from '../../types';
 import { formatUsage, hasUsage } from '../../lib/agentUsage';
+import { shouldRenderMarkdown } from '../../lib/messageFormatting';
 import Badge from '../ui/Badge.vue';
+import Markdown from './Markdown.vue';
 import PanelHeader from '../ui/PanelHeader.vue';
 
 const props = defineProps<{ member: AgentMember }>();
 
 const emit = defineEmits<{
   close: [];
+  /** Open a workspace file linked from a rendered markdown field (task/output). */
+  openFile: [target: FilePreviewRequest];
 }>();
 
 const { t } = useI18n();
@@ -36,6 +40,17 @@ const liveText = computed(() => (props.member.text ?? '').trimEnd());
 const usageText = computed(() =>
   props.member.usage && hasUsage(props.member.usage) ? formatUsage(props.member.usage) : null,
 );
+
+// Rendering policy for the panel's prose fields: the task prompt, live output
+// and final summary are agent-facing prose (a TeamMessage the lead sent, the
+// subagent's formatted reply) and render Markdown — bold / lists / tables /
+// code. Tool-progress lines stay a mono log. The decision lives in the tested
+// lib/messageFormatting contract; the v-else keeps a plain fallback path.
+const mdFields = {
+  task: shouldRenderMarkdown('subagent-task'),
+  output: shouldRenderMarkdown('subagent-output'),
+  result: shouldRenderMarkdown('subagent-result'),
+};
 
 interface ProgressGroup {
   key: string;
@@ -135,11 +150,17 @@ watch(
       <div v-if="member.suspendedReason" class="ap-reason">{{ member.suspendedReason }}</div>
       <div v-if="member.prompt" class="ap-field">
         <span class="ap-field-label">Task</span>
-        <div class="ap-field-body">{{ member.prompt }}</div>
+        <div v-if="mdFields.task" class="ap-field-body ap-md">
+          <Markdown :text="member.prompt" :open-file="(target) => emit('openFile', target)" />
+        </div>
+        <div v-else class="ap-field-body">{{ member.prompt }}</div>
       </div>
       <div v-if="liveText" class="ap-field">
         <span class="ap-field-label">Output</span>
-        <div class="ap-field-body ap-live">{{ liveText }}</div>
+        <div v-if="mdFields.output" class="ap-field-body ap-md">
+          <Markdown :text="liveText" :open-file="(target) => emit('openFile', target)" />
+        </div>
+        <div v-else class="ap-field-body ap-live">{{ liveText }}</div>
       </div>
       <div v-if="progressGroups.length > 0" class="ap-field">
         <span class="ap-field-label">Progress</span>
@@ -166,7 +187,10 @@ watch(
       </div>
       <div v-if="member.summary" class="ap-field">
         <span class="ap-field-label">Result</span>
-        <div class="ap-field-body">{{ member.summary }}</div>
+        <div v-if="mdFields.result" class="ap-field-body ap-md">
+          <Markdown :text="member.summary" :open-file="(target) => emit('openFile', target)" />
+        </div>
+        <div v-else class="ap-field-body">{{ member.summary }}</div>
       </div>
     </div>
   </div>
@@ -241,6 +265,13 @@ watch(
 .ap-field-body {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+/* Markdown-rendered prose field (task / live output / result). The inner
+   Markdown.vue provides its own prose styles; this wrapper only keeps wide
+   tables/code from pushing the panel's horizontal layout (they scroll inside
+   their own containers). */
+.ap-md {
+  min-width: 0;
 }
 .ap-progress {
   display: flex;

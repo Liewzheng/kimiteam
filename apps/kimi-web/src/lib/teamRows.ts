@@ -103,3 +103,22 @@ export function sortTeamMembers<T extends { name: string; status: TeamMemberStat
     return a.name.localeCompare(b.name);
   });
 }
+
+export interface TeamTabState {
+  /** Emphasize the tab while any member is working — accent, mirroring the TUI
+   *  footer's primary `[N agent working]` badge. */
+  hot: boolean;
+  /** No active session → the tab click is a no-op (guarded in App). */
+  disabled: boolean;
+}
+
+/** Derived UI state for the chat dock's team tab. Pure so the highlight /
+ *  disabled decisions are unit-testable (the component only binds the result).
+ *  `hot` also requires at least one member, so an empty roster never looks
+ *  "busy" with a phantom working count. */
+export function teamTabState(opts: { working: number; total: number; hasSession: boolean }): TeamTabState {
+  return {
+    hot: opts.working > 0 && opts.total > 0,
+    disabled: !opts.hasSession,
+  };
+}

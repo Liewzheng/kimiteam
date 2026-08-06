@@ -1,15 +1,16 @@
 <!-- apps/kimi-web/src/components/team/TeamStatusPanel.vue -->
 <!-- /team right-side panel — READ-ONLY subagent roster for the CURRENT session.
      Same data source as the TeamPanel management dialog (GET /teams/{sid}/members,
-     2.5s poll), same lib/teamRows derivations, but no management actions: this
-     phase only ships the status view. Mounted with v-if by App's shared right
-     side slot, so the poll starts on mount and stops on close automatically. -->
+     2.5s poll) and the same lib/teamRows derivations, but no management actions:
+     this phase only ships the status view.
+     The roster poll is LIFTED to App.vue (useTeamRoster) and shared with the
+     chat dock's 「团队 (working/total)」 badge, so this panel receives the roster
+     as props instead of polling on mount — one poll, no drift, no double-fetch
+     while the panel and the dock badge are both live. -->
 <script setup lang="ts">
 import { computed } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { getKimiWebApi } from '../../api';
-import type { AppTeamMember } from '../../api/types';
-import { usePolling } from '../../composables/usePolling';
+import type { AppTeamMember, AppTeamMembers } from '../../api/types';
 import {
   averageScoreLabel,
   sortTeamMembers,
@@ -24,28 +25,23 @@ import PanelHeader from '../ui/PanelHeader.vue';
 import Spinner from '../ui/Spinner.vue';
 
 const props = defineProps<{
-  /** The session whose team this panel shows (the active session). */
-  sessionId: string;
+  /** Latest roster for the active session (null until the first poll lands). */
+  members: AppTeamMembers | null;
+  /** True until the first roster fetch settles. */
+  loading: boolean;
+  /** Last fetch error message; surfaced only while nothing has loaded yet. */
+  error: string | null;
 }>();
 
 const emit = defineEmits<{ close: [] }>();
 
 const { t } = useI18n();
 
-const api = getKimiWebApi();
-
-// ---------------------------------------------------------------------------
-// Roster state + polling (shared composable, 2.5s like the TeamPanel dialog)
-// ---------------------------------------------------------------------------
-const POLL_MS = 2500;
-
-const { data, loading, error } = usePolling(() => api.getTeamMembers(props.sessionId), POLL_MS);
-
 // Dual-scope aggregation happens here, one section at a time (same as TeamPanel).
-const globalRows = computed(() => sortTeamMembers(data.value?.global ?? []));
-const projectRows = computed(() => sortTeamMembers(data.value?.project ?? []));
-const summaryGlobal = computed(() => summarizeTeam(data.value?.global ?? []));
-const summaryProject = computed(() => summarizeTeam(data.value?.project ?? []));
+const globalRows = computed(() => sortTeamMembers(props.members?.global ?? []));
+const projectRows = computed(() => sortTeamMembers(props.members?.project ?? []));
+const summaryGlobal = computed(() => summarizeTeam(props.members?.global ?? []));
+const summaryProject = computed(() => summarizeTeam(props.members?.project ?? []));
 const summary = computed(() => ({
   total: summaryGlobal.value.total + summaryProject.value.total,
   working: summaryGlobal.value.working + summaryProject.value.working,
@@ -77,7 +73,7 @@ function scoreLabel(member: AppTeamMember): string | null {
 
 // Keep last-known roster on later poll failures; surface the error only while
 // nothing has loaded yet.
-const loadFailed = computed(() => error.value !== null && data.value === null);
+const loadFailed = computed(() => props.error !== null && props.members === null);
 </script>
 
 <template>

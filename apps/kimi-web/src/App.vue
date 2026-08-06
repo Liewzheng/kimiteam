@@ -38,6 +38,7 @@ import { usePageTitle } from './composables/usePageTitle';
 import { useSidebarLayout } from './composables/useSidebarLayout';
 import { useFilePreview, type DetailTarget } from './composables/useFilePreview';
 import { useDetailPanel } from './composables/useDetailPanel';
+import { useTeamRoster } from './composables/useTeamRoster';
 import { useIsMobile } from './composables/useIsMobile';
 import { openDialogCount } from './composables/dialogStack';
 import type { SwarmMember } from './composables/swarmGroups';
@@ -317,6 +318,17 @@ const {
   closeOpenSidePanel,
 } = useDetailPanel({ client, sideWidth, detailTarget, closeFilePreview });
 
+// Lifted team-roster poll for the ACTIVE session — shared by the dock's
+// 「团队 (working/total)」 tab (summary counts) and the /team TeamStatusPanel
+// (full roster), so both always read the same snapshot with a single poll.
+const teamRoster = useTeamRoster(client.activeSessionId);
+
+/** Dock team tab / `/team` command → open the TeamStatusPanel. Session-scoped:
+ *  without an active session this is a no-op (matches the /team command). */
+function openActiveTeamPanel(): void {
+  if (client.activeSessionId.value) openTeamPanel(client.activeSessionId.value);
+}
+
 // Reference to ConversationPane so we can imperatively switch tabs
 const conversationPaneRef = ref<InstanceType<typeof ConversationPane> | null>(null);
 
@@ -582,7 +594,7 @@ function handleCommand(cmd: string): void {
       break;
     case '/team':
       // The team is session-scoped — /team without an active session is a no-op.
-      if (client.activeSessionId.value) openTeamPanel(client.activeSessionId.value);
+      openActiveTeamPanel();
       break;
     case '/usage':
       // Usage is session-scoped — /usage without an active session is a no-op.
@@ -842,10 +854,14 @@ function openPr(url: string): void {
       :session-title="activeSessionTitle"
       :pr="client.activePullRequest.value"
       :conversation-toc="client.conversationToc.value"
+      :team-working="teamRoster.summary.value.working"
+      :team-total="teamRoster.summary.value.total"
+      :team-open="teamVisible"
       @open-changes="openDiffDetail()"
       @select-workspace="handleCreateSessionInWorkspace($event)"
       @add-workspace="showAddWorkspace = true"
       @open-pr="openPr"
+      @open-team="openActiveTeamPanel"
       @submit="handleSubmit($event)"
       @steer="client.steerPrompt($event.text, $event.attachments)"
       @approval="(approvalId, response) => client.respondApproval(approvalId, response)"
@@ -941,6 +957,7 @@ function openPr(url: string): void {
       <AgentDetailPanel
         v-else-if="detailTarget === 'agent' && agentPanelMember"
         :member="agentPanelMember"
+        @open-file="openFilePreview($event)"
         @close="closeAgentPanel"
       />
       <SideChatPanel
@@ -971,7 +988,9 @@ function openPr(url: string): void {
       />
       <TeamStatusPanel
         v-else-if="detailTarget === 'team' && teamVisible"
-        :session-id="client.activeSessionId.value ?? ''"
+        :members="teamRoster.data.value"
+        :loading="teamRoster.loading.value"
+        :error="teamRoster.error.value"
         @close="closeTeamPanel"
       />
       <UsagePanel
