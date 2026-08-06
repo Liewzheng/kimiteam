@@ -716,6 +716,27 @@ export interface AppTeamMembers {
   project: AppTeamMember[];
 }
 
+/** Per-model token usage row (mirrors the TUI's TokenUsage shape). */
+export interface AppTeamTokenUsage {
+  inputOther: number;
+  output: number;
+  inputCacheRead: number;
+  inputCacheCreation: number;
+}
+
+/** GET /teams/{session_id}/usage — subagent token usage grouped by model and by
+ *  member, plus the run count. `byModel` may carry the engine-synthesized
+ *  `__secondary__` key; normalize with lib/usageRows before rendering. */
+export interface AppTeamUsage {
+  runs: number;
+  /** model_id -> token usage. */
+  byModel: Record<string, AppTeamTokenUsage>;
+  /** member name -> model_id -> token usage. */
+  byMember: Record<string, Record<string, AppTeamTokenUsage>>;
+  /** Real model id the `__secondary__` key resolves to, when present. */
+  secondaryModelId: string | null;
+}
+
 /** Mutation endpoints return an action result; `warning` carries the optional
  *  score-inflation notice from scoring. */
 export interface AppTeamActionResult {
@@ -827,6 +848,8 @@ export interface KimiWebApi {
   // active session; agent_id on messageTeamAgent is the member's name (the
   // wire roster carries no separate agent id).
   getTeamMembers(sessionId: string): Promise<AppTeamMembers>;
+  /** Subagent token usage for a session, grouped by model and by member. */
+  getTeamUsage(sessionId: string): Promise<AppTeamUsage>;
   hireTeamMember(sessionId: string, input: {
     name: string;
     role: string;

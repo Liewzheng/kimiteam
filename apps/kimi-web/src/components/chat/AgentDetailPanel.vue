@@ -8,6 +8,7 @@
 import { computed, nextTick, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import type { AgentMember } from '../../types';
+import { formatUsage, hasUsage } from '../../lib/agentUsage';
 import Badge from '../ui/Badge.vue';
 import PanelHeader from '../ui/PanelHeader.vue';
 
@@ -28,6 +29,13 @@ const progressLines = computed(() =>
 // The subagent's concatenated live output (assistant deltas). Trim trailing
 // whitespace for display; grows in real time as deltas stream in.
 const liveText = computed(() => (props.member.text ?? '').trimEnd());
+
+// Token-usage strip: formatted input/output/total when the server supplied a
+// usage aggregate with any real consumption, null otherwise (hidden entirely —
+// a queued/not-yet-run subagent shows no "0 tokens" strip).
+const usageText = computed(() =>
+  props.member.usage && hasUsage(props.member.usage) ? formatUsage(props.member.usage) : null,
+);
 
 interface ProgressGroup {
   key: string;
@@ -117,6 +125,12 @@ watch(
       <Badge variant="neutral" size="sm" class="ap-phase">{{ phaseLabel(member.phase) }}</Badge>
     </PanelHeader>
     <div ref="bodyEl" class="ap-body">
+      <div v-if="usageText" class="ap-usage">
+        <span class="ap-usage-label">Tokens</span>
+        <span class="ap-usage-item"><span class="ap-usage-k">input</span>{{ usageText.input }}</span>
+        <span class="ap-usage-item"><span class="ap-usage-k">output</span>{{ usageText.output }}</span>
+        <span class="ap-usage-item"><span class="ap-usage-k">total</span>{{ usageText.total }}</span>
+      </div>
       <div v-if="member.subagentType" class="ap-type">{{ member.subagentType }}</div>
       <div v-if="member.suspendedReason" class="ap-reason">{{ member.suspendedReason }}</div>
       <div v-if="member.prompt" class="ap-field">
@@ -184,6 +198,34 @@ watch(
 .ap-reason {
   color: var(--color-warning);
   margin-bottom: 8px;
+}
+.ap-usage {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin-bottom: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  font: var(--text-xs) var(--font-mono);
+}
+.ap-usage-label {
+  flex: none;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-muted);
+}
+.ap-usage-item {
+  flex: none;
+  min-width: 0;
+  color: var(--color-text);
+  white-space: nowrap;
+}
+.ap-usage-k {
+  color: var(--color-text-faint);
+  margin-right: 4px;
 }
 .ap-field + .ap-field {
   margin-top: 12px;

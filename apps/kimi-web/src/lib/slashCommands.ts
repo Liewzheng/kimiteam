@@ -38,6 +38,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: '/export',     desc: 'commands.export.desc' },
   { name: '/status',     desc: 'commands.status.desc' },
   { name: '/team',       desc: 'commands.team.desc' },
+  { name: '/usage',      desc: 'commands.usage.desc' },
 ];
 
 /**

@@ -19,6 +19,8 @@ import AddWorkspaceDialog from './components/dialogs/AddWorkspaceDialog.vue';
 import ConfirmDialogHost from './components/dialogs/ConfirmDialogHost.vue';
 import StatusPanel from './components/chat/StatusPanel.vue';
 import TeamPanel from './components/team/TeamPanel.vue';
+import TeamStatusPanel from './components/team/TeamStatusPanel.vue';
+import UsagePanel from './components/usage/UsagePanel.vue';
 import WarningToasts from './components/WarningToasts.vue';
 import MobileTopBar from './components/mobile/MobileTopBar.vue';
 import MobileSwitcherSheet from './components/mobile/MobileSwitcherSheet.vue';
@@ -304,6 +306,12 @@ const {
   btwVisible,
   openSideChatTab,
   closeSideChat,
+  teamVisible,
+  openTeamPanel,
+  closeTeamPanel,
+  usageVisible,
+  openUsagePanel,
+  closeUsagePanel,
   sidePanelVisible,
   panelDragging,
   closeOpenSidePanel,
@@ -574,7 +582,11 @@ function handleCommand(cmd: string): void {
       break;
     case '/team':
       // The team is session-scoped — /team without an active session is a no-op.
-      if (client.activeSessionId.value) showTeamPanel.value = true;
+      if (client.activeSessionId.value) openTeamPanel(client.activeSessionId.value);
+      break;
+    case '/usage':
+      // Usage is session-scoped — /usage without an active session is a no-op.
+      if (client.activeSessionId.value) openUsagePanel(client.activeSessionId.value);
       break;
     case '/login':
       openLogin();
@@ -956,6 +968,16 @@ function openPr(url: string): void {
         v-else-if="detailTarget === 'toolDiff' && toolDiffTarget"
         :target="toolDiffTarget"
         @close="closeToolDiff"
+      />
+      <TeamStatusPanel
+        v-else-if="detailTarget === 'team' && teamVisible"
+        :session-id="client.activeSessionId.value ?? ''"
+        @close="closeTeamPanel"
+      />
+      <UsagePanel
+        v-else-if="detailTarget === 'usage' && usageVisible"
+        :session-id="client.activeSessionId.value ?? ''"
+        @close="closeUsagePanel"
       />
       <FilePreview
         v-else-if="detailTarget === 'file'"

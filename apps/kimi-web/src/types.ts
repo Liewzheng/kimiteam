@@ -114,6 +114,16 @@ export interface ToolMedia {
 
 export type AgentPhase = 'queued' | 'working' | 'suspended' | 'completed' | 'failed';
 
+/** Token-usage summary for a subagent, aggregated server-side per member.
+ *  Mirrors the TUI usage panel's per-member row (input/output/total). `total`
+ *  may trail behind input+output while the subagent streams, so the detail
+ *  panel falls back to input+output when it is absent/zero. */
+export interface AgentUsage {
+  input: number;
+  output: number;
+  total: number;
+}
+
 export interface AgentMember {
   id: string;
   toolCallId?: string;
@@ -128,6 +138,10 @@ export interface AgentMember {
   /** The subagent's concatenated live output (assistant deltas) — grows in the
    *  detail panel like a thinking block. */
   text?: string;
+  /** Token-usage summary (input/output/total). Absent until the server ships a
+   *  usage aggregate — the detail panel's token strip is hidden when this is
+   *  missing or shows no real consumption yet. */
+  usage?: AgentUsage;
   suspendedReason?: string;
   swarmIndex?: number;
 }

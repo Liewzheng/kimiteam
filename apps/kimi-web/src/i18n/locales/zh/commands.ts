@@ -17,5 +17,6 @@ export default {
   },
   status: { desc: '查看会话状态' },
   team: { desc: '管理子代理团队' },
+  usage: { desc: '查看子代理 token 用量' },
   undo: { desc: '撤销上一条消息' },
 };

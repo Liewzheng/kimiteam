@@ -22,6 +22,7 @@ import type {
   AppTeamActionResult,
   AppTeamMember,
   AppTeamMembers,
+  AppTeamUsage,
   AppTerminal,
   AppWorkspace,
   ApprovalResponse,
@@ -53,6 +54,7 @@ import {
   toAppTask,
   toAppTeamActionResult,
   toAppTeamMember,
+  toAppTeamUsage,
   toWireApprovalResponse,
   toWirePromptSubmission,
   toWireQuestionResponse,
@@ -89,6 +91,7 @@ import type {
   WireTeamActionResult,
   WireTeamMember,
   WireTeamMembersResponse,
+  WireTeamUsageResponse,
   WireWorkspace,
   WireLogoutResult,
 } from './wire';
@@ -1312,6 +1315,13 @@ export class DaemonKimiWebApi implements KimiWebApi {
       global: (data.global ?? []).map(toAppTeamMember),
       project: (data.project ?? []).map(toAppTeamMember),
     };
+  }
+
+  async getTeamUsage(sessionId: string): Promise<AppTeamUsage> {
+    const data = await this.http.get<WireTeamUsageResponse>(
+      `/teams/${encodeURIComponent(sessionId)}/usage`,
+    );
+    return toAppTeamUsage(data);
   }
 
   async hireTeamMember(

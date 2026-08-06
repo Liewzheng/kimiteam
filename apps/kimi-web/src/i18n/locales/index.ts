@@ -59,6 +59,8 @@ import en_sideChat from './en/sideChat';
 import zh_sideChat from './zh/sideChat';
 import en_team from './en/team';
 import zh_team from './zh/team';
+import en_usage from './en/usage';
+import zh_usage from './zh/usage';
 
 export const messages = {
   en: {
@@ -92,6 +94,7 @@ export const messages = {
     header: en_header,
     sideChat: en_sideChat,
     team: en_team,
+    usage: en_usage,
   },
   zh: {
     common: zh_common,
@@ -124,6 +127,7 @@ export const messages = {
     header: zh_header,
     sideChat: zh_sideChat,
     team: zh_team,
+    usage: zh_usage,
   },
 } as const;
 

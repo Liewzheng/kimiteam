@@ -269,6 +269,52 @@ export function useDetailPanel({
 
   const btwVisible = computed(() => client.sideChatVisible.value);
 
+  // ---------------------------------------------------------------------------
+  // Team status panel (/team) — read-only roster in the shared right-side slot.
+  // Session-scoped like btw: the target remembers the session it was opened on
+  // (used for toggle-close and the per-session snapshot); the panel itself
+  // re-reads the active session id, so a restored snapshot re-mounts on the
+  // session it belongs to.
+  // ---------------------------------------------------------------------------
+  const teamTarget = ref<{ sessionId: string } | null>(null);
+
+  const teamVisible = computed(() => teamTarget.value !== null);
+
+  function openTeamPanel(sessionId: string): void {
+    if (detailTarget.value === 'team' && teamTarget.value?.sessionId === sessionId) {
+      closeTeamPanel();
+      return;
+    }
+    teamTarget.value = { sessionId };
+    detailTarget.value = 'team';
+  }
+
+  function closeTeamPanel(): void {
+    teamTarget.value = null;
+    if (detailTarget.value === 'team') detailTarget.value = null;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Usage panel (/usage) — same session-scoped, toggle-close semantics as team.
+  // ---------------------------------------------------------------------------
+  const usageTarget = ref<{ sessionId: string } | null>(null);
+
+  const usageVisible = computed(() => usageTarget.value !== null);
+
+  function openUsagePanel(sessionId: string): void {
+    if (detailTarget.value === 'usage' && usageTarget.value?.sessionId === sessionId) {
+      closeUsagePanel();
+      return;
+    }
+    usageTarget.value = { sessionId };
+    detailTarget.value = 'usage';
+  }
+
+  function closeUsagePanel(): void {
+    usageTarget.value = null;
+    if (detailTarget.value === 'usage') detailTarget.value = null;
+  }
+
   /** Any occupant of the shared right-side slot. */
   const sidePanelVisible = computed(
     () =>
@@ -277,7 +323,9 @@ export function useDetailPanel({
       (detailTarget.value !== 'compaction' || compactionPanelVisible.value) &&
       (detailTarget.value !== 'agent' || agentPanelVisible.value) &&
       (detailTarget.value !== 'toolDiff' || toolDiffVisible.value) &&
-      (detailTarget.value !== 'btw' || btwVisible.value),
+      (detailTarget.value !== 'btw' || btwVisible.value) &&
+      (detailTarget.value !== 'team' || teamVisible.value) &&
+      (detailTarget.value !== 'usage' || usageVisible.value),
   );
 
   /** True while the panel's resize handle is being dragged — the width
@@ -300,7 +348,9 @@ export function useDetailPanel({
     | { kind: 'compaction'; turnId: string }
     | { kind: 'agent'; subagentId: string }
     | { kind: 'toolDiff'; toolId: string }
-    | { kind: 'btw' };
+    | { kind: 'btw' }
+    | { kind: 'team'; sessionId: string }
+    | { kind: 'usage'; sessionId: string };
 
   const snapshotBySession = ref<Record<string, PanelSnapshot>>({});
 
@@ -316,6 +366,10 @@ export function useDetailPanel({
         return toolDiffToolId.value ? { kind: 'toolDiff', toolId: toolDiffToolId.value } : null;
       case 'btw':
         return { kind: 'btw' };
+      case 'team':
+        return teamTarget.value ? { kind: 'team', ...teamTarget.value } : null;
+      case 'usage':
+        return usageTarget.value ? { kind: 'usage', ...usageTarget.value } : null;
       default:
         return null;
     }
@@ -345,6 +399,14 @@ export function useDetailPanel({
         // the snapshot can outlive it if the user closed the side chat explicitly.
         if (client.sideChatVisible.value) detailTarget.value = 'btw';
         break;
+      case 'team':
+        teamTarget.value = { sessionId: snap.sessionId };
+        detailTarget.value = 'team';
+        break;
+      case 'usage':
+        usageTarget.value = { sessionId: snap.sessionId };
+        detailTarget.value = 'usage';
+        break;
     }
   }
 
@@ -357,6 +419,8 @@ export function useDetailPanel({
     if (detailTarget.value === 'file') { closeFilePreview(); return true; }
     if (detailTarget.value === 'diff') { closeDiffDetail(); return true; }
     if (detailTarget.value === 'btw') { closeSideChat(); return true; }
+    if (detailTarget.value === 'team') { closeTeamPanel(); return true; }
+    if (detailTarget.value === 'usage') { closeUsagePanel(); return true; }
     return false;
   }
 
@@ -376,6 +440,8 @@ export function useDetailPanel({
     closeToolDiff();
     closeDiffDetail();
     hideSideChatPanel();
+    closeTeamPanel();
+    closeUsagePanel();
     // Restore the entering session's panel, if it had one.
     if (newId) {
       restoreSnapshot(snapshotBySession.value[newId]);
@@ -414,6 +480,12 @@ export function useDetailPanel({
     openSideChatTab,
     closeSideChat,
     hideSideChatPanel,
+    teamVisible,
+    openTeamPanel,
+    closeTeamPanel,
+    usageVisible,
+    openUsagePanel,
+    closeUsagePanel,
     sidePanelVisible,
     panelDragging,
     closeOpenSidePanel,

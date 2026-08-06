@@ -11,6 +11,8 @@ import type {
   AppProvider,
   AppTeamActionResult,
   AppTeamMember,
+  AppTeamTokenUsage,
+  AppTeamUsage,
   FsEntry,
   AppMessage,
   AppMessageContent,
@@ -50,6 +52,8 @@ import type {
   WireSessionUsage,
   WireTeamActionResult,
   WireTeamMember,
+  WireTeamTokenUsage,
+  WireTeamUsageResponse,
   WireWorkspace,
   WireEvent,
   WireConfig,
@@ -820,4 +824,36 @@ export function toAppTeamMember(wire: WireTeamMember): AppTeamMember {
 
 export function toAppTeamActionResult(wire: WireTeamActionResult): AppTeamActionResult {
   return { ok: wire.ok !== false, warning: wire.warning };
+}
+
+function toAppTeamTokenUsage(wire: WireTeamTokenUsage): AppTeamTokenUsage {
+  return {
+    inputOther: wire.input_other ?? 0,
+    output: wire.output ?? 0,
+    inputCacheRead: wire.input_cache_read ?? 0,
+    inputCacheCreation: wire.input_cache_creation ?? 0,
+  };
+}
+
+/** Map a wire usage response to the app shape. `__secondary__` model keys are
+ *  kept verbatim here — lib/usageRows resolves them to the real model id. */
+export function toAppTeamUsage(wire: WireTeamUsageResponse): AppTeamUsage {
+  const byModel: Record<string, AppTeamTokenUsage> = {};
+  for (const [model, row] of Object.entries(wire.by_model ?? {})) {
+    byModel[model] = toAppTeamTokenUsage(row);
+  }
+  const byMember: Record<string, Record<string, AppTeamTokenUsage>> = {};
+  for (const [name, bucket] of Object.entries(wire.by_member ?? {})) {
+    const mapped: Record<string, AppTeamTokenUsage> = {};
+    for (const [model, row] of Object.entries(bucket)) {
+      mapped[model] = toAppTeamTokenUsage(row);
+    }
+    byMember[name] = mapped;
+  }
+  return {
+    runs: wire.runs ?? 0,
+    byModel,
+    byMember,
+    secondaryModelId: wire.secondary_model_id ?? null,
+  };
 }

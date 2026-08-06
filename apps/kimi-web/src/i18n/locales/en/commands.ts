@@ -17,5 +17,6 @@ export default {
   },
   status: { desc: 'View session status' },
   team: { desc: 'Manage the subagent team' },
+  usage: { desc: 'View subagent token usage' },
   undo: { desc: 'Undo the last message' },
 } as const;

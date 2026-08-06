@@ -464,6 +464,32 @@ export interface WireTeamMembersResponse {
   project: WireTeamMember[];
 }
 
+/** Per-model token usage row (mirrors the TUI's TokenUsage shape — the engine
+ *  reports input cache read/creation separately from plain input). */
+export interface WireTeamTokenUsage {
+  input_other: number;
+  output: number;
+  input_cache_read: number;
+  input_cache_creation: number;
+}
+
+/** GET /teams/{session_id}/usage — subagent token usage grouped by model and by
+ *  member, plus the run count. Mirrors the TUI's SubAgentUsage contract
+ *  (apps/kimi-code/src/tui/types.ts). The engine records every subagent bound to
+ *  the `[secondary_model]` recipe under the synthesized `__secondary__` model
+ *  key; `secondary_model_id` carries the real model id to resolve it to (the
+ *  web normalizes this in lib/usageRows.ts before rendering). */
+export interface WireTeamUsageResponse {
+  runs: number;
+  /** model_id -> token usage. */
+  by_model: Record<string, WireTeamTokenUsage>;
+  /** member name -> model_id -> token usage. */
+  by_member: Record<string, Record<string, WireTeamTokenUsage>>;
+  /** Real model id for the `__secondary__` key, when the engine used the
+   *  derived alias. Absent / null when the server already normalized. */
+  secondary_model_id?: string | null;
+}
+
 /** Mutation endpoints return an action result. `ok` may be absent on success
  *  envelopes; `warning` carries the optional score-inflation notice. */
 export interface WireTeamActionResult {
