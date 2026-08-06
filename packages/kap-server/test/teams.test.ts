@@ -22,8 +22,10 @@ import {
   IAgentUsageService,
   IBootstrapOptions,
   IConfigService,
+  IModelCatalog,
   IRuntimeStatusService,
   resolveBootstrapOptions,
+  type ModelRequester,
 } from '@moonshot-ai/agent-core-v2';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -646,5 +648,294 @@ describe('server-v2 /api/v1/teams/{session_id}', () => {
     expect(reviewer?.usage).toEqual({ input: 30, output: 20, total: 50 });
     // Members without live usage still expose the field (zeroed).
     expect(reviewer?.usage).toBeDefined();
+  });
+
+  it('surfaces the actual invoked model for a member with live usage, else the model_preference', async () => {
+    const id = await createSession();
+    // One member with a preference, one without.
+    await teamFetch(`/api/v1/teams/${id}/members`, {
+      method: 'POST',
+      body: { name: 'with-pref', description: 'd', prompt: 'p', model: 'secondary' },
+    });
+    await teamFetch(`/api/v1/teams/${id}/members`, {
+      method: 'POST',
+      body: { name: 'no-pref', description: 'd', prompt: 'p' },
+    });
+
+    // `with-pref` actually ran on a concrete model — the roster must show the
+    // real alias, not the `secondary` preference.
+    const live = getLiveSessionById(server!.core.accessor, id);
+    expect(live).toBeDefined();
+    const sub = await live!.accessor.get(IAgentLifecycleService).create({ agentId: 'sub-model-actual' });
+    sub.accessor.get(IAgentProfileService).update({ profileName: 'with-pref' });
+    sub.accessor.get(IAgentUsageService).record('provider/real-model', {
+      inputOther: 50,
+      output: 25,
+      inputCacheRead: 0,
+      inputCacheCreation: 0,
+    });
+
+    const members = allMembers((await teamFetch(`/api/v1/teams/${id}/members`)).body);
+    const withPref = members.find((m) => m.name === 'with-pref');
+    const noPref = members.find((m) => m.name === 'no-pref');
+    // Actual invoked model wins over the configured preference.
+    expect(withPref?.model).toBe('provider/real-model');
+    expect(withPref?.usage).toEqual({ input: 50, output: 25, total: 75 });
+    // No usage and no preference → no model surfaced.
+    expect(noPref?.model).toBeUndefined();
+  });
+});
+
+describe('server-v2 /api/v1/teams/{session_id}/members/{name}:polish', () => {
+  let server: RunningServer | undefined;
+  let home: string | undefined;
+  let base: string;
+  /** Model output the stub catalog yields; undefined → yield only `finish`. */
+  let stubText: string | undefined;
+  /** Error the stub catalog throws mid-request, when set. */
+  let stubError: Error | undefined;
+  /** Model ids the stub requester was asked to generate with. */
+  const requestedModels: string[] = [];
+
+  /** Stub `IModelCatalog` — the polish route only touches `getRequester`. */
+  function makeStubCatalog(): IModelCatalog {
+    return {
+      _serviceBrand: undefined,
+      get: () => {
+        throw new Error('catalog.get not exercised in polish tests');
+      },
+      getRequester: (id: string): ModelRequester => {
+        requestedModels.push(id);
+        const text = stubText;
+        const error = stubError;
+        return {
+          model: undefined as never,
+          request: async function* () {
+            if (error !== undefined) throw error;
+            if (text !== undefined) {
+              yield { type: 'part', part: { type: 'text', text } };
+            }
+            yield { type: 'finish', message: { role: 'assistant', content: [], toolCalls: [] } };
+          },
+          uploadVideo: undefined,
+        } as unknown as ModelRequester;
+      },
+      inspect: () => {
+        throw new Error('catalog.inspect not exercised in polish tests');
+      },
+      ping: async () => {
+        throw new Error('catalog.ping not exercised in polish tests');
+      },
+      findByName: () => [],
+      listModels: async () => [],
+      listProviders: async () => [],
+      getProvider: async () => {
+        throw new Error('catalog.getProvider not exercised in polish tests');
+      },
+      setDefaultModel: async () => {
+        throw new Error('catalog.setDefaultModel not exercised in polish tests');
+      },
+    };
+  }
+
+  beforeEach(async () => {
+    home = await mkdtemp(join(tmpdir(), 'kimi-server-v2-teams-polish-'));
+    stubText = undefined;
+    stubError = undefined;
+    requestedModels.length = 0;
+    server = await startServer({
+      hostIdentity: TEST_HOST_IDENTITY,
+      host: '127.0.0.1',
+      port: 0,
+      homeDir: home,
+      logLevel: 'silent',
+      seeds: [
+        // Isolate the file roster from the developer's real ~/.kimi-code/agents.
+        [
+          IBootstrapOptions,
+          resolveBootstrapOptions({
+            clientIdentity: TEST_HOST_IDENTITY,
+            homeDir: home,
+            osHomeDir: home,
+          }),
+        ],
+        [IModelCatalog, makeStubCatalog()],
+      ],
+    });
+    base = `http://127.0.0.1:${server.port}`;
+  });
+
+  afterEach(async () => {
+    if (server !== undefined) {
+      await server.close();
+      server = undefined;
+    }
+    if (home !== undefined) {
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        try {
+          await rm(home, { recursive: true, force: true });
+          break;
+        } catch {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+      }
+      home = undefined;
+    }
+  });
+
+  async function createSession(): Promise<string> {
+    await mkdir(join(home as string, 'project'), { recursive: true });
+    const res = await fetch(`${base}/api/v1/sessions`, {
+      method: 'POST',
+      headers: authHeaders(server as RunningServer, { 'content-type': 'application/json' }),
+      body: JSON.stringify({ metadata: { cwd: join(home as string, 'project') } }),
+    } as never);
+    const body = (await res.json()) as { code: number; data: { id: string } };
+    expect(body.code).toBe(0);
+    return body.data.id;
+  }
+
+  async function hireMember(id: string, name: string, extra: Record<string, unknown> = {}): Promise<void> {
+    const res = await teamFetch(`/api/v1/teams/${id}/members`, {
+      method: 'POST',
+      body: { name, description: 'd', prompt: 'You review code.', ...extra },
+    });
+    expect(res.status).toBe(200);
+  }
+
+  async function teamFetch(
+    path: string,
+    init: { method?: string; body?: unknown } = {},
+  ): Promise<{ status: number; body: OkBody }> {
+    const headers: Record<string, string> = authHeaders(server as RunningServer);
+    if (init.body !== undefined) headers['content-type'] = 'application/json';
+    const res = await fetch(`${base}${path}`, {
+      method: init.method ?? 'GET',
+      headers,
+      body: init.body === undefined ? undefined : JSON.stringify(init.body),
+    } as never);
+    return { status: res.status, body: (await res.json()) as OkBody };
+  }
+
+  /** All members across both scopes, for status/archive lookups. */
+  function allMembers(body: unknown): MemberWire[] {
+    const m = body as MembersBody;
+    return [...m.global, ...m.project];
+  }
+
+  it('polishes a member prompt via the secondary model and returns { ok, polished } without writing the file', async () => {
+    stubText = 'polished: You review code carefully, focusing on correctness.';
+    const id = await createSession();
+    await hireMember(id, 'polisher', { model: 'secondary' });
+    await server!.core.accessor
+      .get(IConfigService)
+      .set('secondaryModel', { model: 'provider/secondary' }, ConfigTarget.Memory);
+
+    // Empty body — generate from the member file prompt.
+    const { status, body } = await teamFetch(`/api/v1/teams/${id}/members/polisher:polish`, {
+      method: 'POST',
+      body: {},
+    });
+    expect(status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(body['polished']).toBe('polished: You review code carefully, focusing on correctness.');
+    // The `secondary` preference resolved to the configured real model.
+    expect(requestedModels).toEqual(['provider/secondary']);
+
+    // Generate-only: the member file is untouched.
+    const members = allMembers((await teamFetch(`/api/v1/teams/${id}/members`)).body);
+    expect(members.find((m) => m.name === 'polisher')?.prompt).toBe('You review code.');
+  });
+
+  it('polishes an explicit { prompt } body override', async () => {
+    stubText = 'polished override';
+    const id = await createSession();
+    await hireMember(id, 'overrider', { model: 'secondary' });
+    await server!.core.accessor
+      .get(IConfigService)
+      .set('secondaryModel', { model: 'provider/secondary' }, ConfigTarget.Memory);
+
+    const { status, body } = await teamFetch(`/api/v1/teams/${id}/members/overrider:polish`, {
+      method: 'POST',
+      body: { prompt: 'Draft prompt.' },
+    });
+    expect(status).toBe(200);
+    expect(body['polished']).toBe('polished override');
+    expect(requestedModels).toEqual(['provider/secondary']);
+  });
+
+  it('polishes with the actual invoked model when the member has live usage', async () => {
+    stubText = 'polished with actual model';
+    const id = await createSession();
+    await hireMember(id, 'actual-runner', { model: 'secondary' });
+    // The member actually ran on a concrete model — usage takes precedence over
+    // the `secondary` preference when choosing the polish model.
+    const live = getLiveSessionById(server!.core.accessor, id);
+    expect(live).toBeDefined();
+    const sub = await live!.accessor.get(IAgentLifecycleService).create({ agentId: 'sub-polish-actual' });
+    sub.accessor.get(IAgentProfileService).update({ profileName: 'actual-runner' });
+    sub.accessor.get(IAgentUsageService).record('provider/real-model', {
+      inputOther: 40,
+      output: 10,
+      inputCacheRead: 0,
+      inputCacheCreation: 0,
+    });
+
+    const { status, body } = await teamFetch(`/api/v1/teams/${id}/members/actual-runner:polish`, {
+      method: 'POST',
+    });
+    expect(status).toBe(200);
+    expect(body['polished']).toBe('polished with actual model');
+    expect(requestedModels).toEqual(['provider/real-model']);
+  });
+
+  it('404s a polish for a missing member', async () => {
+    const id = await createSession();
+    const { status, body } = await teamFetch(`/api/v1/teams/${id}/members/nope:polish`, {
+      method: 'POST',
+      body: {},
+    });
+    expect(status).toBe(404);
+    expect(body.ok).toBe(false);
+    expect(body['error']).toContain('not found');
+  });
+
+  it('400s an unsupported action suffix', async () => {
+    const id = await createSession();
+    await hireMember(id, 'polisher', { model: 'secondary' });
+    const { status, body } = await teamFetch(`/api/v1/teams/${id}/members/polisher:foobar`, {
+      method: 'POST',
+      body: {},
+    });
+    expect(status).toBe(400);
+    expect(body.ok).toBe(false);
+  });
+
+  it('400s when no model can be resolved for a member without usage or preference', async () => {
+    const id = await createSession();
+    await hireMember(id, 'no-model');
+    const { status, body } = await teamFetch(`/api/v1/teams/${id}/members/no-model:polish`, {
+      method: 'POST',
+      body: {},
+    });
+    expect(status).toBe(400);
+    expect(body.ok).toBe(false);
+  });
+
+  it('returns 500 when the model request fails', async () => {
+    stubError = new Error('provider down');
+    const id = await createSession();
+    await hireMember(id, 'polisher', { model: 'secondary' });
+    await server!.core.accessor
+      .get(IConfigService)
+      .set('secondaryModel', { model: 'provider/secondary' }, ConfigTarget.Memory);
+
+    const { status, body } = await teamFetch(`/api/v1/teams/${id}/members/polisher:polish`, {
+      method: 'POST',
+      body: {},
+    });
+    expect(status).toBe(500);
+    expect(body.ok).toBe(false);
+    expect(body['error']).toContain('provider down');
   });
 });

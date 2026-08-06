@@ -11,6 +11,7 @@
  *   DELETE /teams/{session_id}/members/{name}                   data: { ok }
  *   PUT    /teams/{session_id}/members/{name}                   body: patch     data: { ok, member }
  *   POST   /teams/{session_id}/members/{name}/score             body: score     data: { ok, warning? }
+ *   POST   /teams/{session_id}/members/{name}:polish            body: (empty|{prompt?})  data: { ok, polished }
  *   POST   /teams/{session_id}/agents/{agent_id}/message        body: message   data: { ok }
  *   POST   /teams/{session_id}/concurrency                      body: limit?    data: { ok }
  *
@@ -46,6 +47,7 @@ import {
   IBootstrapService,
   IConfigService,
   IHostFileSystem,
+  IModelCatalog,
   IRuntimeStatusService,
   ISessionContext,
   ISessionIndex,
@@ -71,6 +73,7 @@ import { join } from 'node:path';
 import { z } from 'zod';
 
 import { defineRoute } from '../middleware/defineRoute';
+import { parseActionSuffix } from './action-suffix';
 
 // ---------------------------------------------------------------------------
 // Params / body schemas
@@ -84,6 +87,12 @@ const memberNameParamSchema = z.object({
 const agentIdParamSchema = z.object({
   session_id: z.string().min(1),
   agent_id: z.string().min(1),
+});
+
+/** `{name}:polish` tail (Fastify cannot disambiguate the `:action` suffix). */
+const memberPolishParamSchema = z.object({
+  session_id: z.string().min(1),
+  tail: z.string().min(1),
 });
 
 const hireBodySchema = z.object({
@@ -127,6 +136,13 @@ const messageBodySchema = z.object({
 const concurrencyBodySchema = z.object({
   limit: z.number().int().min(0).optional(),
 });
+
+/** Polish body is optional — empty generates from the member file, `{prompt?}` overrides it. */
+const polishBodySchema = z
+  .object({
+    prompt: z.string().min(1).optional(),
+  })
+  .optional();
 
 // ---------------------------------------------------------------------------
 // Flat response schemas (documented in OpenAPI, not envelope-wrapped)
@@ -213,6 +229,14 @@ const okWarningResponseSchema = {
   properties: {
     ok: { type: 'boolean', const: true },
     warning: { type: 'string' },
+  },
+} as const;
+
+const okPolishedResponseSchema = {
+  type: 'object',
+  properties: {
+    ok: { type: 'boolean', const: true },
+    polished: { type: 'string' },
   },
 } as const;
 
@@ -321,13 +345,25 @@ function memberStatus(entry: RuntimeStatusEntry | undefined, now: number = Date.
   return 'on-duty';
 }
 
+/**
+ * Per-member usage shape for the roster: the aggregated total (the `usage`
+ * field) plus the per-model breakdown used to surface the member's actual
+ * invoked model alias.
+ */
+interface MemberUsageWire {
+  /** 该成员按模型合计（members 列表 usage 字段，输入/输出/总）。 */
+  total: TokenUsageWire;
+  /** 该成员按模型明细（modelAlias → wire），用于显示实际调用模型。 */
+  byModel: Record<string, TokenUsageWire>;
+}
+
 async function buildMemberWire(
   hostFs: IHostFileSystem,
   perf: IAgentPerformanceService,
   statuses: RuntimeStatusRaw,
   roots: readonly string[],
   name: string,
-  usage?: TokenUsageWire,
+  usage?: MemberUsageWire,
 ): Promise<TeamMemberWire | undefined> {
   const def = await readMemberDef(hostFs, roots, name);
   if (def === undefined) return undefined;
@@ -339,14 +375,15 @@ async function buildMemberWire(
     role: def.role,
     description: def.description,
     when_to_use: def.whenToUse,
-    model: def.modelPreference,
+    // 实际调用模型优先：usage 桶内用量最大的真实 modelAlias；无调用回退配置偏好。
+    model: dominantModel(usage?.byModel) ?? def.modelPreference,
     prompt: def.prompt,
     tools: def.tools === undefined ? [] : [...def.tools],
     skills: def.skills === undefined ? undefined : [...def.skills],
     duty: def.duty,
     status,
     score: { average: summary.average ?? null, count: summary.count },
-    usage: usage ?? { input: 0, output: 0, total: 0 },
+    usage: usage?.total ?? { input: 0, output: 0, total: 0 },
   };
 }
 
@@ -370,7 +407,7 @@ async function listMembersInScope(
   perf: IAgentPerformanceService,
   statuses: RuntimeStatusRaw,
   roots: readonly string[],
-  usageByMember?: Record<string, TokenUsageWire>,
+  usageByMember?: Record<string, MemberUsageWire>,
 ): Promise<TeamMemberWire[]> {
   const members: TeamMemberWire[] = [];
   for (const name of await listMemberNames(hostFs, roots)) {
@@ -626,14 +663,94 @@ function normalizeDerivedSecondary(
   return { byModel: rename(aggregate.byModel), byMember, runs: aggregate.runs };
 }
 
-/** Per-profile total token usage, for the members list `usage` field. */
-function memberUsageWire(aggregate: SubagentUsageAggregate): Record<string, TokenUsageWire> {
-  const out: Record<string, TokenUsageWire> = {};
+/** The model alias with the largest usage total in a bucket, if any. */
+function dominantModel(byModel: Record<string, TokenUsageWire> | undefined): string | undefined {
+  if (byModel === undefined) return undefined;
+  let best: string | undefined;
+  let bestTotal = -1;
+  for (const [model, row] of Object.entries(byModel)) {
+    if (row.total > bestTotal) {
+      best = model;
+      bestTotal = row.total;
+    }
+  }
+  return best;
+}
+
+/**
+ * Per-profile usage for the members list: the aggregated total (the `usage`
+ * field) plus the per-model breakdown, so the roster can surface the actual
+ * invoked model alias alongside the configured preference.
+ */
+function memberUsageWire(aggregate: SubagentUsageAggregate): Record<string, MemberUsageWire> {
+  const out: Record<string, MemberUsageWire> = {};
   for (const [memberName, bucket] of Object.entries(aggregate.byMember)) {
+    const byModel: Record<string, TokenUsageWire> = {};
+    for (const [model, usage] of Object.entries(bucket)) {
+      byModel[model] = toTokenUsageWire(usage);
+    }
     const total = Object.values(bucket).reduce((acc, usage) => addUsage(acc, usage), emptyUsage());
-    out[memberName] = toTokenUsageWire(total);
+    out[memberName] = { total: toTokenUsageWire(total), byModel };
   }
   return out;
+}
+
+/**
+ * Model to use for a member prompt-polish generation: the member's actual
+ * invoked model (largest-usage alias in the live usage bucket) when it has
+ * called a model, else its `model_preference` resolved to a concrete id
+ * (`secondary` recipe → the configured `[secondary_model].model`; `primary` →
+ * the main agent's model). `undefined` when neither can be resolved — the
+ * caller rejects the request.
+ */
+function resolvePolishModel(
+  core: Scope,
+  lifecycle: IAgentLifecycleService,
+  preference: string | undefined,
+  usageByModel: Record<string, TokenUsageWire> | undefined,
+): string | undefined {
+  const actual = dominantModel(usageByModel);
+  if (actual !== undefined) return actual;
+  if (preference === 'secondary') return resolveSecondaryModelId(core);
+  if (preference === 'primary') {
+    return lifecycle.get(MAIN_AGENT_ID)?.accessor.get(IAgentProfileService).data().modelAlias;
+  }
+  return preference;
+}
+
+/**
+ * One-shot LLM generation of a polished member prompt. Calls the model catalog
+ * requester directly with an empty tool set and a single user message — the
+ * same channel `subagentWarmService.warm` (agent-core-v2
+ * `src/session/subagent/subagentWarmService.ts:192`) and the catalog `ping`
+ * (`src/kosong/model/catalogService.ts:200`) use for detached generation.
+ * Because the request never enters an agent loop, nothing is recorded: no
+ * `IAgentUsageService.record`, no wire/transcript ops, no context mutation.
+ */
+async function polishMemberPrompt(modelCatalog: IModelCatalog, model: string, prompt: string): Promise<string> {
+  const systemPrompt =
+    'You are a prompt-engineering assistant. Rewrite the given subagent system prompt to be clearer, ' +
+    'more specific, and better structured while preserving its intent, tools, and constraints. ' +
+    'Return only the rewritten prompt text, with no commentary or markdown fences.';
+  let text = '';
+  for await (const event of modelCatalog.getRequester(model).request(
+    {
+      systemPrompt,
+      tools: [],
+      messages: [{ role: 'user', content: [{ type: 'text', text: prompt }], toolCalls: [] }],
+    },
+    undefined,
+    { maxCompletionTokens: 2048, thinkingEffort: 'off' },
+  )) {
+    if (event.type === 'part' && event.part.type === 'text') {
+      text += event.part.text;
+    } else if (event.type === 'finish') {
+      break;
+    }
+  }
+  const polished = text.trim();
+  if (polished.length === 0) throw new Error('model returned an empty polish');
+  return polished;
 }
 
 function errorMessage(error: unknown): string {
@@ -693,9 +810,13 @@ export function registerTeamsRoutes(app: TeamsRouteHost, core: Scope): void {
       const hostFs = core.accessor.get(IHostFileSystem);
       const perf = core.accessor.get(IAgentPerformanceService);
       const statuses = await core.accessor.get(IRuntimeStatusService).list();
-      const usageByMember = memberUsageWire(
+      // Normalize the derived `__secondary__` alias so the surfaced actual
+      // model ids are real aliases (same projection the usage route uses).
+      const aggregate = normalizeDerivedSecondary(
         collectSubagentUsage(session.accessor.get(IAgentLifecycleService)),
+        resolveSecondaryModelId(core),
       );
+      const usageByMember = memberUsageWire(aggregate);
       const globalRoots = memberRoots(core, sessionCwd, 'global');
       const projectRoots = memberRoots(core, sessionCwd, 'project');
       const global = await listMembersInScope(hostFs, perf, statuses, globalRoots, usageByMember);
@@ -717,7 +838,7 @@ export function registerTeamsRoutes(app: TeamsRouteHost, core: Scope): void {
           tools: [],
           status: 'off-duty',
           score: { average: entry.summary.average ?? null, count: entry.summary.count },
-          usage: usageByMember[entry.profileName] ?? { input: 0, output: 0, total: 0 },
+          usage: usageByMember[entry.profileName]?.total ?? { input: 0, output: 0, total: 0 },
         });
       }
       reply.send({ team_mode: teamMode(core), global, project });
@@ -1032,4 +1153,81 @@ export function registerTeamsRoutes(app: TeamsRouteHost, core: Scope): void {
     },
   );
   app.get(usageRoute.path, usageRoute.options, usageRoute.handler as never);
+
+  // POST /teams/{session_id}/members/{name}:polish ------------------
+  // One-shot LLM generation of a polished member prompt. Registers on the
+  // `{tail}` catch-all (Fastify cannot disambiguate `:name` from
+  // `:name:polish`); the OpenAPI transform projects it to the documented
+  // `/teams/{session_id}/members/{name}:polish`. Never writes the member
+  // file — the Web panel confirms before the existing PUT persists.
+  const polishRoute = defineRoute(
+    {
+      method: 'POST',
+      path: '/teams/{session_id}/members/{tail}',
+      params: memberPolishParamSchema,
+      body: polishBodySchema,
+      rawResponse: { 200: okPolishedResponseSchema, 400: errorResponseSchema, 404: errorResponseSchema, 500: errorResponseSchema },
+      description: 'Generate a polished rewrite of a member prompt without writing it back',
+      tags: ['teams'],
+    },
+    async (req, reply) => {
+      const { session_id, tail } = req.params as { session_id: string; tail: string };
+      const parsed = parseActionSuffix({
+        tail,
+        allowedActions: ['polish'] as const,
+        resourceLabel: 'member',
+      });
+      if (parsed.kind !== 'action') {
+        const message = parsed.kind === 'invalid' ? parsed.reason : `unsupported action: ${tail}`;
+        sendError(reply as unknown as FlatReply, 400, message);
+        return;
+      }
+      const name = parsed.id;
+      const session = getLiveSessionById(core.accessor, session_id);
+      if (session === undefined) {
+        sendError(reply as unknown as FlatReply, 404, `session ${session_id} not found`);
+        return;
+      }
+      const sessionCwd = session.accessor.get(ISessionContext).cwd;
+      const hostFs = core.accessor.get(IHostFileSystem);
+      // Same read path as the members roster: project root first, then global.
+      const roots = [
+        ...memberRoots(core, sessionCwd, 'project'),
+        ...memberRoots(core, sessionCwd, 'global'),
+      ];
+      const def = await readMemberDef(hostFs, roots, name);
+      if (def === undefined) {
+        sendError(reply as unknown as FlatReply, 404, `member ${name} not found`);
+        return;
+      }
+      const body = req.body as { prompt?: string } | undefined;
+      const sourcePrompt = body?.prompt ?? def.prompt;
+      if (sourcePrompt.trim().length === 0) {
+        sendError(reply as unknown as FlatReply, 400, `member ${name} has an empty prompt`);
+        return;
+      }
+      const lifecycle = session.accessor.get(IAgentLifecycleService);
+      const aggregate = normalizeDerivedSecondary(
+        collectSubagentUsage(lifecycle),
+        resolveSecondaryModelId(core),
+      );
+      const usageByModel = memberUsageWire(aggregate)[name]?.byModel;
+      const model = resolvePolishModel(core, lifecycle, def.modelPreference, usageByModel);
+      if (model === undefined) {
+        sendError(
+          reply as unknown as FlatReply,
+          400,
+          `no model to polish member ${name} — set a model_preference or use the member first`,
+        );
+        return;
+      }
+      try {
+        const polished = await polishMemberPrompt(core.accessor.get(IModelCatalog), model, sourcePrompt);
+        reply.send({ ok: true, polished });
+      } catch (err) {
+        sendError(reply as unknown as FlatReply, 500, err instanceof Error ? err.message : String(err));
+      }
+    },
+  );
+  app.post(polishRoute.path, polishRoute.options, polishRoute.handler as never);
 }

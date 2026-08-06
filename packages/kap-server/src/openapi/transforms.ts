@@ -125,6 +125,7 @@ export function transformOpenApiDocument(
   patchFileDownload(paths);
   patchSessionExport(paths);
   patchSessionAction(paths);
+  patchTeamMemberPolish(paths);
   patchFsAction(paths);
   patchFsDownload(paths);
   patchQuestionResolveOrDismiss(paths);
@@ -206,6 +207,32 @@ function patchSessionAction(paths: Record<string, unknown>): void {
     });
   }
   paths['/api/v1/sessions/{session_id}:archive'] = cloned;
+  delete paths[internalPath];
+}
+
+function patchTeamMemberPolish(paths: Record<string, unknown>): void {
+  const internalPath = '/api/v1/teams/{session_id}/members/{tail}';
+  const pathItem = asRecord(paths[internalPath]);
+  const operation = asRecord(pathItem?.['post']);
+  if (pathItem === undefined || operation === undefined) return;
+
+  const cloned = cloneRecord(pathItem);
+  replacePathParamName(cloned, 'tail', 'name');
+  const clonedOperation = asRecord(cloned['post']);
+  if (clonedOperation !== undefined) {
+    clonedOperation['operationId'] = 'runMemberPolishAction';
+    setResponse(clonedOperation, '200', {
+      description: 'Polished member prompt',
+      content: jsonContent({
+        type: 'object',
+        properties: {
+          ok: { type: 'boolean', const: true },
+          polished: { type: 'string' },
+        },
+      }),
+    });
+  }
+  paths['/api/v1/teams/{session_id}/members/{name}:polish'] = cloned;
   delete paths[internalPath];
 }
 
