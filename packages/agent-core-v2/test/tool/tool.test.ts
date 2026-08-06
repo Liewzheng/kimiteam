@@ -3274,22 +3274,26 @@ describe('AgentSwarm tool description', () => {
     expect(description).toContain('- primary: mock-model');
   });
 
-  it('injects team-lead doctrine when team mode is on', () => {
+  it('points at the Agent tool for the team-lead doctrine when team mode is on', () => {
     ctx = createTestAgent({
       initialConfig: { subagent: { teamMode: true } },
     });
 
     const description = agentSwarmDescription();
-    expect(description).toContain('You are the tech-lead, not an individual contributor');
-    expect(description).toContain('Delegate execution');
+    // The full doctrine is injected once, into the Agent tool description;
+    // AgentSwarm must not duplicate it — only a short pointer remains.
+    expect(description).not.toContain('You are the tech-lead, not an individual contributor');
+    expect(description).not.toContain('Delegate execution');
+    expect(description).toContain('Team-lead doctrine');
   });
 
-  it('omits team-lead doctrine when team mode is off', () => {
+  it('omits team-lead doctrine and its pointer when team mode is off', () => {
     ctx = createTestAgent();
 
     const description = agentSwarmDescription();
     expect(description).not.toContain('You are the tech-lead, not an individual contributor');
     expect(description).not.toContain('Delegate execution');
+    expect(description).not.toContain('Team-lead doctrine');
   });
 
   function agentSwarmParameters(): Record<string, unknown> {

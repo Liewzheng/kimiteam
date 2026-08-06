@@ -18,6 +18,10 @@
  * entered through `IAgentSwarmService`; the caller's agent id comes from
  * `IAgentScopeContext`. Pure tool — owns no scoped state.
  *
+ * The team-lead doctrine is injected once, into the Agent tool description;
+ * this tool's team-mode description carries a one-line pointer to it instead
+ * of duplicating the full doctrine.
+ *
  * Registered via the module-level `registerAgentToolService(IAgentSwarmTool,
  * AgentSwarmTool)` at the bottom of this file — the same "import = register"
  * pattern used by every agent tool. Bound at Agent scope.
@@ -72,9 +76,11 @@ import {
   type AgentSwarmToolInput,
 } from './agent-swarm';
 import AGENT_SWARM_DESCRIPTION from './agent-swarm.md?raw';
-import AGENT_TEAM_LEAD_DOCTRINE from '../agent/team-lead-doctrine.md?raw';
 
 const DEFAULT_SUBAGENT_TYPE = 'coder';
+
+const AGENT_SWARM_TEAM_DOCTRINE_POINTER =
+  'Team-lead doctrine (dispatch, work orders, scoring): see the Agent tool description.';
 
 const AGENT_SWARM_PARAMETERS = toInputJsonSchema(AgentSwarmToolInputSchema);
 const AGENT_SWARM_PARAMETERS_NO_MODEL = stripSubagentModelParameter(AGENT_SWARM_PARAMETERS);
@@ -209,7 +215,7 @@ export class AgentSwarmTool implements IAgentSwarmTool {
       ? AGENT_SWARM_DESCRIPTION
       : `${AGENT_SWARM_DESCRIPTION}\n\n${modelLines}`;
     if (teamMode) {
-      description += `\n\n${AGENT_TEAM_LEAD_DOCTRINE}`;
+      description += `\n\n${AGENT_SWARM_TEAM_DOCTRINE_POINTER}`;
     }
     return description;
   }
