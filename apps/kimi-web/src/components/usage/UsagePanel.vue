@@ -1,9 +1,12 @@
 <!-- apps/kimi-web/src/components/usage/UsagePanel.vue -->
-<!-- /usage right-side panel — subagent token usage for the CURRENT session.
-     Reads GET /teams/{sid}/usage (2.5s poll, same cadence as the team roster)
-     and renders two sections: by model and by member, each row showing
-     input / output / total tokens. The `__secondary__` derived-model alias is
-     resolved to the real model id by lib/usageRows before rendering. -->
+<!-- /usage right-side panel — main-agent and subagent token usage for the
+     CURRENT session. Reads GET /teams/{sid}/usage (2.5s poll, same cadence as
+     the team roster) and renders three sections: main agent (by model, with a
+     total row when multiple models), subagent by model, and subagent by member
+     — each row showing input / output / total tokens. The `__secondary__`
+     derived-model alias is resolved to the real model id by lib/usageRows
+     before rendering. The runs badge in the header stays subagent-only: the
+     main agent never counts as a run. -->
 <script setup lang="ts">
 import { computed } from 'vue';
 import { useI18n } from 'vue-i18n';
@@ -11,6 +14,8 @@ import { getKimiWebApi } from '../../api';
 import { usePolling } from '../../composables/usePolling';
 import { formatTokens } from '../../lib/formatTokens';
 import {
+  mainUsageRows,
+  mainUsageTotal,
   memberUsageRows,
   modelUsageRows,
   normalizeTeamUsage,
@@ -45,6 +50,8 @@ const POLL_MS = 2500;
 const { data, loading, error } = usePolling(() => api.getTeamUsage(props.sessionId), POLL_MS);
 
 const usage = computed(() => (data.value ? normalizeTeamUsage(data.value) : null));
+const mainRows = computed<UsageAmountRow[]>(() => (usage.value ? mainUsageRows(usage.value) : []));
+const mainTotal = computed(() => mainUsageTotal(mainRows.value));
 const modelRows = computed<UsageAmountRow[]>(() => (usage.value ? modelUsageRows(usage.value) : []));
 const memberRows = computed<UsageAmountRow[]>(() => (usage.value ? memberUsageRows(usage.value) : []));
 
@@ -58,7 +65,11 @@ const totalTokens = computed(() => {
 
 const isEmpty = computed(() => {
   if (usage.value === null) return false;
-  return modelRows.value.length === 0 && memberRows.value.length === 0;
+  return (
+    mainRows.value.length === 0 &&
+    modelRows.value.length === 0 &&
+    memberRows.value.length === 0
+  );
 });
 
 // Keep last-known usage on later poll failures; surface the error only while
@@ -92,6 +103,39 @@ const loadFailed = computed(() => error.value !== null && data.value === null);
       </div>
 
       <div v-else class="up-content">
+        <section class="up-section">
+          <header class="up-section-head">
+            <span class="up-section-title">{{ t('usage.main') }}</span>
+          </header>
+          <div v-if="mainRows.length === 0" class="up-section-empty">
+            {{ t('usage.noRows') }}
+          </div>
+          <div v-else class="up-rows">
+            <div v-for="row in mainRows" :key="`main-${row.label}`" class="up-row">
+              <span class="up-label" :title="row.label">{{ row.label }}</span>
+              <span class="up-cells">
+                <span class="up-cell-label">In</span>
+                <span class="up-cell-value">{{ formatTokens(row.input) }}</span>
+                <span class="up-cell-label">Out</span>
+                <span class="up-cell-value">{{ formatTokens(row.output) }}</span>
+                <span class="up-cell-label">Σ</span>
+                <span class="up-cell-value up-cell-total">{{ formatTokens(row.input + row.output) }}</span>
+              </span>
+            </div>
+            <div v-if="mainTotal" class="up-row up-row-total">
+              <span class="up-label">{{ t('usage.total') }}</span>
+              <span class="up-cells">
+                <span class="up-cell-label">In</span>
+                <span class="up-cell-value">{{ formatTokens(mainTotal.input) }}</span>
+                <span class="up-cell-label">Out</span>
+                <span class="up-cell-value">{{ formatTokens(mainTotal.output) }}</span>
+                <span class="up-cell-label">Σ</span>
+                <span class="up-cell-value up-cell-total">{{ formatTokens(mainTotal.input + mainTotal.output) }}</span>
+              </span>
+            </div>
+          </div>
+        </section>
+
         <section class="up-section">
           <header class="up-section-head">
             <span class="up-section-title">{{ t('usage.byModel') }}</span>
@@ -241,6 +285,12 @@ const loadFailed = computed(() => error.value !== null && data.value === null);
 .up-row + .up-row {
   border-top: 1px solid var(--color-line);
 }
+/* Main-agent total row (multi-model only) — sunken fill sets it apart from the
+   per-model rows above it. */
+.up-row-total {
+  background: var(--color-surface-sunken);
+}
+
 /* Member rows open the member detail — affordance mirrors the roster cards. */
 .up-row-clickable {
   cursor: pointer;

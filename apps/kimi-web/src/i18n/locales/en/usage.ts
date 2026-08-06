@@ -1,7 +1,9 @@
 export default {
   panelTitle: 'Usage',
-  description: 'Subagent token usage for this session',
+  description: 'Token usage for this session',
   runs: '{count} runs',
+  main: 'Main agent',
+  total: 'Total',
   byModel: 'By model',
   byMember: 'By member',
   totalTokens: '{tokens} tokens total',

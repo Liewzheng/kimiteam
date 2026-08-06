@@ -476,14 +476,14 @@ export interface WireTeamTokenUsage {
   total: number;
 }
 
-/** GET /teams/{session_id}/usage — subagent token usage grouped by model and by
- *  member, plus the run count. NOTE: this teams route replies in camelCase
- *  (unlike the snake_case envelope endpoints) — `byModel` / `byMember` are the
- *  literal wire keys, not an envelope `data` payload. `stale: true` means the
- *  session is persisted-but-cold and the server reports empty usage instead of
- *  erroring. The server already resolves the engine's `__secondary__`
- *  derived-model alias (normalizeDerivedSecondary), so the keys are real model
- *  ids and no web-side normalization is needed. */
+/** GET /teams/{session_id}/usage — main-agent and subagent token usage grouped
+ *  by model and by member, plus the subagent run count. NOTE: this teams route
+ *  replies in camelCase (unlike the snake_case envelope endpoints) — `byModel` /
+ *  `byMember` / `main` are the literal wire keys, not an envelope `data`
+ *  payload. `stale: true` means the session is persisted-but-cold and the
+ *  server reports empty usage instead of erroring. The server already resolves
+ *  the engine's `__secondary__` derived-model alias (normalizeDerivedSecondary),
+ *  so the keys are real model ids and no web-side normalization is needed. */
 export interface WireTeamUsageResponse {
   runs: number;
   /** model_id -> token usage. */
@@ -492,6 +492,14 @@ export interface WireTeamUsageResponse {
   byMember: Record<string, Record<string, WireTeamTokenUsage>>;
   /** True when the session is not live — persisted-but-cold reports empty usage. */
   stale?: boolean;
+  /** Main (primary) agent usage — per-model breakdown plus the collapsed total
+   *  row. Absent on older daemons and on cold sessions that never materialized
+   *  a main agent. */
+  main?: {
+    /** model_id -> token usage. */
+    byModel: Record<string, WireTeamTokenUsage>;
+    total: WireTeamTokenUsage;
+  };
 }
 
 /** POST/PUT /teams/{session_id}/members(/{name}) — hire/update reply with a
@@ -506,6 +514,13 @@ export interface WireTeamMemberResponse {
 export interface WireTeamActionResult {
   ok?: boolean;
   warning?: string;
+}
+
+/** POST /teams/{session_id}/members/{name}:polish — server-side prompt polish.
+ *  Flat reply (no envelope), same style as the other teams routes. */
+export interface WireTeamPolishResult {
+  ok: boolean;
+  polished: string;
 }
 
 // ---------------------------------------------------------------------------

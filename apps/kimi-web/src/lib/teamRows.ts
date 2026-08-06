@@ -263,3 +263,74 @@ export function findMemberTask<T extends { kind: string; subagentType?: string }
 ): T | undefined {
   return tasks.find((task) => task.kind === 'subagent' && task.subagentType === name);
 }
+
+// ---------------------------------------------------------------------------
+// Member-model dropdown (TeamMemberDetailPanel edit form)
+// ---------------------------------------------------------------------------
+
+/** One selectable model in the member-model dropdown. `id` is the value sent on
+ *  save (and the <option> value); `label` is what the <option> shows
+ *  (displayName ?? model). */
+export interface MemberModelOption {
+  id: string;
+  label: string;
+  /** Provider id — catalog options render under a provider <optgroup>. Empty
+   *  for synthesized options (a model the catalog doesn't know). */
+  provider: string;
+  /** Recorded usage this session → rendered in the pinned "recently used"
+   *  group at the top of the dropdown. */
+  recent: boolean;
+}
+
+/** The dropdown's two ordered sections. `recent` is pinned above the catalog;
+ *  the catalog renders grouped by provider (see the component's grouping). */
+export interface MemberModelOptionGroups {
+  recent: MemberModelOption[];
+  catalog: MemberModelOption[];
+}
+
+/** Build the member-model dropdown options: models with recorded usage this
+ *  session first (最近调用, pinned), then the full catalog minus the recent
+ *  ids, in catalog order (grouped by provider on render). The current member
+ *  model is guaranteed present so the <select> never shows a blank value —
+ *  when it is not in the catalog or the recent list, a synthesized option is
+ *  prepended to the catalog section (provider '' → rendered under a
+ *  localizable "other" optgroup). Unknown recent ids synthesize too, so a
+ *  model the catalog hasn't loaded yet stays selectable. */
+export function memberModelOptions(opts: {
+  models: ReadonlyArray<{ id: string; provider: string; model: string; displayName?: string }>;
+  recentModelIds: ReadonlyArray<string>;
+  currentId?: string;
+}): MemberModelOptionGroups {
+  const toOption = (m: { id: string; provider: string; model: string; displayName?: string }): MemberModelOption => ({
+    id: m.id,
+    label: m.displayName ?? m.model,
+    provider: m.provider,
+    recent: false,
+  });
+
+  const catalogById = new Map(opts.models.map((m) => [m.id, toOption(m)]));
+
+  // Recent ids, deduped, preserving order.
+  const seenRecent = new Set<string>();
+  const recent: MemberModelOption[] = [];
+  for (const id of opts.recentModelIds) {
+    if (seenRecent.has(id)) continue;
+    seenRecent.add(id);
+    const known = catalogById.get(id);
+    recent.push(
+      known ? { ...known, recent: true } : { id, label: id, provider: '', recent: true },
+    );
+  }
+
+  // Catalog minus recent ids, original order preserved.
+  const catalog = opts.models.map(toOption).filter((opt) => !seenRecent.has(opt.id));
+
+  // Guarantee the current selection is representable (avoids a blank <select>).
+  const currentId = opts.currentId?.trim() ?? '';
+  if (currentId.length > 0 && !seenRecent.has(currentId) && !catalogById.has(currentId)) {
+    catalog.unshift({ id: currentId, label: currentId, provider: '', recent: false });
+  }
+
+  return { recent, catalog };
+}

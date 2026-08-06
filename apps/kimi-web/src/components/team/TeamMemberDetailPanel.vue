@@ -19,26 +19,32 @@
 import { computed, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { getKimiWebApi } from '../../api';
-import type { AppTeamMember, AppTeamMembers, AppTask } from '../../api/types';
+import type { AppModel, AppTeamMember, AppTeamMembers, AppTask } from '../../api/types';
 import type { AgentMember, FilePreviewRequest } from '../../types';
 import { usePolling } from '../../composables/usePolling';
+import { usePolishPrompt } from '../../composables/usePolishPrompt';
 import { formatTokens } from '../../lib/formatTokens';
 import {
   averageScoreLabel,
   findMemberTask,
   findTeamMember,
+  memberModelOptions,
   teamStatusMeta,
+  type MemberModelOption,
 } from '../../lib/teamRows';
-import { memberSessionUsage } from '../../lib/usageRows';
+import { memberSessionUsage, tokenTotal } from '../../lib/usageRows';
 import { toAgentMember } from '../../composables/messagesToTurns';
 import AgentWorkflow from '../chat/AgentWorkflow.vue';
 import Badge from '../ui/Badge.vue';
 import Button from '../ui/Button.vue';
+import Dialog from '../ui/Dialog.vue';
 import EmptyState from '../ui/EmptyState.vue';
 import Field from '../ui/Field.vue';
 import Icon from '../ui/Icon.vue';
 import Input from '../ui/Input.vue';
 import PanelHeader from '../ui/PanelHeader.vue';
+import Select from '../ui/Select.vue';
+import Spinner from '../ui/Spinner.vue';
 import Textarea from '../ui/Textarea.vue';
 
 const props = defineProps<{
@@ -49,6 +55,8 @@ const props = defineProps<{
   members: AppTeamMembers | null;
   /** Live subagent tasks (client.activeAppTasks) — workflow matching input. */
   tasks: AppTask[];
+  /** Full model catalog (client.models.value) — drives the Model dropdown. */
+  models: AppModel[];
 }>();
 
 const emit = defineEmits<{
@@ -97,6 +105,47 @@ const hasSessionUsage = computed(
 );
 
 // ---------------------------------------------------------------------------
+// Model dropdown — model catalog (client.models.value) + the models this
+// member actually called this session (最近调用, pinned on top). The server
+// already resolves the engine's `__secondary__` alias, so the usage keys are
+// real model ids usable verbatim as <option> values.
+// ---------------------------------------------------------------------------
+
+/** Model ids with recorded spend for THIS member this session, in usage-key
+ *  order (recently-used pin). */
+const recentModelIds = computed<readonly string[]>(() => {
+  const bucket = usageData.value?.byMember[props.name];
+  if (!bucket) return [];
+  return Object.keys(bucket).filter((id) => {
+    const row = bucket[id];
+    return row !== undefined && tokenTotal(row) > 0;
+  });
+});
+
+const modelOptions = computed(() =>
+  memberModelOptions({
+    models: props.models,
+    recentModelIds: recentModelIds.value,
+    currentId: model.value,
+  }),
+);
+
+/** Catalog section grouped by provider (insertion order) for <optgroup>s. */
+const catalogGroups = computed<{ provider: string; options: MemberModelOption[] }[]>(() => {
+  const byProvider = new Map<string, MemberModelOption[]>();
+  for (const opt of modelOptions.value.catalog) {
+    const list = byProvider.get(opt.provider);
+    if (list) list.push(opt);
+    else byProvider.set(opt.provider, [opt]);
+  }
+  return [...byProvider.entries()].map(([provider, options]) => ({ provider, options }));
+});
+
+const hasModelOptions = computed(
+  () => modelOptions.value.recent.length > 0 || catalogGroups.value.length > 0,
+);
+
+// ---------------------------------------------------------------------------
 // Edit mode — prompt + Title (role) + Model. All three are patchable by the
 // server's PUT update schema (prompt replaces the profile body; Title maps to
 // the `role` frontmatter field).
@@ -107,6 +156,27 @@ const saveError = ref<string | null>(null);
 const title = ref('');
 const model = ref('');
 const prompt = ref('');
+
+// Polish-modal state machine — bound to the api + panel identity so tests can
+// drive it with a mock api. confirm() returns the polished text; the caller
+// backfills `prompt` (no auto-save).
+const {
+  open: polishOpen,
+  loading: polishLoading,
+  error: polishError,
+  original: polishOriginal,
+  polished: polishPolished,
+  startPolish,
+  confirm: confirmPolish,
+  cancel: cancelPolish,
+} = usePolishPrompt(api, props.sessionId, props.name);
+
+/** Confirm in the polish dialog → write the polished text back into the prompt
+ *  field (the user then saves through the normal Save button / PUT). */
+function applyPolish(): void {
+  const text = confirmPolish();
+  if (text !== null) prompt.value = text;
+}
 
 function startEdit(): void {
   const m = member.value;
@@ -179,13 +249,36 @@ async function save(): Promise<void> {
 
         <div v-if="editing" class="tmd-form">
           <Field :label="t('team.hirePrompt')" :hint="t('team.memberPromptHint')">
-            <Textarea v-model="prompt" :rows="5" />
+            <div class="tmd-prompt-edit">
+              <Textarea v-model="prompt" :rows="5" />
+              <Button
+                size="sm"
+                variant="secondary"
+                :disabled="!prompt.trim() || polishLoading"
+                @click="startPolish(prompt)"
+              >
+                <Icon name="sparkles" size="sm" />
+                {{ t('team.polish') }}
+              </Button>
+            </div>
           </Field>
           <Field :label="t('team.memberTitleLabel')">
             <Input v-model="title" :placeholder="member.role" />
           </Field>
           <Field :label="t('team.hireModel')" :hint="t('team.optional')">
-            <Input v-model="model" :placeholder="member.model" />
+            <Select v-model="model">
+              <option v-if="!hasModelOptions" value="" disabled>{{ t('team.memberNoModels') }}</option>
+              <optgroup v-if="modelOptions.recent.length > 0" :label="t('team.memberRecentModels')">
+                <option v-for="opt in modelOptions.recent" :key="opt.id" :value="opt.id">{{ opt.label }}</option>
+              </optgroup>
+              <optgroup
+                v-for="group in catalogGroups"
+                :key="group.provider"
+                :label="group.provider || t('team.memberOtherModels')"
+              >
+                <option v-for="opt in group.options" :key="opt.id" :value="opt.id">{{ opt.label }}</option>
+              </optgroup>
+            </Select>
           </Field>
           <div v-if="saveError" class="tmd-error" role="alert">{{ saveError }}</div>
           <div class="tmd-form-actions">
@@ -267,6 +360,42 @@ async function save(): Promise<void> {
       </template>
       <EmptyState v-else :title="t('team.memberNotFound')" />
     </div>
+
+    <!-- Polish-prompt dialog: 原文 + 润色文 side by side; confirm backfills the
+         prompt field (the user still saves via the normal Save button). -->
+    <Dialog
+      :open="polishOpen"
+      :title="t('team.polishTitle')"
+      size="lg"
+      @close="cancelPolish"
+    >
+      <div v-if="polishLoading" class="tmd-polish-state">
+        <Spinner size="sm" />
+        <span>{{ t('team.polishLoading') }}</span>
+      </div>
+      <div v-else-if="polishError" class="tmd-polish-state tmd-polish-error" role="alert">
+        <Icon name="alert-triangle" size="lg" />
+        <span>{{ polishError }}</span>
+      </div>
+      <template v-else-if="polishPolished">
+        <div class="tmd-polish-col">
+          <span class="tmd-k">{{ t('team.polishOriginal') }}</span>
+          <div class="tmd-polish-body">{{ polishOriginal }}</div>
+        </div>
+        <div class="tmd-polish-col">
+          <span class="tmd-k">{{ t('team.polishPolished') }}</span>
+          <div class="tmd-polish-body tmd-polish-body--new">{{ polishPolished }}</div>
+        </div>
+      </template>
+      <template #foot>
+        <Button size="sm" variant="secondary" :disabled="polishLoading" @click="cancelPolish">
+          {{ t('team.cancel') }}
+        </Button>
+        <Button size="sm" variant="primary" :disabled="!polishPolished" @click="applyPolish">
+          {{ t('team.polishConfirm') }}
+        </Button>
+      </template>
+    </Dialog>
   </div>
 </template>
 
@@ -408,4 +537,45 @@ async function save(): Promise<void> {
   overflow-wrap: anywhere;
 }
 .tmd-tools { color: var(--color-text); }
+
+/* Prompt field + polish button */
+.tmd-prompt-edit {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.tmd-prompt-edit .ui-button {
+  align-self: flex-end;
+}
+
+/* Polish-prompt dialog body */
+.tmd-polish-state {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-4) 0;
+  color: var(--color-text-muted);
+  font-size: var(--text-base);
+}
+.tmd-polish-state.tmd-polish-error { color: var(--color-danger); }
+
+.tmd-polish-col {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.tmd-polish-body {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.tmd-polish-body--new { color: var(--color-text); }
 </style>

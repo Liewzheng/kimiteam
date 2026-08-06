@@ -152,15 +152,34 @@ watch(
 }
 /* Markdown-rendered prose field (task / live output). The inner Markdown.vue
    provides its own prose styles; this wrapper only keeps wide tables/code from
-   pushing the panel's horizontal layout (they scroll inside their containers). */
+   pushing the panel's horizontal layout (they scroll inside their containers).
+
+   Streamed subagent output is prose whose lines are separated by single `\n`
+   (rarely a blank line between paragraphs), and Markdown collapses a single
+   newline into a space — without pre-wrap the live output would render as one
+   unbroken paragraph. Pin pre-wrap on the renderer root (and its text boxes) so
+   the markdown structure (bold / code / lists) still applies while the original
+   line breaks are preserved. Code blocks are unaffected — `pre` keeps its own
+   white-space, and these selectors never target it. */
 .aw-md {
   min-width: 0;
+}
+.aw-md :deep(.markdown-renderer),
+.aw-md :deep(.markdown-renderer p),
+.aw-md :deep(.markdown-renderer li),
+.aw-md :deep(.markdown-renderer .text-node) {
+  white-space: pre-wrap;
 }
 .aw-live {
   font: var(--text-base)/var(--leading-relaxed) var(--font-mono);
   color: var(--color-text);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  /* Bounded live-output region: a long-running agent must not stretch the
+     panel; overflow scrolls inside the region using the app's thin scrollbar
+     skin. Height ≈ 11 lines of mono text at --text-sm/1.65. */
+  max-height: 240px;
+  overflow-y: auto;
 }
 .aw-progress {
   display: flex;
@@ -169,6 +188,10 @@ watch(
   font: var(--text-base)/var(--leading-relaxed) var(--font-mono);
   color: var(--color-text);
   min-width: 0;
+  /* Bounded tool-progress region — same rationale as .aw-live above.
+     Height ≈ 10 tool-call lines. */
+  max-height: 200px;
+  overflow-y: auto;
 }
 .aw-group {
   min-width: 0;

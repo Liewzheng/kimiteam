@@ -1,7 +1,9 @@
 export default {
   panelTitle: '用量',
-  description: '当前会话的子代理 token 用量',
+  description: '当前会话的 token 用量',
   runs: '{count} 次运行',
+  main: '主管用量',
+  total: '总计',
   byModel: '按模型',
   byMember: '按成员',
   totalTokens: '共 {tokens} tokens',

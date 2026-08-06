@@ -727,9 +727,11 @@ export interface AppTeamTokenUsage {
   inputCacheCreation: number;
 }
 
-/** GET /teams/{session_id}/usage — subagent token usage grouped by model and by
- *  member, plus the run count. `byModel` may carry the engine-synthesized
- *  `__secondary__` key; normalize with lib/usageRows before rendering. */
+/** GET /teams/{session_id}/usage — main-agent and subagent token usage grouped
+ *  by model and by member, plus the subagent run count. `byModel` may carry the
+ *  engine-synthesized `__secondary__` key; normalize with lib/usageRows before
+ *  rendering. `main` is absent when the daemon doesn't ship it (older servers /
+ *  cold sessions). */
 export interface AppTeamUsage {
   runs: number;
   /** model_id -> token usage. */
@@ -738,6 +740,13 @@ export interface AppTeamUsage {
   byMember: Record<string, Record<string, AppTeamTokenUsage>>;
   /** Real model id the `__secondary__` key resolves to, when present. */
   secondaryModelId: string | null;
+  /** Main (primary) agent usage — per-model breakdown plus the collapsed total
+   *  row. Undefined when the server doesn't send it. */
+  main?: {
+    /** model_id -> token usage. */
+    byModel: Record<string, AppTeamTokenUsage>;
+    total: AppTeamTokenUsage;
+  };
 }
 
 /** Mutation endpoints return an action result; `warning` carries the optional
@@ -745,6 +754,14 @@ export interface AppTeamUsage {
 export interface AppTeamActionResult {
   ok: boolean;
   warning?: string;
+}
+
+/** POST /teams/{sid}/members/{name}:polish — server-side prompt polish. The
+ *  caller backfills the edit form with `polished`; it does NOT auto-save. */
+export interface AppTeamPolishResult {
+  ok: boolean;
+  /** The polished prompt text to write back into the prompt field. */
+  polished: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -883,6 +900,10 @@ export interface KimiWebApi {
     note: string;
     model?: string;
   }): Promise<AppTeamActionResult>;
+  /** Polish a member's prompt through the server (POST
+   *  /teams/{sid}/members/{name}:polish). Returns the polished text for the
+   *  caller to backfill into the edit form — no auto-save. */
+  polishTeamMemberPrompt(sessionId: string, name: string, prompt: string): Promise<AppTeamPolishResult>;
   messageTeamAgent(sessionId: string, agentId: string, input: {
     message: string;
     interrupt?: boolean;

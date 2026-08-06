@@ -2,6 +2,8 @@
 import { describe, expect, it } from 'vitest';
 import type { AppTeamTokenUsage, AppTeamUsage } from '../api/types';
 import {
+  mainUsageRows,
+  mainUsageTotal,
   memberSessionUsage,
   memberUsageRows,
   modelUsageRows,
@@ -102,6 +104,75 @@ describe('normalizeTeamUsage', () => {
       alpha: { 'kimi-k2': tokens(7, 4) },
       beta: { 'kimi-k2': tokens(2, 1) },
     });
+  });
+
+  it('passes main through untouched when resolving __secondary__', () => {
+    const u = usage({
+      secondaryModelId: 'kimi-k2',
+      byModel: { [SECONDARY_MODEL_ALIAS]: tokens(10, 5) },
+      byMember: {},
+      main: {
+        byModel: { 'kimi-k2': tokens(100, 50) },
+        total: tokens(100, 50),
+      },
+    });
+    expect(normalizeTeamUsage(u).main).toEqual(u.main);
+  });
+});
+
+describe('mainUsageRows', () => {
+  it('emits one row per main model with recorded spend, largest total first', () => {
+    const rows = mainUsageRows(
+      usage({
+        main: {
+          byModel: {
+            'kimi-k2': tokens(10, 5),
+            'kimi-lite': tokens(2, 1, 4, 0),
+            'kimi-empty': tokens(0, 0),
+          },
+          total: tokens(16, 6),
+        },
+      }),
+    );
+    expect(rows).toEqual([
+      { label: 'kimi-k2', input: 10, output: 5 },
+      { label: 'kimi-lite', input: 6, output: 1 },
+    ]);
+  });
+
+  it('breaks total ties by label', () => {
+    const rows = mainUsageRows(
+      usage({
+        main: {
+          byModel: { beta: tokens(4, 2), alpha: tokens(4, 2) },
+          total: tokens(8, 4),
+        },
+      }),
+    );
+    expect(rows.map((r) => r.label)).toEqual(['alpha', 'beta']);
+  });
+
+  it('is empty when main is absent (older daemons / cold sessions)', () => {
+    expect(mainUsageRows(usage())).toEqual([]);
+    expect(
+      mainUsageRows(usage({ main: { byModel: {}, total: tokens(0, 0) } })),
+    ).toEqual([]);
+  });
+});
+
+describe('mainUsageTotal', () => {
+  it('returns null for an empty or single-model breakdown', () => {
+    expect(mainUsageTotal([])).toBeNull();
+    expect(mainUsageTotal([{ label: 'kimi-k2', input: 10, output: 5 }])).toBeNull();
+  });
+
+  it('sums input and output across multiple models', () => {
+    expect(
+      mainUsageTotal([
+        { label: 'kimi-k2', input: 10, output: 5 },
+        { label: 'kimi-lite', input: 6, output: 1 },
+      ]),
+    ).toEqual({ input: 16, output: 6 });
   });
 });
 

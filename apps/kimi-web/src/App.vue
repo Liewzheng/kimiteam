@@ -1032,6 +1032,7 @@ function openPr(url: string): void {
         :name="teamMemberName"
         :members="teamRoster.data.value"
         :tasks="client.activeAppTasks.value"
+        :models="client.models.value"
         @close="closeTeamMemberPanel"
         @member-updated="applyTeamMemberUpdate"
         @open-file="openFilePreview"

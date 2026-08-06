@@ -4,6 +4,7 @@ import {
   averageScoreLabel,
   filterUserTeamMembers,
   isBuiltinTeamProfileName,
+  memberModelOptions,
   sortTeamMembers,
   summarizeTeam,
   teamStatusMeta,
@@ -201,5 +202,86 @@ describe('filterUserTeamMembers / isBuiltinTeamProfileName — hide engine built
     const snapshot = [...roster];
     filterUserTeamMembers(roster);
     expect(roster).toEqual(snapshot);
+  });
+});
+
+describe('memberModelOptions — member-model dropdown', () => {
+  const model = (id: string, provider = 'moonshot', displayName?: string) => ({
+    id,
+    provider,
+    model: id,
+    displayName,
+  });
+
+  it('pins recently-used models on top, preserving usage-key order', () => {
+    const { recent, catalog } = memberModelOptions({
+      models: [model('a'), model('b'), model('c')],
+      recentModelIds: ['b', 'c'],
+    });
+    expect(recent.map((o) => o.id)).toEqual(['b', 'c']);
+    expect(recent.every((o) => o.recent)).toBe(true);
+    expect(catalog.map((o) => o.id)).toEqual(['a']);
+    expect(catalog[0]!.recent).toBe(false);
+  });
+
+  it('keeps the catalog in input order (component groups by provider on render)', () => {
+    const { catalog } = memberModelOptions({
+      models: [model('x', 'moonshot'), model('y', 'anthropic'), model('z', 'moonshot')],
+      recentModelIds: [],
+    });
+    expect(catalog.map((o) => o.id)).toEqual(['x', 'y', 'z']);
+    expect(catalog.map((o) => o.provider)).toEqual(['moonshot', 'anthropic', 'moonshot']);
+  });
+
+  it('labels options with displayName ?? model', () => {
+    const { catalog } = memberModelOptions({
+      models: [model('kimi-k2', 'moonshot', 'Kimi K2'), model('plain')],
+      recentModelIds: [],
+    });
+    expect(catalog[0]).toMatchObject({ id: 'kimi-k2', label: 'Kimi K2', provider: 'moonshot' });
+    expect(catalog[1]).toMatchObject({ id: 'plain', label: 'plain' });
+  });
+
+  it('dedupes recent ids and keeps unknown recent ids selectable', () => {
+    const { recent, catalog } = memberModelOptions({
+      models: [model('known')],
+      recentModelIds: ['known', 'ghost', 'known'],
+    });
+    expect(recent.map((o) => o.id)).toEqual(['known', 'ghost']);
+    expect(recent[1]).toMatchObject({ id: 'ghost', label: 'ghost', provider: '', recent: true });
+    expect(catalog).toEqual([]);
+  });
+
+  it('synthesizes the current model when missing so the <select> never goes blank', () => {
+    const { recent, catalog } = memberModelOptions({
+      models: [model('a')],
+      recentModelIds: ['b'],
+      currentId: 'legacy-model',
+    });
+    expect(recent.map((o) => o.id)).toEqual(['b']);
+    expect(catalog.map((o) => o.id)).toEqual(['legacy-model', 'a']);
+    expect(catalog[0]).toMatchObject({
+      id: 'legacy-model',
+      label: 'legacy-model',
+      provider: '',
+      recent: false,
+    });
+  });
+
+  it('does not synthesize an already-present or blank current id', () => {
+    const inCatalog = memberModelOptions({ models: [model('a')], recentModelIds: [], currentId: 'a' });
+    expect(inCatalog.catalog.map((o) => o.id)).toEqual(['a']);
+    const inRecent = memberModelOptions({ models: [model('a')], recentModelIds: ['a'], currentId: 'a' });
+    expect(inRecent.recent.map((o) => o.id)).toEqual(['a']);
+    expect(inRecent.catalog).toEqual([]);
+    const blank = memberModelOptions({ models: [model('a')], recentModelIds: [], currentId: '  ' });
+    expect(blank.catalog.map((o) => o.id)).toEqual(['a']);
+  });
+
+  it('returns empty groups for an empty catalog with no recents', () => {
+    expect(memberModelOptions({ models: [], recentModelIds: [] })).toEqual({
+      recent: [],
+      catalog: [],
+    });
   });
 });

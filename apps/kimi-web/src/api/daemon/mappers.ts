@@ -840,7 +840,7 @@ function toAppTeamTokenUsage(wire: WireTeamTokenUsage): AppTeamTokenUsage {
 }
 
 /** Map a wire usage response to the app shape. The server sends camelCase
- *  grouping keys (`byModel`/`byMember`) and already normalizes the
+ *  grouping keys (`byModel`/`byMember`/`main`) and already normalizes the
  *  `__secondary__` derived-model alias, so no key rewriting happens here and
  *  `secondaryModelId` is always null. */
 export function toAppTeamUsage(wire: WireTeamUsageResponse): AppTeamUsage {
@@ -856,10 +856,22 @@ export function toAppTeamUsage(wire: WireTeamUsageResponse): AppTeamUsage {
     }
     byMember[name] = mapped;
   }
+  const main = wire.main
+    ? {
+        byModel: Object.fromEntries(
+          Object.entries(wire.main.byModel ?? {}).map(([model, row]) => [
+            model,
+            toAppTeamTokenUsage(row),
+          ]),
+        ),
+        total: toAppTeamTokenUsage(wire.main.total),
+      }
+    : undefined;
   return {
     runs: wire.runs ?? 0,
     byModel,
     byMember,
     secondaryModelId: null,
+    main,
   };
 }

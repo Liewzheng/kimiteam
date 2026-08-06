@@ -55,6 +55,9 @@ export function normalizeTeamUsage(usage: AppTeamUsage): AppTeamUsage {
         normalizeModelBucket(bucket, secondaryModelId),
       ]),
     ),
+    // Main-agent usage carries no `__secondary__` alias (that is subagent-only),
+    // so it passes through untouched.
+    main: usage.main,
   };
 }
 
@@ -107,6 +110,37 @@ export function modelUsageRows(usage: AppTeamUsage): UsageAmountRow[] {
     }))
     .filter((row) => row.input + row.output > 0)
     .sort(byTotalThenLabel);
+}
+
+/** One row per main-agent model with recorded spend, largest total first (ties
+ *  by name). Mirrors the TUI's session-usage section
+ *  (buildSessionUsageSection) — the main agent's models are rendered like the
+ *  subagent model rows. Empty when `usage.main` is absent (older daemons / cold
+ *  sessions). */
+export function mainUsageRows(usage: AppTeamUsage): UsageAmountRow[] {
+  const bucket = usage.main?.byModel ?? {};
+  return Object.entries(bucket)
+    .map(([model, row]) => ({
+      label: model,
+      input: tokenInputTotal(row),
+      output: row.output,
+    }))
+    .filter((row) => row.input + row.output > 0)
+    .sort(byTotalThenLabel);
+}
+
+/** Summed spend across the main-agent model rows — rendered as a trailing
+ *  total row only when more than one model recorded spend (same rule as the
+ *  TUI). Returns null for a single-model (or empty) breakdown. */
+export function mainUsageTotal(rows: UsageAmountRow[]): { input: number; output: number } | null {
+  if (rows.length <= 1) return null;
+  let input = 0;
+  let output = 0;
+  for (const row of rows) {
+    input += row.input;
+    output += row.output;
+  }
+  return { input, output };
 }
 
 /** One row per member with recorded spend (all models summed), largest total

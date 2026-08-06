@@ -22,6 +22,7 @@ import type {
   AppTeamActionResult,
   AppTeamMember,
   AppTeamMembers,
+  AppTeamPolishResult,
   AppTeamUsage,
   AppTerminal,
   AppWorkspace,
@@ -91,6 +92,7 @@ import type {
   WireTeamActionResult,
   WireTeamMemberResponse,
   WireTeamMembersResponse,
+  WireTeamPolishResult,
   WireTeamUsageResponse,
   WireWorkspace,
   WireLogoutResult,
@@ -1412,6 +1414,21 @@ export class DaemonKimiWebApi implements KimiWebApi {
       body,
     );
     return toAppTeamActionResult(data);
+  }
+
+  /** POST /teams/{sid}/members/{name}:polish — server-side prompt polish. The
+   *  reply is flat `{ ok, polished }` like the other teams routes; the caller
+   *  backfills the edit form with `polished` (no auto-save). */
+  async polishTeamMemberPrompt(
+    sessionId: string,
+    name: string,
+    prompt: string,
+  ): Promise<AppTeamPolishResult> {
+    return this.http.requestFlat<WireTeamPolishResult>(
+      'POST',
+      `/teams/${encodeURIComponent(sessionId)}/members/${encodeURIComponent(name)}:polish`,
+      { prompt },
+    );
   }
 
   async messageTeamAgent(
