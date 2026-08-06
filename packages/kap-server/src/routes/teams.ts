@@ -375,8 +375,12 @@ async function buildMemberWire(
     role: def.role,
     description: def.description,
     when_to_use: def.whenToUse,
-    // 实际调用模型优先：usage 桶内用量最大的真实 modelAlias；无调用回退配置偏好。
-    model: dominantModel(usage?.byModel) ?? def.modelPreference,
+    // 实际调用模型三级回退：① 当前会话 usage 桶内用量最大的真实 modelAlias；
+    // ② 历史派工记录（perf entries/shifts 聚合出的 byModel，count 最大的
+    // model）；③ 配置偏好。usage 只聚合当前 live session 的 lifecycle agent，
+    // 历史会话派的工落在 perf byModel 里——有派工历史的成员显示真实模型，
+    // 从未派工（也无当前会话调用）的才回退 preference。
+    model: dominantModel(usage?.byModel) ?? dominantModelByCount(summary.byModel) ?? def.modelPreference,
     prompt: def.prompt,
     tools: def.tools === undefined ? [] : [...def.tools],
     skills: def.skills === undefined ? undefined : [...def.skills],
@@ -672,6 +676,30 @@ function dominantModel(byModel: Record<string, TokenUsageWire> | undefined): str
     if (row.total > bestTotal) {
       best = model;
       bestTotal = row.total;
+    }
+  }
+  return best;
+}
+
+/**
+ * The model with the most recorded work in a perf `byModel` bucket (score
+ * entries + shifts per model — the aggregate `IAgentPerformanceService` exposes
+ * via `summary()`/`list()`). Serves as the historical-dispatch fallback for the
+ * members roster: a member whose shifts/scores were recorded in a *previous*
+ * session has no live usage bucket, but its actual invoked model is preserved
+ * here. Ties resolve to the first-seen model (insertion order), matching how
+ * `dominantModel` resolves usage-total ties.
+ */
+function dominantModelByCount(
+  byModel: Record<string, { count: number; average?: number }> | undefined,
+): string | undefined {
+  if (byModel === undefined) return undefined;
+  let best: string | undefined;
+  let bestCount = -1;
+  for (const [model, data] of Object.entries(byModel)) {
+    if (data.count > bestCount) {
+      best = model;
+      bestCount = data.count;
     }
   }
   return best;

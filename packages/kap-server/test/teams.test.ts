@@ -18,6 +18,7 @@ import {
   ConfigTarget,
   getLiveSessionById,
   IAgentLifecycleService,
+  IAgentPerformanceService,
   IAgentProfileService,
   IAgentUsageService,
   IBootstrapOptions,
@@ -683,6 +684,71 @@ describe('server-v2 /api/v1/teams/{session_id}', () => {
     expect(withPref?.usage).toEqual({ input: 50, output: 25, total: 75 });
     // No usage and no preference → no model surfaced.
     expect(noPref?.model).toBeUndefined();
+  });
+
+  it('shows the historically invoked model when a member has dispatch history but no live usage', async () => {
+    const id = await createSession();
+    // Preference is `secondary`, but the member actually ran on a real model in
+    // a *previous* session — the shift is recorded in perf, not in this
+    // session's live usage bucket.
+    await teamFetch(`/api/v1/teams/${id}/members`, {
+      method: 'POST',
+      body: { name: 'veteran', description: 'd', prompt: 'p', model: 'secondary' },
+    });
+    await server!.core.accessor.get(IAgentPerformanceService).recordShift('veteran', {
+      startedAt: '2025-01-01T00:00:00.000Z',
+      endedAt: '2025-01-01T01:00:00.000Z',
+      durationMs: 3_600_000,
+      workSummary: 'reviewed a PR',
+      model: 'provider/historic',
+    });
+
+    const members = allMembers((await teamFetch(`/api/v1/teams/${id}/members`)).body);
+    const veteran = members.find((m) => m.name === 'veteran');
+    // Historical dispatch wins over the `secondary` preference placeholder.
+    expect(veteran?.model).toBe('provider/historic');
+  });
+
+  it('prefers the live-session usage model over the historical model', async () => {
+    const id = await createSession();
+    await teamFetch(`/api/v1/teams/${id}/members`, {
+      method: 'POST',
+      body: { name: 'cross-session', description: 'd', prompt: 'p', model: 'secondary' },
+    });
+    // Historical dispatch on one model...
+    await server!.core.accessor.get(IAgentPerformanceService).recordShift('cross-session', {
+      startedAt: '2025-01-01T00:00:00.000Z',
+      endedAt: '2025-01-01T01:00:00.000Z',
+      durationMs: 3_600_000,
+      workSummary: 'worked',
+      model: 'provider/historic',
+    });
+    // ...and a current-session dispatch on another — live usage must dominate.
+    const live = getLiveSessionById(server!.core.accessor, id);
+    expect(live).toBeDefined();
+    const sub = await live!.accessor.get(IAgentLifecycleService).create({ agentId: 'sub-cross-session' });
+    sub.accessor.get(IAgentProfileService).update({ profileName: 'cross-session' });
+    sub.accessor.get(IAgentUsageService).record('provider/live', {
+      inputOther: 10,
+      output: 5,
+      inputCacheRead: 0,
+      inputCacheCreation: 0,
+    });
+
+    const members = allMembers((await teamFetch(`/api/v1/teams/${id}/members`)).body);
+    expect(members.find((m) => m.name === 'cross-session')?.model).toBe('provider/live');
+  });
+
+  it('falls back to model_preference when a member has neither usage nor dispatch history', async () => {
+    const id = await createSession();
+    await teamFetch(`/api/v1/teams/${id}/members`, {
+      method: 'POST',
+      body: { name: 'fresh-hire', description: 'd', prompt: 'p', model: 'secondary' },
+    });
+
+    const members = allMembers((await teamFetch(`/api/v1/teams/${id}/members`)).body);
+    // No usage bucket and no perf byModel → preference placeholder stays.
+    expect(members.find((m) => m.name === 'fresh-hire')?.model).toBe('secondary');
   });
 });
 
