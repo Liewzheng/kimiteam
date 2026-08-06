@@ -28,9 +28,13 @@ export class WelcomeComponent implements Component {
     const isLoggedOut = !this.state.model;
     const activeModel = this.state.availableModels[this.state.model];
     const effectiveActiveModel = activeModel === undefined ? undefined : effectiveModelAlias(activeModel);
+    // The kimiteam launcher exports KIMI_CODE_BIN_NAME=kimiteam; keep the
+    // official "Kimi Code" banner whenever it is unset or anything else.
+    const brandTitle =
+      process.env['KIMI_CODE_BIN_NAME'] === 'kimiteam' ? 'Welcome to Kimiteam!' : 'Welcome to Kimi Code!';
 
     if (safeWidth < 24) {
-      const title = chalk.bold.hex(currentTheme.palette.primary)('Welcome to Kimi Code!');
+      const title = chalk.bold.hex(currentTheme.palette.primary)(brandTitle);
       const prompt = isLoggedOut
         ? chalk.hex(currentTheme.palette.warning)('Run /login or /provider to get started.')
         : chalk.hex(currentTheme.palette.textDim)('Send /help for help information.');
@@ -52,7 +56,7 @@ export class WelcomeComponent implements Component {
     const textWidth = Math.max(4, innerWidth - logoWidth - gap.length);
 
     const rightRow0 = truncateToWidth(
-      chalk.bold.hex(currentTheme.palette.primary)('Welcome to Kimi Code!'),
+      chalk.bold.hex(currentTheme.palette.primary)(brandTitle),
       textWidth,
       '…',
     );

@@ -1,6 +1,6 @@
 import { visibleWidth } from '@moonshot-ai/pi-tui';
 import chalk from 'chalk';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { WelcomeComponent } from '#/tui/components/chrome/welcome';
 import { setRainbowDance, type RainbowDanceController } from '#/tui/easter-eggs/dance';
@@ -71,6 +71,7 @@ describe('WelcomeComponent', () => {
   afterEach(() => {
     chalk.level = previousChalkLevel;
     setRainbowDance(undefined);
+    vi.unstubAllEnvs();
   });
 
   it('renders the banner in a single brand color by default', () => {
@@ -101,5 +102,24 @@ describe('WelcomeComponent', () => {
         expect(visibleWidth(line)).toBeLessThanOrEqual(width);
       }
     }
+  });
+
+  it('shows the official banner when KIMI_CODE_BIN_NAME is unset', () => {
+    const header = headerOf(new WelcomeComponent(appState).render(80));
+
+    expect(header).toContain('Welcome to Kimi Code!');
+  });
+
+  it('shows the Kimiteam banner when KIMI_CODE_BIN_NAME is kimiteam', () => {
+    vi.stubEnv('KIMI_CODE_BIN_NAME', 'kimiteam');
+
+    const wide = headerOf(new WelcomeComponent(appState).render(80));
+    expect(wide).toContain('Welcome to Kimiteam!');
+    expect(wide).not.toContain('Welcome to Kimi Code!');
+
+    // The narrow branch (< 24 cols) renders its own title line.
+    const narrow = new WelcomeComponent(appState).render(23);
+    expect(narrow[1]).toContain('Welcome to Kimiteam!');
+    expect(narrow[1]).not.toContain('Welcome to Kimi Code!');
   });
 });
