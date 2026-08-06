@@ -138,6 +138,9 @@ export interface AgentMember {
   /** The subagent's concatenated live output (assistant deltas) — grows in the
    *  detail panel like a thinking block. */
   text?: string;
+  /** The subagent's concatenated chain-of-thought (thinking deltas) — shown
+   *  separately from `text` (muted/italic, collapsible). */
+  thinking?: string;
   /** Token-usage summary (input/output/total). Absent until the server ships a
    *  usage aggregate — the detail panel's token strip is hidden when this is
    *  missing or shows no real consumption yet. */
@@ -293,10 +296,25 @@ export interface ChatTurn {
 /**
  * One item of the model-maintained todo list (the TodoList tool). Each write
  * replaces the whole list, so the latest tool call IS the current state.
+ *
+ * The extended fields (id / assignee / whatDone / completedAt) ride along in
+ * the TodoList tool args and are carried through the wire untouched (wire
+ * `tool_use.input` is opaque; mappers pass it verbatim). They are optional so
+ * a pre-extension engine still works — the active list ignores them, while the
+ * completed-history view falls back to position / title / '—'.
  */
 export interface TodoView {
   title: string;
   status: 'pending' | 'in_progress' | 'done';
+  /** Stable todo id (`T1`/`T42`) — absent on legacy data written before ids
+   *  existed, and on items whose id the model never echoed. */
+  id?: string;
+  /** Subagent profile / agent the todo is assigned to. */
+  assignee?: string;
+  /** Detail of what was done — filled in when the todo completes. */
+  whatDone?: string;
+  /** ISO timestamp of completion — filled in when the todo completes. */
+  completedAt?: string;
 }
 
 export type TaskState = 'run' | 'done' | 'fail';

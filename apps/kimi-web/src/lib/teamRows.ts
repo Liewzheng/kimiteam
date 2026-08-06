@@ -4,17 +4,19 @@
 // renderer and the logic is unit-testable. The component resolves i18n labels
 // from the `key` field returned by teamStatusMeta (`team.status.<key>`).
 //
-// The four lifecycle statuses match the TUI exactly
-// (apps/kimi-code/src/tui/commands/team.ts):
-//   working 工作 · resting 休息 · on-duty 上班 · off-duty 下班
+// The web displays THREE lifecycle states. The wire still carries the TUI's
+// four (working / resting / on-duty / off-duty); the mapper folds `on-duty`
+// (employed, available, not in a turn) into `resting` — the "on the roster,
+// not currently working" bucket, which also absorbs 常驻 duty members.
+//   working 工作 · resting 休息 · off-duty 下班
 
-export type TeamMemberStatus = 'working' | 'resting' | 'on-duty' | 'off-duty';
+export type TeamMemberStatus = 'working' | 'resting' | 'off-duty';
 
 export interface TeamStatusMeta {
   /** Badge variant from the design system (ui/Badge.vue). Follows the TUI
    *  colouring: working = accent (info), resting = warning (yellow rest
-   *  window), on-duty = ready (success), off-duty = archived (neutral grey). */
-  variant: 'info' | 'success' | 'warning' | 'neutral';
+   *  window), off-duty = archived (neutral grey). */
+  variant: 'info' | 'warning' | 'neutral';
   /** i18n suffix — resolve `team.status.<key>` in the component. */
   key: TeamMemberStatus;
   /** Whether the member currently occupies a turn slot (drives roster busy
@@ -22,13 +24,11 @@ export interface TeamStatusMeta {
   busy: boolean;
 }
 
-/** Display order follows the TUI lifecycle: working → resting → on-duty →
- *  off-duty. */
+/** Display order follows the lifecycle: working → resting → off-duty. */
 const STATUS_ORDER: Record<TeamMemberStatus, number> = {
   working: 0,
   resting: 1,
-  'on-duty': 2,
-  'off-duty': 3,
+  'off-duty': 2,
 };
 
 /** Derive the design-system badge variant + i18n key for a member status. */
@@ -38,8 +38,6 @@ export function teamStatusMeta(status: TeamMemberStatus): TeamStatusMeta {
       return { variant: 'info', key: 'working', busy: true };
     case 'resting':
       return { variant: 'warning', key: 'resting', busy: false };
-    case 'on-duty':
-      return { variant: 'success', key: 'on-duty', busy: false };
     case 'off-duty':
       return { variant: 'neutral', key: 'off-duty', busy: false };
   }
@@ -49,9 +47,8 @@ export interface TeamRosterSummary {
   total: number;
   /** Members with a live working instance (occupy a turn slot). */
   working: number;
-  /** Employed members ready to take work — on the roster, spawns on demand. */
-  onDuty: number;
-  /** Employed members inside a rest window. */
+  /** Employed members on the roster who are not in an active turn (rest
+   *  windows + standing 常驻/duty members — `on-duty` folds in here). */
   resting: number;
   /** Archived / fired members (performance history only). */
   offDuty: number;
@@ -63,7 +60,6 @@ export function summarizeTeam(
 ): TeamRosterSummary {
   let working = 0;
   let resting = 0;
-  let onDuty = 0;
   let offDuty = 0;
   for (const member of members) {
     switch (member.status) {
@@ -73,15 +69,12 @@ export function summarizeTeam(
       case 'resting':
         resting++;
         break;
-      case 'on-duty':
-        onDuty++;
-        break;
       case 'off-duty':
         offDuty++;
         break;
     }
   }
-  return { total: members.length, working, onDuty, resting, offDuty };
+  return { total: members.length, working, resting, offDuty };
 }
 
 /** Renderable average score: a 1-decimal string, or null when the member has
@@ -100,14 +93,31 @@ export function averageScoreLabel(score: { average: number | null; count: number
  *  `Name (status)` / `Title` / `Model` / `Score`. Pure derivation so the card
  *  structure is unit-testable; the component resolves the `statusKey` i18n
  *  label (`team.status.<statusKey>`) and renders `scoreLabel` (null → the
- *  `team.scoreNone` empty state). */
+ *  `team.scoreNone` empty state). `duty` drives the blue-tinted card
+ *  background + the 值守 badge (see TeamStatusPanel). */
 export interface TeamMemberCard {
+  /** English profile id (`gu-wanqing`) — stable unique key + tooltip fallback. */
   name: string;
+  /** Human display name shown on the card: the profile's `display_name`
+   *  frontmatter field when the server ships it, else the English profile id.
+   *  (Web-side contract: `AppTeamMember.displayName` ← wire `display_name`;
+   *  inert until the server populates it.) */
+  displayName: string;
   statusKey: TeamMemberStatus;
+  /** True when the profile declares 值守 (duty) — a card background on top of
+   *  the four-state grey, blue-tinted so duty members stand out at a glance. */
+  duty: boolean;
   /** The card's "Title" row — the member's role/职位 field. */
   title: string;
   model: string;
   scoreLabel: string | null;
+}
+
+/** Resolve a member's display name: the profile `display_name` (when the
+ *  server ships it), else the English profile id as the fallback. */
+export function memberDisplayName(member: { name: string; displayName?: string }): string {
+  const display = member.displayName?.trim();
+  return display !== undefined && display.length > 0 ? display : member.name;
 }
 
 /** One card per member (1:1 — no filtering or limiting, so a roster of N
@@ -116,12 +126,16 @@ export function toMemberCard(member: {
   name: string;
   role: string;
   model: string;
+  displayName?: string;
   status: TeamMemberStatus;
+  duty?: boolean;
   score: { average: number | null; count: number };
 }): TeamMemberCard {
   return {
     name: member.name,
+    displayName: memberDisplayName(member),
     statusKey: member.status,
+    duty: member.duty === true,
     title: member.role,
     model: member.model,
     scoreLabel: averageScoreLabel(member.score),
@@ -135,7 +149,7 @@ export function toMemberCards(
   return members.map(toMemberCard);
 }
 
-/** Stable roster order: working → resting → on-duty → off-duty; ties broken by
+/** Stable roster order: working → resting → off-duty; ties broken by
  *  name. Returns a new array (input is not mutated). */
 export function sortTeamMembers<T extends { name: string; status: TeamMemberStatus }>(
   members: ReadonlyArray<T>,

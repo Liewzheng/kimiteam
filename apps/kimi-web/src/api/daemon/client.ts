@@ -11,6 +11,9 @@ import type {
   AppMessageRole,
   AppModel,
   AppProvider,
+  AppProviderDetail,
+  AppProviderModelInput,
+  AppProviderUpdate,
   ProviderRefreshResult,
   AppSession,
   AppSkill,
@@ -82,7 +85,12 @@ import type {
   WirePromptSubmitResult,
   WirePromptSteerResult,
   WireProvider,
+  WireProviderCreateRequest,
+  WireProviderDetail,
+  WireProviderModelInput,
   WireProviderRefreshResult,
+  WireProviderUpdateRequest,
+  WireProviderUpdateResponse,
   WireSession,
   WireSessionAbortResult,
   WireSessionWarning,
@@ -1225,19 +1233,55 @@ export class DaemonKimiWebApi implements KimiWebApi {
     return data.items.map(toAppProvider);
   }
 
+  /** GET /providers/{id} — single-provider GET reveals the stored api_key so an
+   *  edit form can prefill it (loopback/bearer-guarded; list + /config stay
+   *  redacted). */
+  async getProvider(id: string): Promise<AppProviderDetail> {
+    const data = await this.http.get<WireProviderDetail>(
+      `/providers/${encodeURIComponent(id)}`,
+    );
+    return { ...toAppProvider(data), apiKey: data.api_key };
+  }
+
+  /** POST /providers — create a provider manually. The body must match the
+   *  server contract: `id` + `type` + a non-empty `models` list (each model
+   *  becomes a `[models.<provider>/<model>]` alias, persisted to config.toml). */
   async addProvider(input: {
+    id: string;
     type: string;
     apiKey?: string;
     baseUrl?: string;
     defaultModel?: string;
+    models: AppProviderModelInput[];
   }): Promise<AppProvider> {
-    // PRESUMED endpoint: POST /v1/providers → WireProvider
-    const body: Record<string, unknown> = { type: input.type };
+    const body: WireProviderCreateRequest = {
+      id: input.id,
+      type: input.type,
+      models: input.models.map(toWireProviderModelInput),
+    };
     if (input.apiKey !== undefined) body['api_key'] = input.apiKey;
     if (input.baseUrl !== undefined) body['base_url'] = input.baseUrl;
     if (input.defaultModel !== undefined) body['default_model'] = input.defaultModel;
     const data = await this.http.post<WireProvider>('/providers', body);
     return toAppProvider(data);
+  }
+
+  /** PUT /providers/{id} — replace-style provider edit, persisted to
+   *  config.toml. `apiKey` omitted keeps the stored key, "" clears it, any
+   *  other value replaces it. `models` rebuilds the provider's aliases. */
+  async updateProvider(id: string, input: AppProviderUpdate): Promise<AppProvider> {
+    const body: WireProviderUpdateRequest = {
+      type: input.type,
+      models: input.models.map(toWireProviderModelInput),
+    };
+    if (input.apiKey !== undefined) body['api_key'] = input.apiKey;
+    if (input.baseUrl !== undefined) body['base_url'] = input.baseUrl;
+    if (input.defaultModel !== undefined) body['default_model'] = input.defaultModel;
+    const data = await this.http.put<WireProviderUpdateResponse>(
+      `/providers/${encodeURIComponent(id)}`,
+      body,
+    );
+    return toAppProvider(data.provider);
   }
 
   async deleteProvider(id: string): Promise<{ deleted: true }> {
@@ -1735,5 +1779,16 @@ function toProviderRefreshResult(data: WireProviderRefreshResult): ProviderRefre
     })),
     unchanged: data.unchanged,
     failed: data.failed,
+  };
+}
+
+/** App → wire: one provider-form model row. `model` is the raw model name the
+ *  server registers as the `<provider>/<model>` alias; `maxContextSize` is
+ *  required by the server's model-record schema. */
+function toWireProviderModelInput(input: AppProviderModelInput): WireProviderModelInput {
+  return {
+    model: input.model,
+    max_context_size: input.maxContextSize,
+    display_name: input.displayName,
   };
 }

@@ -118,7 +118,6 @@ const summaryProject = computed(() => summarizeTeam(projectMembers.value));
 const summary = computed(() => ({
   total: summaryGlobal.value.total + summaryProject.value.total,
   working: summaryGlobal.value.working + summaryProject.value.working,
-  onDuty: summaryGlobal.value.onDuty + summaryProject.value.onDuty,
   resting: summaryGlobal.value.resting + summaryProject.value.resting,
   offDuty: summaryGlobal.value.offDuty + summaryProject.value.offDuty,
 }));
@@ -506,9 +505,6 @@ async function submitMessage(): Promise<void> {
           <span class="tp-count">{{ t('team.membersCount', { count: summary.total }) }}</span>
           <Badge v-if="summary.working > 0" variant="info" size="sm">
             {{ t('team.working', { count: summary.working }) }}
-          </Badge>
-          <Badge v-if="summary.onDuty > 0" variant="success" size="sm">
-            {{ t('team.onDuty', { count: summary.onDuty }) }}
           </Badge>
           <Badge v-if="summary.resting > 0" variant="warning" size="sm">
             {{ t('team.resting', { count: summary.resting }) }}

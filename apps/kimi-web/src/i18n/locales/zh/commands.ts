@@ -16,6 +16,7 @@ export default {
     noSession: '请先打开一个会话再导出。',
   },
   status: { desc: '查看会话状态' },
+  todo: { desc: '查看本会话已完成的任务' },
   team: { desc: '管理子代理团队' },
   usage: { desc: '查看子代理 token 用量' },
   undo: { desc: '撤销上一条消息' },

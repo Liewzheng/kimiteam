@@ -89,6 +89,48 @@ function manualScheduler(): ManualScheduler {
   };
 }
 
+/** Frame-less scheduler with a controllable clock — drives the drain rate
+ *  limit. requestFrame returns null (no rAF), so every drain rides a task whose
+ *  delay is the min-interval remainder; fireNext runs the earliest-due task and
+ *  advances the clock to its scheduled time. */
+interface TimedScheduler extends EventBatcherScheduler {
+  now(): number;
+  advance(ms: number): void;
+  fireNext(): void;
+  pendingTasks(): number;
+}
+
+function timedScheduler(minTaskDelayMs = 50): TimedScheduler {
+  let clock = 0;
+  let nextHandle = 1;
+  const tasks = new Map<number, { at: number; cb: () => void }>();
+
+  return {
+    now: () => clock,
+    advance(ms) {
+      clock += ms;
+    },
+    fireNext() {
+      const entry = [...tasks.entries()].sort((a, b) => a[1].at - b[1].at)[0];
+      if (entry === undefined) return;
+      tasks.delete(entry[0]);
+      clock = Math.max(clock, entry[1].at);
+      entry[1].cb();
+    },
+    pendingTasks: () => tasks.size,
+    requestFrame: () => null,
+    cancelFrame: () => {},
+    requestTask(cb, delayMs = minTaskDelayMs) {
+      const handle = nextHandle++;
+      tasks.set(handle, { at: clock + delayMs, cb });
+      return handle;
+    },
+    cancelTask(handle) {
+      tasks.delete(handle);
+    },
+  };
+}
+
 interface DeltaOptions {
   sessionId?: string;
   messageId?: string;
@@ -377,6 +419,98 @@ describe('createEventBatcher (ordered bounded scheduling)', () => {
     expect(processed).toEqual([]);
     expect(scheduler.pendingFrames()).toBe(0);
     expect(scheduler.pendingTasks()).toBe(0);
+  });
+});
+
+describe('createEventBatcher (drain rate limit)', () => {
+  it('drains the first item immediately and spaces later drains >= minDrainIntervalMs', () => {
+    const clock = timedScheduler();
+    const processed: string[] = [];
+    const enqueue = createEventBatcher<string>(
+      (item) => processed.push(item),
+      () => true,
+      { scheduler: clock, minDrainIntervalMs: 60, now: () => clock.now() },
+    );
+
+    enqueue('a');
+    expect(processed).toEqual([]);
+    clock.fireNext();
+    expect(processed).toEqual(['a']);
+
+    enqueue('b');
+    clock.advance(30);
+    // Still inside the 60ms window after the first drain — not allowed yet.
+    expect(processed).toEqual(['a']);
+    clock.fireNext();
+    expect(processed).toEqual(['a', 'b']);
+  });
+
+  it('coalesces items arriving inside the rate-limit window into the next drain', () => {
+    const clock = timedScheduler();
+    const processed: string[] = [];
+    const enqueue = createEventBatcher<string>(
+      (item) => processed.push(item),
+      () => true,
+      { scheduler: clock, minDrainIntervalMs: 60, now: () => clock.now() },
+    );
+
+    enqueue('a');
+    clock.fireNext();
+    expect(processed).toEqual(['a']);
+
+    enqueue('b');
+    enqueue('c');
+    clock.advance(59);
+    expect(processed).toEqual(['a']); // still waiting out the interval
+    clock.fireNext();
+    expect(processed).toEqual(['a', 'b', 'c']);
+  });
+
+  it('does not throttle synchronous control-event drains', () => {
+    const clock = timedScheduler();
+    const processed: string[] = [];
+    const enqueue = createEventBatcher<string>(
+      (item) => processed.push(item),
+      (item) => item.startsWith('d'),
+      { scheduler: clock, minDrainIntervalMs: 60, now: () => clock.now() },
+    );
+
+    enqueue('d1');
+    enqueue('control');
+    expect(processed).toEqual(['d1', 'control']);
+    expect(clock.pendingTasks()).toBe(0);
+  });
+
+  it('caps scheduled drains while a fast stream floods in (content preserved)', () => {
+    const clock = timedScheduler();
+    const processed: string[] = [];
+    const processedAt: number[] = [];
+    const enqueue = createEventBatcher<string>(
+      (item) => {
+        processed.push(item);
+        processedAt.push(clock.now());
+      },
+      () => true,
+      { scheduler: clock, minDrainIntervalMs: 60, now: () => clock.now() },
+    );
+
+    // Flood: 25 items arrive within a few ms of each other — one scheduled
+    // drain, not one per item.
+    for (let i = 0; i < 25; i += 1) enqueue(`chunk-${i}`);
+    expect(processed).toEqual([]);
+    expect(clock.pendingTasks()).toBe(1);
+
+    // The single drain processes everything at the same clock time.
+    clock.fireNext();
+    expect(processed).toEqual(Array.from({ length: 25 }, (_, i) => `chunk-${i}`));
+    expect(new Set(processedAt).size).toBe(1);
+
+    // A follow-up item is throttled to the next 60ms window, not drained early.
+    enqueue('chunk-late');
+    clock.advance(30);
+    expect(processed).toHaveLength(25);
+    clock.fireNext();
+    expect(processed).toHaveLength(26);
   });
 });
 

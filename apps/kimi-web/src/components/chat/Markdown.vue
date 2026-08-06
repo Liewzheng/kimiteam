@@ -437,45 +437,53 @@ function copyDiff(code: string, idx: number) {
 
 <template>
   <div ref="mdRef" class="md">
-    <template v-for="(seg, i) in segments" :key="i">
-      <!-- Non-diff markdown → markstream (smooth streaming + shiki) -->
-      <MarkdownRender
-        v-if="seg.kind === 'md'"
-        :content="seg.text"
-        :custom-markdown-it="disableInlineMath"
-        mode="chat"
-        :code-renderer="renderPlan.codeRenderer"
-        :is-dark="isDark"
-        :code-block-light-theme="CODE_LIGHT_THEME"
-        :code-block-dark-theme="CODE_DARK_THEME"
-        :themes="[CODE_LIGHT_THEME, CODE_DARK_THEME]"
-        :code-block-props="codeBlockProps"
-        :final="final"
-        :smooth-streaming="streaming"
-        :batch-rendering="allowBatchRender"
-        :defer-nodes-until-visible="false"
-        :max-live-nodes="0"
-        :parse-coalesce-ms="200"
-        @copy="copyCodeBlockFallback"
-      />
+    <!-- Streaming: render the WHOLE message as plain pre-wrap text so the live
+         turn never drives markstream's parser/diff on the main thread per frame
+         (the input-lag hot path — the same pre-during-streaming strategy the
+         team already accepted for code blocks, extended to the whole message).
+         On settle (streaming → false) the full MarkdownRender mounts once. -->
+    <pre v-if="streaming" class="md-streaming">{{ text }}</pre>
+    <template v-else>
+      <template v-for="(seg, i) in segments" :key="i">
+        <!-- Non-diff markdown → markstream (smooth streaming + shiki) -->
+        <MarkdownRender
+          v-if="seg.kind === 'md'"
+          :content="seg.text"
+          :custom-markdown-it="disableInlineMath"
+          mode="chat"
+          :code-renderer="renderPlan.codeRenderer"
+          :is-dark="isDark"
+          :code-block-light-theme="CODE_LIGHT_THEME"
+          :code-block-dark-theme="CODE_DARK_THEME"
+          :themes="[CODE_LIGHT_THEME, CODE_DARK_THEME]"
+          :code-block-props="codeBlockProps"
+          :final="final"
+          :smooth-streaming="streaming"
+          :batch-rendering="allowBatchRender"
+          :defer-nodes-until-visible="false"
+          :max-live-nodes="0"
+          :parse-coalesce-ms="200"
+          @copy="copyCodeBlockFallback"
+        />
 
-      <!-- ```diff fence → local renderer (preserves +/- markers + colours) -->
-      <div v-else class="diff-wrap">
-        <div class="diff-bar">
-          <span class="diff-lang">diff</span>
-          <Tooltip :text="t('filePreview.copyCode')">
-            <button class="diff-copy" :aria-label="t('filePreview.copyCode')" @click="copyDiff(seg.code, i)">
-              <Icon :name="copiedDiff === i ? 'check' : 'copy'" size="sm" />
-            </button>
-          </Tooltip>
+        <!-- ```diff fence → local renderer (preserves +/- markers + colours) -->
+        <div v-else class="diff-wrap">
+          <div class="diff-bar">
+            <span class="diff-lang">diff</span>
+            <Tooltip :text="t('filePreview.copyCode')">
+              <button class="diff-copy" :aria-label="t('filePreview.copyCode')" @click="copyDiff(seg.code, i)">
+                <Icon :name="copiedDiff === i ? 'check' : 'copy'" size="sm" />
+              </button>
+            </Tooltip>
+          </div>
+          <pre class="diff-pre"><code><span
+            v-for="(ln, j) in diffLines(seg.code)"
+            :key="j"
+            class="diff-line"
+            :class="`diff-${ln.type}`"
+          ><span v-if="ln.type !== 'hunk'" class="diff-sign">{{ ln.sign }}</span><span class="diff-text">{{ ln.text }}</span></span></code></pre>
         </div>
-        <pre class="diff-pre"><code><span
-          v-for="(ln, j) in diffLines(seg.code)"
-          :key="j"
-          class="diff-line"
-          :class="`diff-${ln.type}`"
-        ><span v-if="ln.type !== 'hunk'" class="diff-sign">{{ ln.sign }}</span><span class="diff-text">{{ ln.text }}</span></span></code></pre>
-      </div>
+      </template>
     </template>
   </div>
 </template>
@@ -497,6 +505,17 @@ function copyDiff(code: string, idx: number) {
   font: 400 15px/1.6 var(--font-ui);
   color: var(--color-text);
   word-break: break-word;
+}
+/* Streaming fallback — plain pre-wrap while the turn is live (no markdown
+   structure, no parser work per frame). Mirrors the .md prose font. */
+.md-streaming {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--font-ui);
+  font-size: var(--content-font-size);
+  line-height: var(--leading-normal);
+  color: var(--color-text);
 }
 .md :deep(.markdown-renderer) {
   font: 400 15px/1.6 var(--font-ui);

@@ -11,6 +11,8 @@ import type {
   AppMessage,
   AppModel,
   AppProvider,
+  AppProviderModelInput,
+  AppProviderUpdate,
   AppSession,
   AppSkill,
   OAuthLoginStartResult,
@@ -470,12 +472,16 @@ export function useModelProviderState(
     }
   }
 
-  /** Add a provider, then reload providers + models */
+  /** Add a provider, then reload providers + models. The payload matches the
+   *  server contract (id + type + a non-empty models list) so the provider and
+   *  its model aliases persist to config.toml. */
   async function addProvider(input: {
+    id: string;
     type: string;
     apiKey?: string;
     baseUrl?: string;
     defaultModel?: string;
+    models: AppProviderModelInput[];
   }): Promise<void> {
     try {
       const api = getKimiWebApi();
@@ -483,6 +489,18 @@ export function useModelProviderState(
       await Promise.all([loadProviders(), loadModels()]);
     } catch (err) {
       pushOperationFailure('addProvider', err);
+    }
+  }
+
+  /** Replace-style edit of a provider, then reload providers + models. The
+   *  server persists the change (providers + model aliases) to config.toml. */
+  async function updateProvider(id: string, input: AppProviderUpdate): Promise<void> {
+    try {
+      const api = getKimiWebApi();
+      await api.updateProvider(id, input);
+      await Promise.all([loadProviders(), loadModels()]);
+    } catch (err) {
+      pushOperationFailure('updateProvider', err);
     }
   }
 
@@ -592,6 +610,7 @@ export function useModelProviderState(
     toggleStarModel,
     activateSkill,
     addProvider,
+    updateProvider,
     deleteProvider,
     refreshProvider,
     refreshAllProviders,

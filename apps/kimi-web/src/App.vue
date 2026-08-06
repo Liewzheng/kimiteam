@@ -48,6 +48,7 @@ import type { SwarmMember } from './composables/swarmGroups';
 import ServerAuthDialog from './components/ServerAuthDialog.vue';
 import { initServerAuth, onAuthRequired } from './api/daemon/serverAuth';
 import type { AppConfig, ThinkingLevel } from './api/types';
+import type { AppProviderModelInput, AppProviderUpdate } from './api/types';
 import { commitLevel, effectiveThinkingLevel, segmentsFor } from './lib/modelThinking';
 import { stripSkillPrefix } from './lib/slashCommands';
 import Button from './components/ui/Button.vue';
@@ -454,8 +455,19 @@ async function handleComposerSelectModel(modelId: string): Promise<void> {
   }
 }
 
-async function handleAddProvider(input: { type: string; apiKey?: string; baseUrl?: string; defaultModel?: string }): Promise<void> {
+async function handleAddProvider(input: {
+  id: string;
+  type: string;
+  apiKey?: string;
+  baseUrl?: string;
+  defaultModel?: string;
+  models: AppProviderModelInput[];
+}): Promise<void> {
   await client.addProvider(input);
+}
+
+async function handleUpdateProvider(id: string, input: AppProviderUpdate): Promise<void> {
+  await client.updateProvider(id, input);
 }
 
 async function handleRefreshProvider(id: string): Promise<void> {
@@ -630,6 +642,11 @@ function handleCommand(cmd: string): void {
     case '/usage':
       // Usage is session-scoped — /usage without an active session is a no-op.
       if (client.activeSessionId.value) openUsagePanel(client.activeSessionId.value);
+      break;
+    case '/todo':
+      // Completed-todo history is session-scoped — the dock opens it on the
+      // active session (ConversationPane.openTodosHistory).
+      conversationPaneRef.value?.openTodosHistory();
       break;
     case '/login':
       openLogin();
@@ -850,6 +867,7 @@ function openPr(url: string): void {
       :git-info="client.gitInfo.value"
       :tasks="client.tasks.value"
       :todos="client.todos.value"
+      :todo-history="client.todoHistory.value"
       :goal="client.goal.value"
       :activation-badges="client.activationBadges.value"
       :status="client.status.value"
@@ -1093,6 +1111,7 @@ function openPr(url: string): void {
       :conversation-toc="client.conversationToc.value"
       :config="client.config.value"
       :models="client.models.value"
+      :providers="client.providers.value"
       :config-saving="configSaving"
       :server-version="client.serverVersion.value"
       :backend="client.backend.value"
@@ -1116,9 +1135,11 @@ function openPr(url: string): void {
     <ProviderManager
       v-if="showProviders"
       :providers="client.providers.value"
+      :models="client.models.value"
       :loading="providersLoading"
       :unavailable="providersUnavailable"
       @add="handleAddProvider($event)"
+      @update="handleUpdateProvider"
       @refresh="handleRefreshProvider($event)"
       @delete="confirmDeleteProvider($event)"
       @open-login="() => { showProviders = false; openLogin(); }"

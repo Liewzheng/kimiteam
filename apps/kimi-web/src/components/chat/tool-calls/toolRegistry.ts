@@ -8,6 +8,7 @@ import EditTool from './EditTool.vue';
 import GenericTool from './GenericTool.vue';
 import MediaTool from './MediaTool.vue';
 import SwarmTool from './SwarmTool.vue';
+import TeamMessageTool from './TeamMessageTool.vue';
 
 type ToolRenderer = Component;
 
@@ -23,5 +24,8 @@ export function resolveToolRenderer(tool: ToolCall): ToolRenderer {
   if (name === 'task') return AgentTool;
   if (name === 'agentswarm') return SwarmTool;
   if (name === 'askuserquestion') return AskUserTool;
+  // TeamMessage renders its own card (target header + Markdown message) instead
+  // of dumping the raw `{agent_id, message}` JSON through GenericTool.
+  if (name === 'teammessage') return TeamMessageTool;
   return GenericTool;
 }

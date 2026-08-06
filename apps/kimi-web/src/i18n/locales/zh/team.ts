@@ -15,7 +15,6 @@ export default {
   membersCount: '{count} 位成员',
   memberCardAria: '{name}（{status}）',
   working: '{count} 工作',
-  onDuty: '{count} 上班',
   resting: '{count} 休息',
   offDuty: '{count} 下班',
   teamMode: '团队模式',
@@ -94,7 +93,6 @@ export default {
   status: {
     working: '工作',
     resting: '休息',
-    'on-duty': '上班',
     'off-duty': '下班',
   },
 };

@@ -21,7 +21,7 @@ import { usePolling } from './usePolling';
 /** Same cadence as the TeamPanel dialog / the old in-panel poll (2.5s). */
 const POLL_MS = 2500;
 
-const EMPTY_SUMMARY: TeamRosterSummary = { total: 0, working: 0, onDuty: 0, resting: 0, offDuty: 0 };
+const EMPTY_SUMMARY: TeamRosterSummary = { total: 0, working: 0, resting: 0, offDuty: 0 };
 
 export function useTeamRoster(sessionId: Ref<string | null>) {
   const api = getKimiWebApi();

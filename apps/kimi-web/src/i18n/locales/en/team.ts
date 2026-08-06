@@ -15,7 +15,6 @@ export default {
   membersCount: '{count} members',
   memberCardAria: '{name} ({status})',
   working: '{count} working',
-  onDuty: '{count} on duty',
   resting: '{count} resting',
   offDuty: '{count} off duty',
   teamMode: 'Team mode',
@@ -94,7 +93,6 @@ export default {
   status: {
     working: 'Working',
     resting: 'Resting',
-    'on-duty': 'On duty',
     'off-duty': 'Off duty',
   },
 } as const;

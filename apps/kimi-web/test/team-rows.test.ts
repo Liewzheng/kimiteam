@@ -21,21 +21,20 @@ describe('summarizeTeam — working/total counting', () => {
       member('working'),
       member('working'),
       member('resting'),
-      member('on-duty'),
       member('off-duty'),
     ]);
-    expect(s).toEqual({ total: 5, working: 2, onDuty: 1, resting: 1, offDuty: 1 });
+    expect(s).toEqual({ total: 4, working: 2, resting: 1, offDuty: 1 });
   });
 
   it('aggregates global + project scopes (the dock badge sum)', () => {
-    const global = [member('working'), member('on-duty')];
+    const global = [member('working'), member('resting')];
     const project = [member('working'), member('working'), member('resting')];
     const combined = summarizeTeam([...global, ...project]);
-    expect(combined).toEqual({ total: 5, working: 3, onDuty: 1, resting: 1, offDuty: 0 });
+    expect(combined).toEqual({ total: 5, working: 3, resting: 2, offDuty: 0 });
   });
 
   it('returns a zeroed summary for an empty roster', () => {
-    expect(summarizeTeam([])).toEqual({ total: 0, working: 0, onDuty: 0, resting: 0, offDuty: 0 });
+    expect(summarizeTeam([])).toEqual({ total: 0, working: 0, resting: 0, offDuty: 0 });
   });
 });
 

@@ -17,6 +17,7 @@ import TasksPane from './TasksPane.vue';
 import TodoCard from './TodoCard.vue';
 import Icon from '../ui/Icon.vue';
 import Pill from '../ui/Pill.vue';
+import SegmentedControl from '../ui/SegmentedControl.vue';
 import { teamTabState } from '../../lib/teamRows';
 
 const props = defineProps<{
@@ -50,6 +51,12 @@ const props = defineProps<{
   /** True while the right-side TeamStatusPanel is open for this session. */
   teamActive?: boolean;
   todos?: TodoView[];
+  /** Completed-todo history of the session — rendered in the todos panel's
+   *  history view (TUI `/todo` parity). */
+  todoHistory?: TodoView[];
+  /** Increment to switch the todos panel to the completed-history view (the
+   *  `/todo` command entry). Same signal pattern as GoalStrip's expand signal. */
+  todoHistorySignal?: number;
   pendingQuestion?: UIQuestion;
   /** Action kind in flight for the visible question (drives loading state). */
   questionBusyKind?: 'answer' | 'dismiss';
@@ -98,6 +105,22 @@ const teamState = computed(() =>
     hasSession: !!props.sessionId,
   }),
 );
+/** Todos panel view: the live list (default) or the session's completed-work
+ *  history. Reset to the live list whenever the panel closes, so reopening via
+ *  the 待办 tab always lands on the current state. */
+const todosView = ref<'active' | 'history'>('active');
+const todoViewOptions = computed(() => [
+  { value: 'active', label: t('tasks.todoActive') },
+  { value: 'history', label: t('tasks.todoHistory') },
+]);
+/** Count badge for the todos tab / panel head: the live list's done/total when
+ *  the list exists, otherwise the completed-history count (an all-done or
+ *  cleared session can have history with an empty live list). */
+const todoBadge = computed(() => {
+  if ((props.todos?.length ?? 0) > 0) return `${props.todoDoneCount}/${props.todos!.length}`;
+  if ((props.todoHistory?.length ?? 0) > 0) return String(props.todoHistory!.length);
+  return '';
+});
 const composerRef = ref<{
   loadForEdit: (value: string) => boolean;
   loadAttachmentsForEdit: (atts: { fileId?: string; kind: 'image' | 'video' | 'file'; url: string; name?: string }[]) => void;
@@ -139,8 +162,21 @@ watch(
     if (typeof document === 'undefined') return;
     document.removeEventListener('mousedown', onDocumentMouseDown, true);
     if (panel) document.addEventListener('mousedown', onDocumentMouseDown, true);
+    // Leaving the todos panel resets its view so the tab always reopens on the
+    // live list (only `/todo` jumps straight to history).
+    if (panel !== 'todos') todosView.value = 'active';
   },
   { immediate: true },
+);
+
+// `/todo` command entry: bump the signal to switch the open todos panel to the
+// completed-history view (TUI parity). No-op while the panel is closed — the
+// next open renders whatever view is current.
+watch(
+  () => props.todoHistorySignal,
+  (n) => {
+    if (n !== undefined && n > 0) todosView.value = 'history';
+  },
 );
 
 let dockResizeObserver: ResizeObserver | null = null;
@@ -187,12 +223,21 @@ defineExpose({ loadForEdit, loadAttachmentsForEdit, focus });
           >
             {{ t('tasks.dockBash') }} · {{ bashRunning }} {{ t('tasks.running') }}
           </span>
-          <span
-            v-else-if="dockPanel === 'todos'"
-            class="dock-work-tab static"
-          >
-            {{ t('tasks.dockTodos') }} · {{ todoDoneCount }}/{{ todos?.length ?? 0 }}
-          </span>
+          <template v-else-if="dockPanel === 'todos'">
+            <SegmentedControl
+              v-model="todosView"
+              size="sm"
+              class="dock-todo-views"
+              :options="todoViewOptions"
+              :aria-label="t('tasks.dockTodos')"
+            />
+            <span
+              v-if="todoBadge"
+              class="dock-work-tab static dock-todo-count"
+            >
+              {{ todoBadge }}
+            </span>
+          </template>
         </div>
         <div class="dock-work-body">
           <TasksPane
@@ -203,6 +248,8 @@ defineExpose({ loadForEdit, loadAttachmentsForEdit, focus });
           <TodoCard
             v-else-if="dockPanel === 'todos'"
             :todos="todos ?? []"
+            :history="todoHistory ?? []"
+            :view="todosView"
           />
         </div>
       </div>
@@ -241,14 +288,14 @@ defineExpose({ loadForEdit, loadAttachmentsForEdit, focus });
         <span class="dw-count">(<b>{{ bashTasks.length }}</b>)</span>
       </Pill>
       <Pill
-        v-if="(todos?.length ?? 0) > 0"
+        v-if="(todos?.length ?? 0) > 0 || (todoHistory?.length ?? 0) > 0"
         :active="dockPanel === 'todos'"
         :aria-pressed="dockPanel === 'todos'"
         @click="emit('toggle-dock-panel', 'todos')"
       >
         <Icon name="check-list" size="md" />
         <span>{{ t('tasks.dockTodos') }}</span>
-        <span class="dw-count">(<b>{{ todoDoneCount }}/{{ todos?.length ?? 0 }}</b>)</span>
+        <span v-if="todoBadge" class="dw-count">(<b>{{ todoBadge }}</b>)</span>
       </Pill>
     </div>
 
@@ -361,6 +408,8 @@ defineExpose({ loadForEdit, loadAttachmentsForEdit, focus });
   border-color: transparent;
   padding-left: 2px;
 }
+.dock-todo-views { margin-left: auto; }
+.dock-todo-count { margin-left: 6px; font-variant-numeric: tabular-nums; }
 .dock-work-body {
   padding: 8px 10px;
   overflow-y: auto;

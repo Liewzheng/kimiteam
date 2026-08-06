@@ -393,6 +393,47 @@ export interface WireProviderRefreshResult {
   failed: Array<{ provider: string; reason: string }>;
 }
 
+/** One model entry in a provider create/edit body. `model` is the raw model
+ *  name; the server registers it as the `<provider_id>/<model>` alias. */
+export interface WireProviderModelInput {
+  model: string;
+  max_context_size: number;
+  display_name?: string;
+}
+
+/** POST /providers — manual provider creation body. `models` is required
+ *  (min 1): each entry becomes a `[models.<provider>/<model>]` alias, so a
+ *  provider added in the UI is immediately usable. */
+export interface WireProviderCreateRequest {
+  id: string;
+  type: string;
+  api_key?: string;
+  base_url?: string;
+  default_model?: string;
+  models: WireProviderModelInput[];
+}
+
+/** PUT /providers/{provider_id} — replace-style edit body. `api_key` is
+ *  tri-state: omitted keeps the stored key, "" clears it, any other value
+ *  replaces it. `models` rebuilds the provider's aliases (aliases no longer
+ *  listed disappear from config.toml). */
+export interface WireProviderUpdateRequest {
+  type: string;
+  api_key?: string;
+  base_url?: string;
+  default_model?: string;
+  models: WireProviderModelInput[];
+}
+
+/** GET /providers/{provider_id} — single-provider GET reveals the stored
+ *  `api_key` so an edit form can prefill it (list routes stay redacted). */
+export type WireProviderDetail = WireProvider & { api_key?: string };
+
+/** PUT /providers/{provider_id} success payload. */
+export interface WireProviderUpdateResponse {
+  provider: WireProvider;
+}
+
 export interface WireConfigProvider {
   type: string;
   base_url?: string;
@@ -448,6 +489,10 @@ export interface WireTeamMember {
   tools: string[];
   skills?: string[];
   duty?: boolean;
+  /** Chinese display name from the profile's `display_name` frontmatter.
+   *  Absent until the server ships it — the web card then falls back to the
+   *  English profile id (`name`). */
+  display_name?: string;
   /** The profile's prompt body (Markdown after the frontmatter), when the
    *  server ships it. */
   prompt?: string;

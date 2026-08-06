@@ -7,5 +7,6 @@ export default {
   /** Agent-workflow field labels (shared by AgentWorkflow). */
   taskLabel: 'Task',
   outputLabel: 'Output',
+  thinkingLabel: 'Thinking',
   progressLabel: 'Progress',
 } as const;

@@ -511,6 +511,31 @@ function isStreamingRenderBlock(turn: ChatTurn, block: { sourceIndex: number }):
   return block.sourceIndex === turnBlocks(turn).length - 1;
 }
 
+// ---------------------------------------------------------------------------
+// Stable child-component handlers — THE streaming input-lag fix.
+//
+// Inline arrows (`:open-file="(t) => emit('openFile', t)"`) and emit-call event
+// bindings (`@open="emit('openMedia', $event)"`) mint a NEW function on every
+// parent render. Vue's hasPropsChanged compares child props by reference, so a
+// fresh function on each frame forces every settled message's Markdown /
+// ToolGroup / ToolCall to re-render while the live turn streams (measured ~5×
+// linear cost growth with message count). Bare top-level references below are
+// stable across renders — settled messages only re-render when their own text
+// actually changes.
+// ---------------------------------------------------------------------------
+function onOpenFile(target: FilePreviewRequest): void {
+  emit('openFile', target);
+}
+function onOpenMedia(media: ToolMedia): void {
+  emit('openMedia', media);
+}
+function onOpenToolDiff(id: string): void {
+  emit('openToolDiff', id);
+}
+function onOpenAgent(toolCallId: string): void {
+  emit('openAgent', toolCallId);
+}
+
 // NOTE: the turn-summary line ("已调用 N 个工具…") was removed in f9417af. If it
 // comes back, rebuild it from turnBlocks() with i18n strings — the old
 // implementation lives in git history at f9417af^.
@@ -637,18 +662,18 @@ function isStreamingRenderBlock(turn: ChatTurn, block: { sourceIndex: number }):
       <div v-else class="a-msg turn-anchor" :data-turn-id="turn.id">
         <template v-for="(blk, bi) in assistantRenderBlocks(turn)" :key="renderBlockKey(blk, bi)">
           <ThinkingBlock v-if="blk.kind === 'thinking'" :text="blk.thinking" mobile :streaming="isStreamingRenderBlock(turn, blk)" @open="emit('openThinking', { turnId: turn.id, blockIndex: blk.sourceIndex })" />
-          <div v-else-if="blk.kind === 'text' && blk.text" class="msg"><Markdown :text="blk.text" :streaming="isStreamingRenderBlock(turn, blk)" :open-file="(target) => emit('openFile', target)" /></div>
+          <div v-else-if="blk.kind === 'text' && blk.text" class="msg"><Markdown :text="blk.text" :streaming="isStreamingRenderBlock(turn, blk)" :open-file="onOpenFile" /></div>
           <ToolGroup
             v-else-if="blk.kind === 'tool-stack'"
             :tools="blk.tools"
             mobile
             :tool-diff-panel="toolDiffPanel"
-            @open-media="emit('openMedia', $event)"
-            @open-file="emit('openFile', $event)"
-            @open-tool-diff="emit('openToolDiff', $event)"
-            @open-agent="emit('openAgent', $event)"
+            @open-media="onOpenMedia"
+            @open-file="onOpenFile"
+            @open-tool-diff="onOpenToolDiff"
+            @open-agent="onOpenAgent"
           />
-          <ToolCall v-else-if="blk.kind === 'tool'" :tool="blk.tool" mobile :tool-diff-panel="toolDiffPanel" @open-media="emit('openMedia', $event)" @open-file="emit('openFile', $event)" @open-tool-diff="emit('openToolDiff', $event)" @open-agent="emit('openAgent', $event)" />
+          <ToolCall v-else-if="blk.kind === 'tool'" :tool="blk.tool" mobile :tool-diff-panel="toolDiffPanel" @open-media="onOpenMedia" @open-file="onOpenFile" @open-tool-diff="onOpenToolDiff" @open-agent="onOpenAgent" />
         </template>
         <div v-if="turn.id !== streamingTurnId && isAssistantRunEnd(ti) && (assistantRunFinalText(ti).trim().length > 0 || turn.durationMs !== undefined)" class="a-msg-ft">
           <Tooltip :text="`${turn.durationMs} ms`">

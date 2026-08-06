@@ -29,6 +29,7 @@ const TOOL_LABEL_KEYS: Record<string, string> = {
   getgoal: 'tools.label.goal_get',
   setgoalbudget: 'tools.label.goal_budget',
   updategoal: 'tools.label.goal_update',
+  teammessage: 'tools.label.team_message',
 };
 
 // ---------------------------------------------------------------------------
@@ -105,6 +106,7 @@ const TOOL_GLYPH: Record<string, IconName> = {
   getgoal: 'target',
   setgoalbudget: 'target',
   updategoal: 'target',
+  teammessage: 'message',
   // Cron scheduling tools share a calendar motif: schedule / list / cancel.
   croncreate: 'calendar-schedule',
   cronlist: 'calendar-todo',

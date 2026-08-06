@@ -21,6 +21,21 @@ const emit = defineEmits<{
   openAgent: [toolCallId: string];
 }>();
 
+// Stable references — emit-call bindings would mint a new function per render
+// and re-render the tool renderer on every streaming frame.
+function onOpenMedia(media: ToolMedia): void {
+  emit('openMedia', media);
+}
+function onOpenFile(target: FilePreviewRequest): void {
+  emit('openFile', target);
+}
+function onOpenToolDiff(id: string): void {
+  emit('openToolDiff', id);
+}
+function onOpenAgent(toolCallId: string): void {
+  emit('openAgent', toolCallId);
+}
+
 const Renderer = computed(() => resolveToolRenderer(props.tool));
 </script>
 
@@ -32,9 +47,9 @@ const Renderer = computed(() => resolveToolRenderer(props.tool));
     :stack-position="stackPosition"
     :tool-diff-panel="toolDiffPanel"
     :data-scroll-anchor-id="tool.id"
-    @open-media="emit('openMedia', $event)"
-    @open-file="emit('openFile', $event)"
-    @open-tool-diff="emit('openToolDiff', $event)"
-    @open-agent="emit('openAgent', $event)"
+    @open-media="onOpenMedia"
+    @open-file="onOpenFile"
+    @open-tool-diff="onOpenToolDiff"
+    @open-agent="onOpenAgent"
   />
 </template>

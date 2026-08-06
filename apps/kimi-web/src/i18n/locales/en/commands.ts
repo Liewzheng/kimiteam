@@ -16,6 +16,7 @@ export default {
     noSession: 'Open a session before exporting it.',
   },
   status: { desc: 'View session status' },
+  todo: { desc: 'View this session’s completed tasks' },
   team: { desc: 'Manage the subagent team' },
   usage: { desc: 'View subagent token usage' },
   undo: { desc: 'Undo the last message' },

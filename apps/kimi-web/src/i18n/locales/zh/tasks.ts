@@ -15,6 +15,10 @@ export default {
   emptyBash: '暂无后台 Bash 任务',
   emptySubagent: '暂无子 Agent 任务',
   emptyTodo: '暂无待办事项',
+  /** 待办面板内的分段视图标签：当前列表 vs 本会话已完成任务历史（对齐 TUI /todo）。 */
+  todoActive: '进行中',
+  todoHistory: '已完成',
+  emptyTodoHistory: '暂无已完成任务',
   openTab: '查看全部后台任务',
   openDetail: '查看',
   collapse: '折叠',

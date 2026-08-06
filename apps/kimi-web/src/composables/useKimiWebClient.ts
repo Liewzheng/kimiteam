@@ -78,7 +78,7 @@ import { createInitialState, reduceAppEvent, type CompactionStatus, type KimiCli
 import { isPlaceholderSessionUsage, toAppEvent } from '../api/daemon/mappers';
 
 import { messagesToTurns } from './messagesToTurns';
-import { latestTodos } from './latestTodos';
+import { latestTodos, todoHistory as aggregateTodoHistory } from './latestTodos';
 import { buildSwarmGroups, countSwarmMembers, swarmMembersByToolCall } from './swarmGroups';
 import type { SwarmGroup, SwarmMember } from './swarmGroups';
 import type {
@@ -1007,7 +1007,13 @@ function processEvent(appEvent: AppEvent, meta: KimiEventMeta): void {
 const enqueueEvent = createEventBatcher<PendingAppEvent>(
   ({ appEvent, meta }) => processEvent(appEvent, meta),
   ({ appEvent }) => isRenderEvent(appEvent),
-  { coalesce: coalesceAppRenderEvents },
+  {
+    coalesce: coalesceAppRenderEvents,
+    // Throttle scheduled drains off frame rate during fast streaming: deltas
+    // coalesce into the next window, so the full render chain rebuilds ~16×/s
+    // instead of ~60×/s (up to 60ms of added streaming latency, imperceptible).
+    minDrainIntervalMs: 60,
+  },
 );
 
 // ---------------------------------------------------------------------------
@@ -2020,6 +2026,14 @@ const todos = computed<TodoView[]>(() => {
   return latestTodos(rawState.messagesBySession[sid] ?? []);
 });
 
+/** Completed-todo history of the active session — the union of `done` items
+ *  across EVERY TodoList write in the transcript (TUI `/todo` parity). */
+const todoHistory = computed<TodoView[]>(() => {
+  const sid = rawState.activeSessionId;
+  if (!sid) return [];
+  return aggregateTodoHistory(rawState.messagesBySession[sid] ?? []);
+});
+
 /** Live compaction state of the active session (present only while running). */
 const compaction = computed<CompactionStatus | null>(() => {
   const sid = rawState.activeSessionId;
@@ -2775,6 +2789,7 @@ export function useKimiWebClient() {
      *  sources a subagent's streaming `outputLines` from here. */
     activeAppTasks,
     todos,
+    todoHistory,
     goal,
     swarms,
     swarmMembersByToolCallId,
@@ -2942,6 +2957,7 @@ export function useKimiWebClient() {
     setModel: modelProvider.setModel,
     toggleStarModel: modelProvider.toggleStarModel,
     addProvider: modelProvider.addProvider,
+    updateProvider: modelProvider.updateProvider,
     deleteProvider: modelProvider.deleteProvider,
     refreshProvider: modelProvider.refreshProvider,
     refreshAllProviders: modelProvider.refreshAllProviders,

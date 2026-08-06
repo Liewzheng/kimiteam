@@ -323,6 +323,11 @@ export interface AppTask {
    *  the event reducer from `taskProgress` chunks of kind `text`. Grows in the
    *  right-side detail panel like a thinking block. */
   text?: string;
+  /** The subagent's concatenated chain-of-thought (thinking.delta), accumulated
+   *  by the event reducer from `taskProgress` chunks of kind `thinking`. Rendered
+   *  separately from `text` — muted/italic and collapsible — so the reasoning
+   *  never drowns the real output. */
+  thinking?: string;
   subagentPhase?: AppSubagentPhase;
   subagentType?: string;
   parentToolCallId?: string;
@@ -456,9 +461,11 @@ export type AppEvent =
       /**
        * `line` (default) appends a new progress line (tool-call / tool-progress).
        * `text` concatenates onto the subagent's growing streamed output
-       * (`AppTask.text`), shown live in the detail panel like a thinking block.
+       * (`AppTask.text`).
+       * `thinking` concatenates onto the subagent's chain-of-thought
+       * (`AppTask.thinking`), rendered muted/italic and collapsible.
        */
-      kind?: 'line' | 'text';
+      kind?: 'line' | 'text' | 'thinking';
     }
   | { type: 'taskCompleted'; sessionId: string; taskId: string; status: AppTaskStatus; outputPreview?: string; outputBytes?: number }
   // Prompt-level lifecycle (distinct from turn-level): a prompt that never
@@ -639,6 +646,32 @@ export interface AppProvider {
   models?: string[];
 }
 
+/** One model entry in a provider create/edit payload. `model` is the raw model
+ *  name the provider serves (the server registers it as the `<provider>/<model>`
+ *  alias); `maxContextSize` is required by the server's model-record schema. */
+export interface AppProviderModelInput {
+  model: string;
+  maxContextSize: number;
+  displayName?: string;
+}
+
+/** The single-provider GET additionally reveals the stored `api_key` so an
+ *  edit form can prefill it (list responses stay redacted). */
+export type AppProviderDetail = AppProvider & { apiKey?: string };
+
+/** PUT /providers/{id} — replace-style provider edit. `apiKey` is tri-state on
+ *  the wire: omitted keeps the stored key, "" clears it, any other value
+ *  replaces it. `models` is required (min 1) and rebuilds the provider's model
+ *  aliases — this is what persists the `[providers.*]` / `[models.*]` sections
+ *  back to config.toml. */
+export interface AppProviderUpdate {
+  type: string;
+  apiKey?: string;
+  baseUrl?: string;
+  defaultModel?: string;
+  models: AppProviderModelInput[];
+}
+
 export interface ProviderRefreshResult {
   changed: Array<{
     providerId: string;
@@ -691,9 +724,11 @@ export interface AppSkill {
 // Team (subagent team management)
 // ---------------------------------------------------------------------------
 
-/** Four-state member lifecycle status, aligned with the TUI:
- *  working / resting / on-duty / off-duty (工作 · 休息 · 上班 · 下班). */
-export type AppTeamMemberStatus = 'working' | 'resting' | 'on-duty' | 'off-duty';
+/** Three-state display lifecycle (web): working / resting / off-duty
+ *  (工作 · 休息 · 下班). The wire still carries the TUI's four states; the
+ *  mapper folds `on-duty` (employed-but-idle) into `resting` — the roster's
+ *  "not currently working" bucket, which also absorbs 常驻 duty members. */
+export type AppTeamMemberStatus = 'working' | 'resting' | 'off-duty';
 
 export interface AppTeamMember {
   name: string;
@@ -704,6 +739,10 @@ export interface AppTeamMember {
   tools: string[];
   skills?: string[];
   duty?: boolean;
+  /** Chinese display name from the profile's `display_name` frontmatter
+   *  (wire passthrough). Absent until the server ships it — the card then
+   *  falls back to the English profile id (`name`). */
+  displayName?: string;
   /** The profile's prompt body (Markdown after the frontmatter), when the
    *  server ships it — editable via updateTeamMember. */
   prompt?: string;
@@ -848,7 +887,21 @@ export interface KimiWebApi {
   // PRESUMED — not in current daemon docs; isolated in adapter, swap when backend defines them.
   listModels(): Promise<AppModel[]>;
   listProviders(): Promise<AppProvider[]>;
-  addProvider(input: { type: string; apiKey?: string; baseUrl?: string; defaultModel?: string }): Promise<AppProvider>;
+  /** Single-provider GET — reveals the stored api key so an edit form can
+   *  prefill it (loopback/bearer-guarded; list + /config stay redacted). */
+  getProvider(id: string): Promise<AppProviderDetail>;
+  addProvider(input: {
+    id: string;
+    type: string;
+    apiKey?: string;
+    baseUrl?: string;
+    defaultModel?: string;
+    models: AppProviderModelInput[];
+  }): Promise<AppProvider>;
+  /** Replace-style provider edit (PUT /providers/{id}). `apiKey` omitted keeps
+   *  the stored key, "" clears it, any other value replaces it. Rebuilds the
+   *  provider's model aliases from `models` — persisted to config.toml. */
+  updateProvider(id: string, input: AppProviderUpdate): Promise<AppProvider>;
   deleteProvider(id: string): Promise<{ deleted: true }>;
   refreshProvider(id: string): Promise<ProviderRefreshResult>;
   refreshAllProviders(): Promise<ProviderRefreshResult>;

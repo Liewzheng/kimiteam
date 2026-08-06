@@ -25,8 +25,11 @@ export interface EventBatcherScheduler {
   /** Request the next visual frame. Return null when frames are unavailable. */
   requestFrame(callback: () => void): number | null;
   cancelFrame(handle: number): void;
-  /** Request a task that still runs when animation frames are suspended. */
-  requestTask(callback: () => void): number;
+  /** Request a task that still runs when animation frames are suspended. The
+   *  optional `delayMs` overrides the fixed fallback delay — used by
+   *  rate-limited drains, which wait out the minimum interval on a timer
+   *  instead of riding the next frame. */
+  requestTask(callback: () => void, delayMs?: number): number;
   cancelTask(handle: number): void;
 }
 
@@ -46,8 +49,8 @@ const defaultScheduler: EventBatcherScheduler = {
   cancelFrame(handle) {
     if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(handle);
   },
-  requestTask(callback) {
-    return setTimeout(callback, FALLBACK_TASK_DELAY_MS) as unknown as number;
+  requestTask(callback, delayMs = FALLBACK_TASK_DELAY_MS) {
+    return setTimeout(callback, delayMs) as unknown as number;
   },
   cancelTask(handle) {
     clearTimeout(handle);
@@ -59,6 +62,18 @@ export interface EventBatcherOptions<T> {
   coalesce?: (previous: T, next: T) => T | undefined;
   /** Maximum queued groups processed by one scheduled or synchronous slice. */
   maxItemsPerSlice?: number;
+  /**
+   * Minimum wall-clock gap between SCHEDULED drains, in ms. During fast
+   * streaming the coalescer folds deltas into one pending group, so the drain
+   * (and the full render chain it rebuilds) can be throttled from frame rate
+   * (~60/s) down to ~10-20/s without losing content — the trade-off is up to
+   * `minDrainIntervalMs` of added streaming latency, which is imperceptible.
+   * Synchronous drains (control events, flush) bypass the throttle.
+   * 0 (default) = drain on every frame, current behavior.
+   */
+  minDrainIntervalMs?: number;
+  /** Clock for the drain interval. Defaults to Date.now; inject for tests. */
+  now?: () => number;
   scheduler?: EventBatcherScheduler;
 }
 
@@ -84,10 +99,14 @@ export function createEventBatcher<T>(
   options: EventBatcherOptions<T> = {},
 ): EventBatcher<T> {
   const scheduler = options.scheduler ?? defaultScheduler;
+  const now = options.now ?? Date.now;
   const maxItemsPerSlice = Math.max(
     1,
     Math.floor(options.maxItemsPerSlice ?? DEFAULT_MAX_ITEMS_PER_SLICE),
   );
+  const minDrainIntervalMs = Math.max(0, options.minDrainIntervalMs ?? 0);
+  // -Infinity so the very first drain (no prior drain) is never throttled.
+  let lastDrainAt = Number.NEGATIVE_INFINITY;
   const pending: T[] = [];
   let head = 0;
   let frameHandle: number | null = null;
@@ -135,12 +154,25 @@ export function createEventBatcher<T>(
       if (version !== scheduleVersion) return;
       drainSlice();
     };
+    if (minDrainIntervalMs > 0) {
+      // Rate limit: keep drains at least `minDrainIntervalMs` apart. The wait is
+      // measured from the last actual drain (lastDrainAt), so a fast stream
+      // coalesces into the next window instead of rebuilding the render chain
+      // once per frame. A synchronous drain (control event) bypasses this and
+      // resets the clock.
+      const wait = minDrainIntervalMs - (now() - lastDrainAt);
+      if (wait > 0) {
+        taskHandle = scheduler.requestTask(run, wait);
+        return;
+      }
+    }
     frameHandle = scheduler.requestFrame(run);
     taskHandle = scheduler.requestTask(run);
   };
 
   drainSlice = (): void => {
     cancelScheduled();
+    lastDrainAt = now();
     let processed = 0;
     while (!disposed && processed < maxItemsPerSlice && head < pending.length) {
       const item = pending[head++]!;

@@ -28,6 +28,9 @@ const props = defineProps<{
   tasks: TaskItem[];
   /** Model-maintained todo list (TodoList tool) — shown as a floating card. */
   todos?: TodoView[];
+  /** Completed-todo history of the session (union of done items across every
+   *  TodoList write) — shown in the dock's todos panel history view. */
+  todoHistory?: TodoView[];
   goal?: AppGoal | null;
   activationBadges?: ActivationBadges;
   status: ConversationStatus;
@@ -195,7 +198,9 @@ const dockedComposerRef = ref<ComposerHandle | null>(null);
 const copyConversationCopied = ref(false);
 const goalExpandSignal = ref(0);
 let copyConversationCopiedTimer: ReturnType<typeof setTimeout> | null = null;
-
+/** Bumped to ask the dock's todos panel to switch to the completed-history
+ *  view (the `/todo` command entry — TUI parity). */
+const todosHistorySignal = ref(0);
 /** Load text (and any attachments) into whichever composer is currently mounted
     (docked vs the empty-session composer). Used by App for "edit & resend the
     last message", and by the queue when a pending prompt is loaded for edit.
@@ -254,6 +259,7 @@ const todoDoneCount = computed(() => (props.todos ?? []).filter((td) => td.statu
 const hasDockWork = computed(() =>
   bashTasks.value.length > 0 ||
   (props.todos?.length ?? 0) > 0 ||
+  (props.todoHistory?.length ?? 0) > 0 ||
   (props.queued?.length ?? 0) > 0,
 );
 const dockPanel = ref<'bash' | 'todos' | null>(null);
@@ -265,6 +271,15 @@ function toggleDockPanel(panel: 'bash' | 'todos'): void {
 
 function closeDockPanel(): void {
   dockPanel.value = null;
+}
+
+/** `/todo` entry (TUI parity): open the dock's todos panel on the completed
+ *  history view. The current list may be empty while history exists (e.g. an
+ *  all-done session), so the panel must open even when the todos tab pill is
+ *  hidden. */
+function openTodosHistory(): void {
+  dockPanel.value = 'todos';
+  todosHistorySignal.value++;
 }
 
 watch(hasDockWork, (hasWork) => {
@@ -1253,7 +1268,7 @@ function focusComposer(): void {
   (dockedComposerRef.value ?? emptyComposerRef.value)?.focus();
 }
 
-defineExpose({ loadComposerForEdit, focusComposer });
+defineExpose({ loadComposerForEdit, focusComposer, openTodosHistory });
 </script>
 
 <template>
@@ -1475,6 +1490,8 @@ defineExpose({ loadComposerForEdit, focusComposer });
         :team-total="teamTotal ?? 0"
         :team-active="teamOpen"
         :todos="todos"
+        :todo-history="todoHistory"
+        :todo-history-signal="todosHistorySignal"
         :pending-question="pendingQuestion"
         :question-busy-kind="questionBusyKind"
         :pending-approval="pendingApproval"

@@ -12,10 +12,11 @@ import LanguageSwitcher from './LanguageSwitcher.vue';
 import { serverEndpointLabel } from '../../api/config';
 import { downloadTraceLog, isTraceEnabled } from '../../debug/trace';
 import type { Accent, ColorScheme } from '../../composables/useKimiWebClient';
-import type { AppConfig, AppModel } from '../../api/types';
+import type { AppConfig, AppModel, AppProvider } from '../../api/types';
 import Dialog from '../ui/Dialog.vue';
 import Switch from '../ui/Switch.vue';
 import Button from '../ui/Button.vue';
+import Badge from '../ui/Badge.vue';
 import SegmentedControl from '../ui/SegmentedControl.vue';
 import Select from '../ui/Select.vue';
 import Tooltip from '../ui/Tooltip.vue';
@@ -44,6 +45,8 @@ const props = defineProps<{
   config?: AppConfig | null;
   /** Models from the daemon catalog, used to label default-model choices. */
   models?: AppModel[];
+  /** Configured providers, for the Providers tab summary. */
+  providers?: AppProvider[];
   /** True while POST /api/v1/config is saving. */
   configSaving?: boolean;
   /** Server version reported by GET /api/v1/meta. */
@@ -69,7 +72,7 @@ const emit = defineEmits<{
   close: [];
 }>();
 
-type SettingsTab = 'general' | 'agent' | 'account' | 'advanced' | 'archived';
+type SettingsTab = 'general' | 'agent' | 'account' | 'providers' | 'advanced' | 'archived';
 
 const activeTab = ref<SettingsTab>('general');
 
@@ -77,6 +80,7 @@ const tabs: { id: SettingsTab; labelKey: string }[] = [
   { id: 'general', labelKey: 'settings.tabs.general' },
   { id: 'agent', labelKey: 'settings.tabs.agent' },
   { id: 'account', labelKey: 'settings.tabs.account' },
+  { id: 'providers', labelKey: 'settings.tabs.providers' },
   { id: 'advanced', labelKey: 'settings.tabs.advanced' },
   { id: 'archived', labelKey: 'settings.tabs.archived' },
 ];
@@ -466,6 +470,44 @@ function archiveTime(iso: string): string {
           </section>
         </section>
 
+        <!-- Providers: API providers + models (persisted to config.toml by the
+             server through ProviderManager's POST/PUT /providers). -->
+        <section v-show="activeTab === 'providers'" class="panel">
+          <section class="sec">
+            <h3 class="sec-title">{{ t('settings.providers') }}</h3>
+            <p class="panel-desc">{{ t('settings.providersDesc') }}</p>
+
+            <!-- Current-provider summary (read-only; manage in ProviderManager) -->
+            <div v-if="providers && providers.length > 0" class="prov-summary">
+              <div v-for="p in providers" :key="p.id" class="prov-summary-row">
+                <Badge
+                  :variant="p.status === 'connected' ? 'success' : p.status === 'error' ? 'danger' : 'neutral'"
+                  size="sm"
+                >
+                  {{
+                    p.status === 'connected'
+                      ? t('providers.status.connected')
+                      : p.status === 'error'
+                        ? t('providers.status.error')
+                        : t('providers.status.unconfigured')
+                  }}
+                </Badge>
+                <span class="prov-summary-id">{{ p.type }}</span>
+                <span class="prov-summary-count">{{ t('providers.modelCount', { count: p.models?.length ?? 0 }) }}</span>
+              </div>
+            </div>
+            <div v-else-if="providers" class="prov-summary-empty">
+              {{ t('settings.providersNone') }}
+            </div>
+
+            <div class="actions">
+              <Button variant="primary" size="sm" @click="emit('openProviders')">
+                {{ t('settings.manageProviders') }}
+              </Button>
+            </div>
+          </section>
+        </section>
+
         <!-- Agent defaults -->
         <section v-show="activeTab === 'agent'" class="panel">
           <section class="sec">
@@ -786,6 +828,47 @@ function archiveTime(iso: string): string {
 }
 
 .actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-2); }
+
+/* Providers tab — current-provider summary */
+.prov-summary {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-top: var(--space-3);
+}
+.prov-summary-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+}
+.prov-summary-id {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--color-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.prov-summary-count {
+  flex: none;
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+}
+.prov-summary-empty {
+  margin-top: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px dashed var(--color-line-strong);
+  border-radius: var(--radius-md);
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
 
 @media (max-width: 640px) {
   .sd { flex-direction: column; }

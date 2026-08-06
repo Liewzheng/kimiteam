@@ -17,6 +17,7 @@ export default {
     goal_get: '读取目标',
     goal_budget: '设置目标预算',
     goal_update: '更新目标',
+    team_message: '递话',
   },
   swarm: {
     progress: '{done} / {total}',

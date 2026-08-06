@@ -282,11 +282,14 @@ function projectSubagentProgress(
   // placeholders like "Started a step".
   if (sideChannelAgents.has(subagentId) && rawType === 'turn.step.started') return [];
 
-  // The subagent's own streamed text: forward each delta as a `text`-kind
-  // progress chunk so the reducer concatenates it into `AppTask.text`, letting
-  // the right-side detail panel show the subagent's output growing live (like
-  // a thinking block) instead of staying blank until the first tool call.
-  if (rawType === 'assistant.delta') {
+  // The subagent's own streamed prose: forward each text/thinking delta as a
+  // kinded progress chunk so the reducer concatenates it into `AppTask.text` /
+  // `AppTask.thinking`, letting the right-side detail panel show the subagent's
+  // output (and reasoning) growing live instead of staying blank until the
+  // first tool call. `thinking.delta` used to fall through to
+  // `subagentProgressText` and be silently dropped — the member card then only
+  // ever showed the assistant deltas.
+  if (rawType === 'assistant.delta' || rawType === 'thinking.delta') {
     const delta = stringField(payload, 'delta');
     if (!delta) return [];
     // Ensure the subagent task exists before forwarding the text delta. A client
@@ -308,7 +311,7 @@ function projectSubagentProgress(
       taskId: subagentId,
       outputChunk: delta,
       stream: 'stdout',
-      kind: 'text',
+      kind: rawType === 'thinking.delta' ? 'thinking' : 'text',
     });
     return out;
   }

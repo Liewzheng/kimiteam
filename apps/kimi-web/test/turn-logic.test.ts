@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AppMessage, AppMessageContent } from '../src/api/types';
-import { latestTodos } from '../src/composables/latestTodos';
+import { latestTodos, todoHistory } from '../src/composables/latestTodos';
 import { messagesToTurns } from '../src/composables/messagesToTurns';
 import { isPlayableMediaUrl } from '../src/composables/useFilePreview';
 
@@ -742,6 +742,140 @@ describe('latestTodos', () => {
         ]),
       ]),
     ).toEqual([{ title: 'new', status: 'done' }]);
+  });
+});
+
+describe('todoHistory', () => {
+  /** Build an assistant message carrying one TodoList tool-use call. */
+  function todoMsg(
+    id: string,
+    toolName: string,
+    input: unknown,
+    createdAt = '2026-01-01T00:00:00.000Z',
+  ): AppMessage {
+    return message(
+      id,
+      'assistant',
+      [{ type: 'toolUse', toolCallId: `tc-${id}`, toolName, input }],
+      { createdAt },
+    );
+  }
+
+  const done = (overrides: Record<string, unknown>) => ({
+    title: 'task',
+    status: 'done',
+    ...overrides,
+  });
+
+  it('unions done items across multiple TodoList writes (chronological)', () => {
+    expect(
+      todoHistory([
+        todoMsg('a1', 'TodoList', {
+          todos: [done({ title: 'first', id: 'T1', whatDone: 'did first', assignee: 'worker-a' })],
+        }),
+        todoMsg('a2', 'TodoWrite', {
+          todos: [done({ title: 'second', id: 'T2', whatDone: 'did second', assignee: 'worker-b' })],
+        }),
+      ]),
+    ).toEqual([
+      expect.objectContaining({ title: 'first', id: 'T1' }),
+      expect.objectContaining({ title: 'second', id: 'T2' }),
+    ]);
+  });
+
+  it('keeps only done items — pending / in_progress are excluded', () => {
+    expect(
+      todoHistory([
+        todoMsg('a1', 'TodoList', {
+          todos: [
+            { title: 'todo', status: 'pending' },
+            { title: 'doing', status: 'in_progress' },
+            done({ title: 'finished', id: 'T1' }),
+          ],
+        }),
+      ]),
+    ).toEqual([expect.objectContaining({ title: 'finished', id: 'T1' })]);
+  });
+
+  it('passes the extended fields through untouched (id/assignee/whatDone/completedAt)', () => {
+    expect(
+      todoHistory([
+        todoMsg('a1', 'TodoList', {
+          todos: [
+            done({
+              title: 'ship it',
+              id: 'T42',
+              assignee: 'agent-web',
+              whatDone: 'shipped the release',
+              completedAt: '2026-01-02T03:04:05.000Z',
+            }),
+          ],
+        }),
+      ]),
+    ).toEqual([
+      {
+        title: 'ship it',
+        status: 'done',
+        id: 'T42',
+        assignee: 'agent-web',
+        whatDone: 'shipped the release',
+        completedAt: '2026-01-02T03:04:05.000Z',
+      },
+    ]);
+  });
+
+  it('dedupes by id — the first-seen entry wins across writes', () => {
+    expect(
+      todoHistory([
+        todoMsg('a1', 'TodoList', {
+          todos: [done({ title: 'first pass', id: 'T1', whatDone: 'initial' })],
+        }),
+        todoMsg('a2', 'TodoList', {
+          todos: [done({ title: 'echoed', id: 'T1', whatDone: 'richer' })],
+        }),
+      ]),
+    ).toEqual([expect.objectContaining({ title: 'first pass', id: 'T1', whatDone: 'initial' })]);
+  });
+
+  it('falls back to title-based dedup for legacy items without an id', () => {
+    expect(
+      todoHistory([
+        todoMsg('a1', 'TodoList', { todos: [done({ title: 'legacy', whatDone: 'v1' })] }),
+        todoMsg('a2', 'TodoList', { todos: [done({ title: 'legacy', whatDone: 'v2' })] }),
+      ]),
+    ).toEqual([expect.objectContaining({ title: 'legacy', whatDone: 'v1' })]);
+  });
+
+  it('sorts by completedAt descending, trailing untimestamped items last', () => {
+    expect(
+      todoHistory([
+        todoMsg('a1', 'TodoList', {
+          todos: [
+            done({ title: 'old', id: 'T1', completedAt: '2026-01-01T00:00:00.000Z' }),
+            done({ title: 'no stamp', id: 'T2' }),
+          ],
+        }),
+        todoMsg('a2', 'TodoList', {
+          todos: [done({ title: 'new', id: 'T3', completedAt: '2026-01-03T00:00:00.000Z' })],
+        }),
+      ]).map((td) => td.title),
+    ).toEqual(['new', 'old', 'no stamp']);
+  });
+
+  it('keeps history even when the latest write clears the live list (all-done case)', () => {
+    expect(
+      todoHistory([
+        todoMsg('a1', 'TodoList', {
+          todos: [done({ title: 'finished', id: 'T1', whatDone: 'done it' })],
+        }),
+        todoMsg('a2', 'TodoList', { todos: [] }),
+      ]),
+    ).toEqual([expect.objectContaining({ title: 'finished', id: 'T1' })]);
+  });
+
+  it('ignores read-only queries and returns [] for an empty transcript', () => {
+    expect(todoHistory([todoMsg('a1', 'TodoList', {})])).toEqual([]);
+    expect(todoHistory([])).toEqual([]);
   });
 });
 

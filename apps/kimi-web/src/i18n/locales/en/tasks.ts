@@ -15,6 +15,11 @@ export default {
   emptyBash: 'No bash tasks running',
   emptySubagent: 'No sub agent tasks running',
   emptyTodo: 'No todos yet',
+  /** Segmented view labels inside the dock's todos panel: current list vs the
+   *  session's completed-work history (TUI `/todo` parity). */
+  todoActive: 'Active',
+  todoHistory: 'Completed',
+  emptyTodoHistory: 'No completed work yet',
   openTab: 'Open the tasks tab',
   openDetail: 'Open',
   collapse: 'Collapse',

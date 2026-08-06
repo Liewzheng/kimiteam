@@ -17,6 +17,7 @@ export default {
     goal_get: 'Read Goal',
     goal_budget: 'Set Goal Budget',
     goal_update: 'Update Goal',
+    team_message: 'Message',
   },
   swarm: {
     progress: '{done} / {total}',

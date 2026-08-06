@@ -51,7 +51,6 @@ const summaryProject = computed(() => summarizeTeam(props.members?.project ?? []
 const summary = computed(() => ({
   total: summaryGlobal.value.total + summaryProject.value.total,
   working: summaryGlobal.value.working + summaryProject.value.working,
-  onDuty: summaryGlobal.value.onDuty + summaryProject.value.onDuty,
   resting: summaryGlobal.value.resting + summaryProject.value.resting,
   offDuty: summaryGlobal.value.offDuty + summaryProject.value.offDuty,
 }));
@@ -77,7 +76,7 @@ const sections = computed(() => [
 
 function cardAria(card: TeamMemberCard): string {
   return t('team.memberCardAria', {
-    name: card.name,
+    name: card.displayName,
     status: t('team.status.' + card.statusKey),
   });
 }
@@ -102,9 +101,6 @@ const loadFailed = computed(() => props.error !== null && props.members === null
       <div class="tsp-summary">
         <Badge v-if="summary.working > 0" variant="info" size="sm">
           {{ t('team.working', { count: summary.working }) }}
-        </Badge>
-        <Badge v-if="summary.onDuty > 0" variant="success" size="sm">
-          {{ t('team.onDuty', { count: summary.onDuty }) }}
         </Badge>
         <Badge v-if="summary.resting > 0" variant="warning" size="sm">
           {{ t('team.resting', { count: summary.resting }) }}
@@ -152,6 +148,7 @@ const loadFailed = computed(() => props.error !== null && props.members === null
               v-for="(card, i) in sec.cards"
               :key="`${sec.key}-${card.name}`"
               class="tsp-card"
+              :class="`tsp-card--${card.statusKey}`"
               role="button"
               tabindex="0"
               :aria-label="cardAria(card)"
@@ -161,9 +158,9 @@ const loadFailed = computed(() => props.error !== null && props.members === null
             >
               <div class="tsp-card-rows">
                 <div class="tsp-card-name">
-                  <span class="tsp-name" :title="card.name">{{ card.name }}</span>
+                  <span class="tsp-name" :title="card.name">{{ card.displayName }}</span>
                   <span class="tsp-status">({{ t('team.status.' + card.statusKey) }})</span>
-                  <Badge v-if="sec.rows[i]!.duty" variant="warning" size="sm">{{ t('team.dutyBadge') }}</Badge>
+                  <Badge v-if="card.duty" variant="warning" size="sm">{{ t('team.dutyBadge') }}</Badge>
                 </div>
                 <div class="tsp-card-row tsp-title" :title="card.title">{{ card.title }}</div>
                 <div class="tsp-card-row tsp-model" :title="card.model">{{ card.model }}</div>
@@ -304,6 +301,18 @@ const loadFailed = computed(() => props.error !== null && props.members === null
 .tsp-card:hover { border-color: var(--color-line-strong); }
 .tsp-card:focus-visible { outline: none; box-shadow: var(--p-focus-ring); }
 .tsp-card :deep(.ui-card__body) { padding: var(--space-2) var(--space-3); }
+
+/* Member-card backgrounds — three display states, ONE hue family: a grey base
+   tinted blue (working) / blue-green, 偏绿 (resting); off-duty stays pure grey.
+   All values derive from tokens via color-mix (no hardcoded colour):
+   `--color-text` is the neutral ink, `--color-accent` the blue, and resting
+   mixes accent into success for the teal cast. 值守 duty members are absorbed
+   into resting (blue-green) and stay identifiable via the 值守 badge. The
+   compound `.tsp-card.ui-card` overrides the Card primitive's own background
+   (same pattern as GoalStrip / QuestionCard). */
+.tsp-card.ui-card { background: color-mix(in srgb, var(--color-surface) 88%, var(--color-text)); }
+.tsp-card--working.ui-card { background: color-mix(in srgb, var(--color-surface) 88%, var(--color-accent)); }
+.tsp-card--resting.ui-card { background: color-mix(in srgb, var(--color-surface) 86%, color-mix(in srgb, var(--color-accent) 40%, var(--color-success))); }
 
 .tsp-card-rows {
   display: flex;

@@ -73,7 +73,7 @@ const member = computed(() => findTeamMember(props.members, props.name));
 
 /** The member's live subagent task → AgentMember for the workflow half. The
  *  join key is the profile name (`subagentType === member.name`); null when the
- *  member has no running instance (idle / resting / on-duty). */
+ *  member has no running instance (idle / resting). */
 const liveMember = computed<AgentMember | null>(() => {
   const task = findMemberTask(props.tasks, props.name);
   return task ? toAgentMember(task) : null;

@@ -14,15 +14,14 @@ import {
 } from './teamRows';
 
 describe('teamStatusMeta', () => {
-  it('maps each of the four TUI statuses to a badge variant + i18n key', () => {
+  it('maps each of the three display statuses to a badge variant + i18n key', () => {
     expect(teamStatusMeta('working')).toEqual({ variant: 'info', key: 'working', busy: true });
     expect(teamStatusMeta('resting')).toEqual({ variant: 'warning', key: 'resting', busy: false });
-    expect(teamStatusMeta('on-duty')).toEqual({ variant: 'success', key: 'on-duty', busy: false });
     expect(teamStatusMeta('off-duty')).toEqual({ variant: 'neutral', key: 'off-duty', busy: false });
   });
 
   it('marks only working as busy (concurrency-consumer)', () => {
-    for (const status of ['resting', 'on-duty', 'off-duty'] as const) {
+    for (const status of ['resting', 'off-duty'] as const) {
       expect(teamStatusMeta(status).busy).toBe(false);
     }
     expect(teamStatusMeta('working').busy).toBe(true);
@@ -36,21 +35,19 @@ describe('summarizeTeam', () => {
     expect(summarizeTeam([])).toEqual({
       total: 0,
       working: 0,
-      onDuty: 0,
       resting: 0,
       offDuty: 0,
     });
   });
 
-  it('counts each of the four statuses separately', () => {
+  it('counts each of the three statuses separately', () => {
     const result = summarizeTeam([
       member('working'),
       member('working'),
       member('resting'),
-      member('on-duty'),
       member('off-duty'),
     ]);
-    expect(result).toEqual({ total: 5, working: 2, onDuty: 1, resting: 1, offDuty: 1 });
+    expect(result).toEqual({ total: 4, working: 2, resting: 1, offDuty: 1 });
   });
 });
 
@@ -76,17 +73,15 @@ describe('sortTeamMembers', () => {
     expect(sortTeamMembers([])).toEqual([]);
   });
 
-  it('orders working → resting → on-duty → off-duty (TUI lifecycle)', () => {
+  it('orders working → resting → off-duty (lifecycle)', () => {
     const members = [
       member('zoe', 'off-duty'),
       member('amy', 'working'),
-      member('bob', 'on-duty'),
       member('cal', 'resting'),
     ];
     expect(sortTeamMembers(members).map((m) => m.name)).toEqual([
       'amy', // working
       'cal', // resting
-      'bob', // on-duty
       'zoe', // off-duty
     ]);
   });
@@ -107,7 +102,7 @@ describe('sortTeamMembers', () => {
   });
 
   it('does not mutate the input array', () => {
-    const members = [member('b', 'on-duty'), member('a', 'working')];
+    const members = [member('b', 'off-duty'), member('a', 'working')];
     const snapshot = [...members];
     sortTeamMembers(members);
     expect(members).toEqual(snapshot);
@@ -124,14 +119,37 @@ describe('toMemberCard / toMemberCards — TeamStatusPanel card grid', () => {
     ...overrides,
   });
 
-  it('builds the four card rows: name, statusKey, title (role), model, score', () => {
+  it('builds the four card rows: name, displayName, statusKey, duty, title, model, score', () => {
     expect(toMemberCard(member())).toEqual({
       name: 'Alice',
+      displayName: 'Alice',
       statusKey: 'working',
+      duty: false,
       title: 'Architect',
       model: 'kimi-k2',
       scoreLabel: '4.3',
     });
+  });
+
+  it('flags duty members (duty: true → blue-tinted card background)', () => {
+    expect(toMemberCard(member({ duty: true })).duty).toBe(true);
+    expect(toMemberCard(member({ duty: false })).duty).toBe(false);
+    // Absent duty (older wire shape) reads as non-duty.
+    expect(toMemberCard(member({})).duty).toBe(false);
+  });
+
+  it('uses displayName when the server ships it, else falls back to the English id', () => {
+    expect(toMemberCard(member({ displayName: '顾晚晴' })).displayName).toBe('顾晚晴');
+    expect(toMemberCard(member({})).displayName).toBe('Alice');
+    // Empty / whitespace-only display_name reads as absent → fallback.
+    expect(toMemberCard(member({ displayName: '' })).displayName).toBe('Alice');
+    expect(toMemberCard(member({ displayName: '  ' })).displayName).toBe('Alice');
+  });
+
+  it('keeps the English id for the key/tooltip even when a Chinese name is present', () => {
+    const card = toMemberCard(member({ name: 'gu-wanqing', displayName: '顾晚晴' }));
+    expect(card.name).toBe('gu-wanqing');
+    expect(card.displayName).toBe('顾晚晴');
   });
 
   it('uses the role field as the card title (no separate title field exists)', () => {

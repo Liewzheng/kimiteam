@@ -1,4 +1,4 @@
-import { defineConfig, type Plugin } from 'vite';
+import { defineConfig, type Plugin } from 'vitest/config';
 import vue from '@vitejs/plugin-vue';
 import Icons from 'unplugin-icons/vite';
 import { FileSystemIconLoader } from 'unplugin-icons/loaders';
@@ -175,5 +175,20 @@ export default defineConfig({
   // already targets ES2022 so all supported browsers handle module workers.
   worker: {
     format: 'es',
+  },
+  // Test-infra: markstream's katex worker imports `katex/dist/contrib/mhchem`,
+  // which katex@0.17's `exports` map does not expose (`./contrib/mhchem` only).
+  // Vite's browser resolution tolerates the subpath, but vitest loads
+  // node_modules deps natively (strict Node ESM), so any test that reaches
+  // Markdown.vue's worker import fails at load. Inlining the markstream/katex
+  // chain makes vitest process it through Vite's resolver (same filesystem
+  // fallback the build uses). Surfaced by the TeamMessage tool card, which is
+  // the first component to import Markdown.vue into a test graph.
+  test: {
+    server: {
+      deps: {
+        inline: [/markstream-vue/, /markstream-core/, /stream-diffs/, /katex/],
+      },
+    },
   },
 });
