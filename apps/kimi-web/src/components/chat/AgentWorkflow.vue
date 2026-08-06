@@ -141,9 +141,10 @@ watch(
 .aw-field-label {
   display: block;
   color: var(--color-text-muted);
-  font: var(--text-xs) var(--font-mono);
+  font: var(--text-sm) var(--font-mono);
   text-transform: uppercase;
   letter-spacing: 0.04em;
+  font-weight: var(--weight-semibold);
   margin-bottom: 4px;
 }
 .aw-field-body {
@@ -163,6 +164,13 @@ watch(
    white-space, and these selectors never target it. */
 .aw-md {
   min-width: 0;
+  /* The task + live-output fields render through Markdown here (mdFields.*
+     are always true for this component), so this wrapper — not .aw-live — is
+     the real output surface. Bound it like .aw-live so a long-running agent's
+     streamed output cannot stretch the embedding panel; overflow scrolls
+     inside the region (thin app scrollbar skin). Height ≈ 11 lines. */
+  max-height: 240px;
+  overflow-y: auto;
 }
 .aw-md :deep(.markdown-renderer),
 .aw-md :deep(.markdown-renderer p),

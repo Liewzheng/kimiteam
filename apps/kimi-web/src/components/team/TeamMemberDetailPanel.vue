@@ -292,9 +292,9 @@ async function save(): Promise<void> {
         </div>
 
         <div v-else class="tmd-details">
-          <div v-if="member.prompt" class="tmd-prompt">
+          <div v-if="member.prompt" class="tmd-line">
             <span class="tmd-k">{{ t('team.hirePrompt') }}</span>
-            <div class="tmd-prompt-body">{{ member.prompt }}</div>
+            <span class="tmd-v">{{ t('team.memberPromptReadonlyHint') }}</span>
           </div>
           <div class="tmd-line">
             <span class="tmd-k">{{ t('team.memberTitleLabel') }}</span>
@@ -425,6 +425,10 @@ async function save(): Promise<void> {
   flex-direction: column;
   gap: var(--space-2);
   min-width: 0;
+  /* Let the bounded workflow frame (AgentWorkflow: .aw-md/.aw-live/.aw-progress
+     caps) size inside the flex column instead of forcing min-height:auto —
+     the panel body must not grow with workflow content. */
+  min-height: 0;
 }
 .tmd-usage,
 .tmd-bottom {
@@ -480,6 +484,13 @@ async function save(): Promise<void> {
   letter-spacing: 0.04em;
   color: var(--color-text-muted);
 }
+/* Section titles (详细信息 / TOKEN 用量 / 工作流): one step larger + bold so
+   the panel's section hierarchy reads at a glance. Scoped to .tmd-head — the
+   field keys inside .tmd-line share .tmd-k and must stay small. */
+.tmd-head .tmd-k {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+}
 
 .tmd-form {
   display: flex;
@@ -505,24 +516,6 @@ async function save(): Promise<void> {
   flex-direction: column;
   gap: var(--space-2);
   min-width: 0;
-}
-.tmd-prompt {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--color-line);
-  border-radius: var(--radius-md);
-  background: var(--color-surface);
-}
-.tmd-prompt-body {
-  font-size: var(--text-sm);
-  color: var(--color-text-muted);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  max-height: 160px;
-  overflow-y: auto;
 }
 .tmd-line {
   display: flex;

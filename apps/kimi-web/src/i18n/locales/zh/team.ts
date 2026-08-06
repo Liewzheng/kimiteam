@@ -73,6 +73,7 @@ export default {
   memberEdit: '编辑',
   memberTitleLabel: '职位',
   memberPromptHint: 'Markdown——会替换该成员的提示词正文',
+  memberPromptReadonlyHint: '点击编辑查看提示词',
   memberRecentModels: '最近调用',
   memberNoModels: '暂无可用模型',
   memberOtherModels: '其他',

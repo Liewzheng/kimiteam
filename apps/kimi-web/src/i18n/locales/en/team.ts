@@ -73,6 +73,7 @@ export default {
   memberEdit: 'Edit',
   memberTitleLabel: 'Title',
   memberPromptHint: 'Markdown — replaces the profile\'s prompt body',
+  memberPromptReadonlyHint: 'Click Edit to view the prompt',
   memberRecentModels: 'Recently used',
   memberNoModels: 'No models available',
   memberOtherModels: 'Other',
