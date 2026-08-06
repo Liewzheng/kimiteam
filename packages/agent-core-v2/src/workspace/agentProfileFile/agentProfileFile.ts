@@ -33,6 +33,8 @@ export interface AgentProfileCreateInput {
 /**
  * Field-level patch for `update`. Only own keys present on the patch object
  * are applied; a key mapped to `undefined` removes it from the frontmatter.
+ * `prompt` is the exception — it replaces the file body (the Markdown after
+ * the frontmatter block), not a frontmatter key.
  */
 export interface AgentProfileFilePatch {
   readonly description?: string;
@@ -44,6 +46,7 @@ export interface AgentProfileFilePatch {
   readonly subagents?: readonly string[] | undefined;
   readonly skills?: readonly string[] | undefined;
   readonly duty?: boolean | undefined;
+  readonly prompt?: string;
 }
 
 export interface AgentProfileFileResult {
@@ -93,9 +96,9 @@ export interface IAgentProfileFileService {
   remove(name: string, scope?: AgentProfileScope): Promise<AgentProfileFileResult>;
 
   /**
-   * Patch frontmatter fields of an existing profile file, preserving the body.
-   * Throws `not_found` when the file does not exist at the scope's primary
-   * path.
+   * Patch frontmatter fields of an existing profile file, replacing the body
+   * when `patch.prompt` is set. Throws `not_found` when the file does not
+   * exist at the scope's primary path.
    */
   update(
     name: string,

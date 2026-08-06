@@ -37,6 +37,7 @@ interface MemberWire {
   description: string;
   when_to_use?: string;
   model?: string;
+  prompt?: string;
   tools: string[];
   skills?: string[];
   duty?: boolean;
@@ -319,6 +320,99 @@ describe('server-v2 /api/v1/teams/{session_id}', () => {
     });
   });
 
+  it('patches prompt/title(role)/model and returns them on the next roster read', async () => {
+    const id = await createSession();
+    await teamFetch(`/api/v1/teams/${id}/members`, {
+      method: 'POST',
+      body: { name: 'coder', description: 'Coder', prompt: 'Write code.', model: 'primary' },
+    });
+
+    // All three editable fields in one patch: prompt (body), role (Title), model.
+    const updated = await teamFetch(`/api/v1/teams/${id}/members/coder`, {
+      method: 'PUT',
+      body: { prompt: 'Write tests and docs.', role: 'lead-coder', model: 'secondary' },
+    });
+    expect(updated.status).toBe(200);
+    expect(updated.body.ok).toBe(true);
+    expect(updated.body.member).toMatchObject({
+      prompt: 'Write tests and docs.',
+      role: 'lead-coder',
+      model: 'secondary',
+      description: 'Coder', // untouched
+    });
+
+    // The next GET reflects the patch immediately (roster reads the file).
+    const members = allMembers((await teamFetch(`/api/v1/teams/${id}/members`)).body);
+    const coder = members.find((m) => m.name === 'coder');
+    expect(coder?.prompt).toBe('Write tests and docs.');
+    expect(coder?.role).toBe('lead-coder');
+    expect(coder?.model).toBe('secondary');
+    expect(coder?.description).toBe('Coder');
+  });
+
+  it('patches prompt/title/model for a project-scope member (route-side write path)', async () => {
+    const id = await createSession();
+    await teamFetch(`/api/v1/teams/${id}/members`, {
+      method: 'POST',
+      body: { name: 'proj-dev', description: 'Project dev', prompt: 'Do project work.', scope: 'project' },
+    });
+    const updated = await teamFetch(`/api/v1/teams/${id}/members/proj-dev`, {
+      method: 'PUT',
+      body: { prompt: 'New project prompt.', role: 'lead', model: 'secondary' },
+    });
+    expect(updated.status).toBe(200);
+    expect(updated.body.ok).toBe(true);
+    expect(updated.body.member).toMatchObject({
+      prompt: 'New project prompt.',
+      role: 'lead',
+      model: 'secondary',
+    });
+
+    const members = allMembers((await teamFetch(`/api/v1/teams/${id}/members`)).body);
+    const proj = members.find((m) => m.name === 'proj-dev');
+    expect(proj?.prompt).toBe('New project prompt.');
+    expect(proj?.role).toBe('lead');
+    expect(proj?.model).toBe('secondary');
+  });
+
+  it('rejects an unknown patch field (40001) without writing it', async () => {
+    const id = await createSession();
+    await teamFetch(`/api/v1/teams/${id}/members`, {
+      method: 'POST',
+      body: { name: 'coder', description: 'Coder', prompt: 'Write code.' },
+    });
+    // `name` is not a patchable field — the strict body schema rejects it.
+    const bad = await teamFetch(`/api/v1/teams/${id}/members/coder`, {
+      method: 'PUT',
+      body: { name: 'renamed' },
+    });
+    expect(bad.status).toBe(200); // ALWAYS-200 envelope carries the business code
+    expect((bad.body as { code?: number }).code).toBe(40001);
+    expect(bad.body.ok).not.toBe(true);
+
+    const members = allMembers((await teamFetch(`/api/v1/teams/${id}/members`)).body);
+    expect(members.find((m) => m.name === 'coder')).toBeDefined();
+    expect(members.find((m) => m.name === 'renamed')).toBeUndefined();
+  });
+
+  it('rejects an empty prompt patch (40001)', async () => {
+    const id = await createSession();
+    await teamFetch(`/api/v1/teams/${id}/members`, {
+      method: 'POST',
+      body: { name: 'coder', description: 'Coder', prompt: 'Write code.' },
+    });
+    const bad = await teamFetch(`/api/v1/teams/${id}/members/coder`, {
+      method: 'PUT',
+      body: { prompt: '' },
+    });
+    expect((bad.body as { code?: number }).code).toBe(40001);
+    expect(bad.body.ok).not.toBe(true);
+
+    // The original prompt survives.
+    const members = allMembers((await teamFetch(`/api/v1/teams/${id}/members`)).body);
+    expect(members.find((m) => m.name === 'coder')?.prompt).toBe('Write code.');
+  });
+
   it('records a score without a warning below the inflation sample', async () => {
     const id = await createSession();
     await teamFetch(`/api/v1/teams/${id}/members`, {
@@ -423,6 +517,52 @@ describe('server-v2 /api/v1/teams/{session_id}', () => {
         '__secondary__': { input: 200, output: 40, total: 240 },
       },
     });
+    // No main agent was materialized — the main bucket is present and empty.
+    expect(body['main']).toEqual({
+      byModel: {},
+      total: { input: 0, output: 0, total: 0 },
+    });
+  });
+
+  it('reports main-agent usage in a separate main bucket alongside unchanged subagent usage', async () => {
+    const id = await createSession();
+    const live = getLiveSessionById(server!.core.accessor, id);
+    expect(live).toBeDefined();
+    const lifecycle = live!.accessor.get(IAgentLifecycleService);
+
+    // Materialize the main agent and record usage on it.
+    const main = await lifecycle.create({ agentId: 'main' });
+    main.accessor.get(IAgentUsageService).record('provider/main-model', {
+      inputOther: 1000,
+      output: 200,
+      inputCacheRead: 100,
+      inputCacheCreation: 0,
+    });
+
+    // A subagent too, so the main/subagent split is observable.
+    const sub = await lifecycle.create({ agentId: 'sub-main-split' });
+    sub.accessor.get(IAgentUsageService).record('provider/sub-model', {
+      inputOther: 10,
+      output: 5,
+      inputCacheRead: 0,
+      inputCacheCreation: 0,
+    });
+
+    const { status, body } = await teamFetch(`/api/v1/teams/${id}/usage`);
+    expect(status).toBe(200);
+    // Main bucket: the main agent's byModel plus the summed total.
+    expect(body['main']).toEqual({
+      byModel: { 'provider/main-model': { input: 1100, output: 200, total: 1300 } },
+      total: { input: 1100, output: 200, total: 1300 },
+    });
+    // Subagent part stays unchanged and excludes the main agent's usage.
+    expect(body['runs']).toBe(1);
+    expect(body['byModel']).toEqual({
+      'provider/sub-model': { input: 10, output: 5, total: 15 },
+    });
+    expect(body['byMember']).toEqual({
+      unknown: { 'provider/sub-model': { input: 10, output: 5, total: 15 } },
+    });
   });
 
   it('normalizes __secondary__ keys to the configured secondary model id', async () => {
@@ -469,6 +609,11 @@ describe('server-v2 /api/v1/teams/{session_id}', () => {
     const { status, body } = await teamFetch(`/api/v1/teams/${id}/usage`);
     expect(status).toBe(200);
     expect(body).toMatchObject({ byModel: {}, byMember: {}, runs: 0, stale: true });
+    // The main bucket keeps a stable empty shape even on the cold path.
+    expect(body['main']).toEqual({
+      byModel: {},
+      total: { input: 0, output: 0, total: 0 },
+    });
   });
 
   it('404s usage for a session that never existed', async () => {

@@ -6,7 +6,7 @@
  * snake_case wire contract consumed by the Web TeamPanel:
  *
  *   GET    /teams/{session_id}/members                          data: { team_mode, global[], project[] }
- *   GET    /teams/{session_id}/usage                            data: { byModel, byMember, runs, stale }
+ *   GET    /teams/{session_id}/usage                            data: { byModel, byMember, runs, stale, main }
  *   POST   /teams/{session_id}/members                          body: hire(+scope)  data: { ok, member }
  *   DELETE /teams/{session_id}/members/{name}                   data: { ok }
  *   PUT    /teams/{session_id}/members/{name}                   body: patch     data: { ok, member }
@@ -100,14 +100,18 @@ const hireBodySchema = z.object({
   scope: z.enum(['global', 'project']).optional(),
 });
 
-const updateBodySchema = z.object({
-  model: z.string().optional(),
-  tools: z.array(z.string()).optional(),
-  skills: z.array(z.string()).optional(),
-  role: z.string().optional(),
-  description: z.string().optional(),
-  when_to_use: z.string().optional(),
-});
+const updateBodySchema = z
+  .object({
+    model: z.string().optional(),
+    tools: z.array(z.string()).optional(),
+    skills: z.array(z.string()).optional(),
+    role: z.string().optional(),
+    description: z.string().optional(),
+    when_to_use: z.string().optional(),
+    /** Replaces the profile's prompt body (the Markdown after the frontmatter). */
+    prompt: z.string().min(1).optional(),
+  })
+  .strict();
 
 const scoreBodySchema = z.object({
   score: z.number().int().min(0).max(100),
@@ -145,6 +149,7 @@ const memberWireSchema = {
     description: { type: 'string' },
     when_to_use: { type: 'string' },
     model: { type: 'string' },
+    prompt: { type: 'string' },
     tools: { type: 'array', items: { type: 'string' } },
     skills: { type: 'array', items: { type: 'string' } },
     duty: { type: 'boolean' },
@@ -169,6 +174,14 @@ const membersResponseSchema = {
   },
 } as const;
 
+const mainUsageWireSchema = {
+  type: 'object',
+  properties: {
+    byModel: { type: 'object', additionalProperties: tokenUsageWireSchema },
+    total: tokenUsageWireSchema,
+  },
+} as const;
+
 const usageResponseSchema = {
   type: 'object',
   properties: {
@@ -179,6 +192,9 @@ const usageResponseSchema = {
     },
     runs: { type: 'number' },
     stale: { type: 'boolean' },
+    /** Main-agent (主管) usage, TUI Session-usage parity — separate from the
+     *  subagent buckets. */
+    main: mainUsageWireSchema,
   },
 } as const;
 
@@ -221,6 +237,7 @@ interface TeamMemberWire {
   description: string;
   when_to_use?: string;
   model?: string;
+  prompt?: string;
   tools: string[];
   skills?: string[];
   duty?: boolean;
@@ -323,6 +340,7 @@ async function buildMemberWire(
     description: def.description,
     when_to_use: def.whenToUse,
     model: def.modelPreference,
+    prompt: def.prompt,
     tools: def.tools === undefined ? [] : [...def.tools],
     skills: def.skills === undefined ? undefined : [...def.skills],
     duty: def.duty,
@@ -437,7 +455,7 @@ async function hireProjectMember(
   return path;
 }
 
-/** Frontmatter key each patch field maps to (mirrors the engine's update). */
+/** Frontmatter key each patch field maps to (mirrors the engine's update); `prompt` is the body. */
 type MemberPatch = {
   modelPreference?: string;
   tools?: string[];
@@ -445,9 +463,10 @@ type MemberPatch = {
   role?: string;
   description?: string;
   whenToUse?: string;
+  prompt?: string;
 };
 
-const PATCH_KEY_TO_FRONTMATTER: Record<keyof MemberPatch, string> = {
+const PATCH_KEY_TO_FRONTMATTER: Record<Exclude<keyof MemberPatch, 'prompt'>, string> = {
   modelPreference: 'model_preference',
   tools: 'tools',
   skills: 'skills',
@@ -479,8 +498,13 @@ async function updateMemberFile(
     throw new AgentProfileFileError('io', `Agent profile "${name}" has no frontmatter to update at ${path}`, path);
   }
   const data = parsed.data as Record<string, unknown>;
-  for (const key of Object.keys(patch) as Array<keyof MemberPatch>) {
-    const value = patch[key];
+  const { prompt, ...frontmatterPatch } = patch;
+  for (
+    const key of Object.keys(frontmatterPatch) as Array<
+      Exclude<keyof MemberPatch, 'prompt'>
+    >
+  ) {
+    const value = frontmatterPatch[key];
     const frontmatterKey = PATCH_KEY_TO_FRONTMATTER[key];
     if (value === undefined) {
       delete data[frontmatterKey];
@@ -488,7 +512,7 @@ async function updateMemberFile(
       data[frontmatterKey] = value;
     }
   }
-  const body = parsed.body.replace(/^\n+/, '');
+  const body = prompt !== undefined ? prompt : parsed.body.replace(/^\n+/, '');
   const content = `---\n${dumpYaml(data)}\n---\n\n${body}`;
   try {
     await hostFs.writeText(path, content);
@@ -550,6 +574,31 @@ function collectSubagentUsage(lifecycle: IAgentLifecycleService): SubagentUsageA
     runs += 1;
   }
   return { byModel, byMember, runs };
+}
+
+/**
+ * Main-agent (主管) token usage — the main agent's own `IAgentUsageService`
+ * `byModel`, exposed separately so the Web panel can render a Session usage
+ * section alongside the subagent breakdown (TUI `/usage` parity). A live
+ * session whose main agent has not been materialized yet (no turn started)
+ * yields an empty bucket — the read never materializes the agent (that is the
+ * dispatcher's job on agent-targeted requests).
+ */
+function collectMainUsage(lifecycle: IAgentLifecycleService): Record<string, TokenUsage> {
+  const main = lifecycle.get(MAIN_AGENT_ID);
+  if (main === undefined) return {};
+  return main.accessor.get(IAgentUsageService).status().byModel ?? {};
+}
+
+/** Sum wire usage rows (`input`/`output`/`total`) across a bucket. */
+function sumTokenUsageWire(rows: Iterable<TokenUsageWire>): TokenUsageWire {
+  let input = 0;
+  let output = 0;
+  for (const row of rows) {
+    input += row.input;
+    output += row.output;
+  }
+  return { input, output, total: input + output };
 }
 
 /** The real model id the derived `__secondary__` entry points at, when set. */
@@ -783,6 +832,7 @@ export function registerTeamsRoutes(app: TeamsRouteHost, core: Scope): void {
       if (body.role !== undefined) patch.role = body.role;
       if (body.description !== undefined) patch.description = body.description;
       if (body.when_to_use !== undefined) patch.whenToUse = body.when_to_use;
+      if (body.prompt !== undefined) patch.prompt = body.prompt;
       const sessionCwd = session.accessor.get(ISessionContext).cwd;
       const hostFs = core.accessor.get(IHostFileSystem);
       try {
@@ -928,7 +978,7 @@ export function registerTeamsRoutes(app: TeamsRouteHost, core: Scope): void {
       path: '/teams/{session_id}/usage',
       params: sessionIdParamSchema,
       rawResponse: { 200: usageResponseSchema, 404: errorResponseSchema },
-      description: 'Subagent token usage aggregated by model and member; stale:true when the session is not live',
+      description: 'Subagent token usage aggregated by model and member plus main-agent usage; stale:true when the session is not live',
       tags: ['teams'],
     },
     async (req, reply) => {
@@ -941,7 +991,13 @@ export function registerTeamsRoutes(app: TeamsRouteHost, core: Scope): void {
           sendError(reply as unknown as FlatReply, 404, `session ${session_id} not found`);
           return;
         }
-        reply.send({ byModel: {}, byMember: {}, runs: 0, stale: true });
+        reply.send({
+          byModel: {},
+          byMember: {},
+          runs: 0,
+          stale: true,
+          main: { byModel: {}, total: { input: 0, output: 0, total: 0 } },
+        });
         return;
       }
       const aggregate = normalizeDerivedSecondary(
@@ -960,7 +1016,19 @@ export function registerTeamsRoutes(app: TeamsRouteHost, core: Scope): void {
         }
         byMember[memberName] = memberModels;
       }
-      reply.send({ byModel, byMember, runs: aggregate.runs, stale: false });
+      const mainByModel: Record<string, TokenUsageWire> = {};
+      for (const [model, usage] of Object.entries(
+        collectMainUsage(session.accessor.get(IAgentLifecycleService)),
+      )) {
+        mainByModel[model] = toTokenUsageWire(usage);
+      }
+      reply.send({
+        byModel,
+        byMember,
+        runs: aggregate.runs,
+        stale: false,
+        main: { byModel: mainByModel, total: sumTokenUsageWire(Object.values(mainByModel)) },
+      });
     },
   );
   app.get(usageRoute.path, usageRoute.options, usageRoute.handler as never);

@@ -120,8 +120,11 @@ export function renderFrontmatter(input: AgentProfileCreateInput): string {
   return ['---', ...fields, '---'].join('\n');
 }
 
-/** Frontmatter key each patch field maps to. */
-const PATCH_KEY_TO_FRONTMATTER: Record<keyof AgentProfileFilePatch, string> = {
+/** Frontmatter key each patch field maps to (`prompt` is the body, not a key). */
+const PATCH_KEY_TO_FRONTMATTER: Record<
+  Exclude<keyof AgentProfileFilePatch, 'prompt'>,
+  string
+> = {
   description: 'description',
   role: 'role',
   whenToUse: 'whenToUse',
@@ -237,8 +240,13 @@ export class AgentProfileFileService implements IAgentProfileFileService {
       );
     }
     const data = parsed.data as Record<string, unknown>;
-    for (const key of Object.keys(patch) as Array<keyof AgentProfileFilePatch>) {
-      const value = patch[key];
+    const { prompt, ...frontmatterPatch } = patch;
+    for (
+      const key of Object.keys(frontmatterPatch) as Array<
+        Exclude<keyof AgentProfileFilePatch, 'prompt'>
+      >
+    ) {
+      const value = frontmatterPatch[key];
       const frontmatterKey = PATCH_KEY_TO_FRONTMATTER[key];
       if (value === undefined) {
         delete data[frontmatterKey];
@@ -247,7 +255,8 @@ export class AgentProfileFileService implements IAgentProfileFileService {
       }
     }
 
-    const body = parsed.body.replace(/^\n+/, '');
+    const body =
+      prompt !== undefined ? prompt : parsed.body.replace(/^\n+/, '');
     const content = `---\n${dumpYaml(data)}\n---\n\n${body}`;
     try {
       await this.fs.writeText(filePath, content);
