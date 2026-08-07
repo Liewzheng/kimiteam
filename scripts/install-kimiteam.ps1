@@ -1,4 +1,4 @@
-﻿# install-kimiteam.ps1 — Windows PowerShell 安装脚本(镜像 scripts/install-kimiteam.sh)。
+# install-kimiteam.ps1 — Windows PowerShell 安装脚本(镜像 scripts/install-kimiteam.sh)。
 #
 # 从 GitHub Release kimiteam-dev 下载最新分发文件,安装到官方 kimi CLI 旁边。
 # 官方 kimi 二进制与 lib/kimi/main.cjs bundle 绝不触碰(见下方 RED LINE)。
@@ -44,13 +44,13 @@ $LauncherPath = Join-Path $BinDir 'kimiteam.ps1'
 # ---------------------------------------------------------------------------
 # 预检: Node >= 24
 # ---------------------------------------------------------------------------
-$nodeCmd = Get-Command node -ErrorAction SilentlyContinue
+$nodeCmd = Get-Command node -CommandType Application -ErrorAction SilentlyContinue
 if ($null -eq $nodeCmd) {
   Write-Host 'ERROR: 未在 PATH 中找到 node。请安装 Node.js >= 24(https://nodejs.org/ 或包管理器)。' -ForegroundColor Red
   exit 1
 }
 
-$nodeVersion = & node --version   # 例如 v24.15.0
+$nodeVersion = & $nodeCmd --version   # 例如 v24.15.0
 $nodeMajor = 0
 if ($nodeVersion -match '^v(\d+)') {
   $nodeMajor = [int]$Matches[1]
@@ -145,7 +145,11 @@ if (Test-Path -LiteralPath $DistWebDir) {
 }
 New-Item -ItemType Directory -Force -Path $DistWebDir | Out-Null
 Write-Host "正在解压 $DistWebZipName 到 $DistWebDir ..."
-Expand-Archive -LiteralPath (Join-Path $LibDir $DistWebZipName) -DestinationPath $DistWebDir
+# 全限定调用内置 cmdlet:装了 Pscx(PowerShell 社区扩展)时,其同名
+# Expand-Archive(参数集 EntryPath/OutputPath,无 -DestinationPath)会按
+# PSModulePath 目录序抢先自动加载,遮蔽内置 Microsoft.PowerShell.Archive\
+# Expand-Archive,导致本行必败——必须显式全限定,勿改回裸名。
+Microsoft.PowerShell.Archive\Expand-Archive -LiteralPath (Join-Path $LibDir $DistWebZipName) -DestinationPath $DistWebDir
 Write-Host '已安装 dist-web 资产。'
 
 # 删除 zip,保留小体积 .sha256 记录(与 main-team.cjs.sha256 一致)。
@@ -173,7 +177,7 @@ $launcherContent = @"
 `$env:KIMI_CODE_EXPERIMENTAL_FLAG = '1'
 `$env:KIMI_CODE_TEAM_MODE = '1'
 `$env:KIMI_CODE_BIN_NAME = 'kimiteam'
-& node "`$HOME\.kimi-code\lib\kimi\main-team.cjs" @args
+& (Get-Command node -CommandType Application -ErrorAction Stop).Source "`$HOME\.kimi-code\lib\kimi\main-team.cjs" @args
 "@
 [System.IO.File]::WriteAllText($LauncherPath, $launcherContent, (New-Object System.Text.UTF8Encoding($false)))
 Write-Host "已安装启动器: $LauncherPath"
