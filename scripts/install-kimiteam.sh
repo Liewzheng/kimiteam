@@ -62,6 +62,32 @@ if [ "${node_major}" -lt 24 ]; then
   exit 1
 fi
 
+# Resolve the verified node binary to an absolute path NOW and bake it into the
+# launcher below.  The launcher must NOT re-resolve node from PATH at runtime:
+# a fresh shell may lack the version manager's PATH additions (e.g. nvm), and a
+# different node earlier in PATH must not silently replace the one verified here.
+# We scan PATH directly (not `command -v`) so a shell function or alias named
+# 'node' cannot shadow the real executable.
+node_bin_path=""
+_oldifs=$IFS
+IFS=:
+for _dir in ${PATH:-}; do
+  case "${_dir}" in
+    /*) ;;
+    *) continue ;;
+  esac
+  if [ -x "${_dir}/node" ]; then
+    node_bin_path="${_dir}/node"
+    break
+  fi
+done
+IFS=$_oldifs
+if [ -z "${node_bin_path}" ]; then
+  echo "ERROR: cannot resolve a real 'node' executable in PATH." >&2
+  echo "Please install Node.js >= 24 from https://nodejs.org/ or via your package manager." >&2
+  exit 1
+fi
+
 # Check for curl
 if ! command -v curl >/dev/null 2>&1; then
   echo "ERROR: 'curl' not found in PATH.  Please install curl." >&2
@@ -205,11 +231,15 @@ export KIMI_CODE_EXPERIMENTAL_FLAG=1
 # Start in team mode by default. Users can /team off or set
 # [subagent] team_mode = false in config.toml to override (config wins).
 export KIMI_CODE_TEAM_MODE=1
-exec command node "$KIMI_BUNDLE" "$@"
+# The node binary path is baked in at install time (the verified binary's
+# absolute path).  The launcher does NOT re-resolve node from PATH at runtime,
+# so it is immune to PATH shadowing/hijack and to fresh shells missing the
+# version manager's PATH additions.  If node moves, re-run the installer.
+exec "__NODE_PATH__" "$KIMI_BUNDLE" "$@"
 LAUNCHER_EOF
 
-# Substitute the real lib directory path
-command sed "s|__LIB_DIR__|${LIB_DIR}|g" "${LAUNCHER_PATH}" > "${LAUNCHER_PATH}.tmp"
+# Substitute the real lib directory path and the install-time node binary path
+command sed -e "s|__LIB_DIR__|${LIB_DIR}|g" -e "s|__NODE_PATH__|${node_bin_path}|g" "${LAUNCHER_PATH}" > "${LAUNCHER_PATH}.tmp"
 command mv "${LAUNCHER_PATH}.tmp" "${LAUNCHER_PATH}"
 
 command chmod +x "${LAUNCHER_PATH}"

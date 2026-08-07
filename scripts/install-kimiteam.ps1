@@ -46,7 +46,7 @@ $LauncherPath = Join-Path $BinDir 'kimiteam.ps1'
 # ---------------------------------------------------------------------------
 $nodeCmd = Get-Command node -CommandType Application -ErrorAction SilentlyContinue
 if ($null -eq $nodeCmd) {
-  Write-Host 'ERROR: 未在 PATH 中找到 node。请安装 Node.js >= 24(https://nodejs.org/ 或包管理器)。' -ForegroundColor Red
+  Write-Host 'ERROR: 未找到 node 可执行文件(Application;别名/函数不算)。请安装 Node.js >= 24(https://nodejs.org/ 或包管理器)。' -ForegroundColor Red
   exit 1
 }
 
@@ -172,13 +172,19 @@ if (-not (Test-Path -LiteralPath $PackageJsonPath)) {
 # ---------------------------------------------------------------------------
 # 写启动器(纯 ASCII,无 BOM)
 # ---------------------------------------------------------------------------
+# node 路径在安装期定死:预检已验证 $nodeCmd 为 Application 型 node,此处用
+# .Path 取其绝对路径并在生成期展开进启动器。启动器运行时不再 Get-Command/
+# 查 PATH——防 PATH 遮蔽/劫持(运行时 PATH 上先出现的任意 node 不生效),也
+# 防 nvm 等版本管理器 PATH 未持久化时启动器找不到 node。
+# 注意:若日后移动/更换 node 安装位置,需重新运行本安装脚本。
 $launcherContent = @"
 `$env:KIMI_CODE_EXPERIMENTAL_SECONDARY_MODEL = '1'
 `$env:KIMI_CODE_EXPERIMENTAL_FLAG = '1'
 `$env:KIMI_CODE_TEAM_MODE = '1'
 `$env:KIMI_CODE_BIN_NAME = 'kimiteam'
-& (Get-Command node -CommandType Application -ErrorAction Stop).Source "`$HOME\.kimi-code\lib\kimi\main-team.cjs" @args
+& '__NODE_PATH__' "`$HOME\.kimi-code\lib\kimi\main-team.cjs" @args
 "@
+$launcherContent = $launcherContent.Replace('__NODE_PATH__', $nodeCmd.Path)
 [System.IO.File]::WriteAllText($LauncherPath, $launcherContent, (New-Object System.Text.UTF8Encoding($false)))
 Write-Host "已安装启动器: $LauncherPath"
 
