@@ -48,7 +48,7 @@ git -C <worktree> diff feat/subagent-team...HEAD   # 读全量 diff
   1. `name=<member>-<slug>-<YYYYMMDD>`,`git worktree add .worktrees/<name> -b team/<name>`(从主树当前 HEAD 切出)。
   2. 默认续跑 `pnpm -C <dir> install --frozen-lockfile --prefer-offline` 并计时输出。
   3. 打印「工作树段」模板 → 主管**一字不改**粘贴进派工 prompt。
-- precheck:dir 已存在 / 分支已存在(`git show-ref --verify`)→ 中止并提示换 slug;slug 校验 `^[a-z0-9-]+$` 且 ≤40 字符。
+- precheck:dir 已存在 / 分支已存在(`git show-ref --verify`)→ 中止并提示换 slug;member/slug 校验 `^[a-z0-9][a-z0-9-]*$`(非空、仅小写字母/数字/中划线、不以 `-` 开头)且 slug ≤40 字符;merge/clean/reap 的 `<name>` 同规则(不合法一律 exit 1 用法错)。
 - 退出码:0 成功(输出工作树段)/ 1 用法错 / 2 precheck 失败。
 
 ### `merge <name>` —— 收尾合并(严戈)
@@ -89,7 +89,7 @@ git -C <worktree> diff feat/subagent-team...HEAD   # 读全量 diff
 |---|---|---|
 | 0 | 成功 | 按子命令续跑(merge 绿 → clean;clean/reap 完成 → 记注册表) |
 | 1 | 用法错 | 读 `--help` 自查补参数,或原样上报 |
-| 2 | precheck 失败 | **不做任何 git 操作**,原样上报(主树脏/树脏/分支不存在/未合并/slug 非法) |
+| 2 | precheck 失败 | **不做任何 git 操作**,原样上报(主树脏/树脏/分支不存在/未合并) |
 | 3 | 合并冲突(仅 merge) | 脚本已 `git merge --abort`,**原样上报**,见下方话术模板 |
 
 merge/clean/reap 三者按退出码的动作表:

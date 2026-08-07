@@ -24,8 +24,9 @@ commands:
       Runs `pnpm -C <dir> install --frozen-lockfile --prefer-offline` unless
       --no-install is given (times it), then prints the dispatch worktree
       section template (§A.2) and appends a registry row (status: active).
-      Prechecks: slug must match ^[a-z0-9-]+$ and be <= 40 chars (exit 1);
-      existing dir / existing branch abort with exit 2 (pick another slug).
+      <member>/<slug>/<name> must match ^[a-z0-9][a-z0-9-]*$ and slug be <= 40
+      chars (usage error, exit 1); prechecks: existing dir / existing branch
+      abort with exit 2 (pick another slug).
   merge <name>
       Precheck main tree clean (hard abort exit 2), worktree clean, branch
       exists, then `git merge --no-ff --no-edit team/<name>`. On conflict:
@@ -62,24 +63,36 @@ iso_now() {
   date '+%Y-%m-%dT%H:%M:%S%z' | sed 's/\([+-][0-9][0-9]\)\([0-9][0-9]\)$/\1:\2/'
 }
 
+# validate_id <what> <value> — an identifier (member/slug/name) must match
+# ^[a-z0-9][a-z0-9-]*$: non-empty, only [a-z0-9-], and not leading with '-'.
+# Shared by create/merge/clean/reap so every user-supplied string spliced into
+# a worktree path, branch name or shell command is gated at the entry point.
+# On failure: usage error (exit 1).
+validate_id() {
+  what="$1"
+  value="${2:-}"
+  case "$value" in
+    '' | -* | *[!a-z0-9-]*)
+      echo "error: $what '$value' must match ^[a-z0-9][a-z0-9-]*$" >&2
+      exit 1
+      ;;
+  esac
+}
+
 cmd_create() {
-  member="${1:-}"
-  slug="${2:-}"
-  extra="${3:-}"
-  if [ -z "$member" ] || [ -z "$slug" ]; then
-    echo "error: create requires <member> <slug>" >&2
+  if [ "$#" -lt 2 ] || [ "$#" -gt 3 ]; then
+    echo "error: create requires <member> <slug> [--no-install] (got $#)" >&2
     exit 1
   fi
+  member="$1"
+  slug="$2"
+  extra="${3:-}"
+  validate_id "member" "$member"
+  validate_id "slug" "$slug"
   if [ -n "$extra" ] && [ "$extra" != "--no-install" ]; then
     echo "error: unknown create option '$extra' (only --no-install)" >&2
     exit 1
   fi
-  case "$slug" in
-    *[!a-z0-9-]*)
-      echo "error: slug '$slug' must match ^[a-z0-9-]+$" >&2
-      exit 1
-      ;;
-  esac
   if [ "${#slug}" -gt 40 ]; then
     echo "error: slug too long (${#slug} > 40 characters)" >&2
     exit 1
@@ -141,11 +154,12 @@ EOF
 }
 
 cmd_merge() {
-  name="${1:-}"
-  if [ -z "$name" ]; then
-    echo "error: merge requires <name>" >&2
+  if [ "$#" -ne 1 ]; then
+    echo "error: merge requires exactly one <name> (got $#)" >&2
     exit 1
   fi
+  name="$1"
+  validate_id "name" "$name"
   branch="team/$name"
   dir="$MAIN_ROOT/.worktrees/$name"
 
@@ -181,11 +195,12 @@ cmd_merge() {
 }
 
 cmd_clean() {
-  name="${1:-}"
-  if [ -z "$name" ]; then
-    echo "error: clean requires <name>" >&2
+  if [ "$#" -ne 1 ]; then
+    echo "error: clean requires exactly one <name> (got $#)" >&2
     exit 1
   fi
+  name="$1"
+  validate_id "name" "$name"
   branch="team/$name"
   dir="$MAIN_ROOT/.worktrees/$name"
 
@@ -209,11 +224,12 @@ cmd_clean() {
 }
 
 cmd_reap() {
-  name="${1:-}"
-  if [ -z "$name" ]; then
+  if [ "$#" -lt 1 ]; then
     echo "error: reap requires <name>" >&2
     exit 1
   fi
+  name="$1"
+  validate_id "name" "$name"
   shift
   keep=0
   yes=0
@@ -261,6 +277,10 @@ cmd_reap() {
 }
 
 cmd_list() {
+  if [ "$#" -ne 0 ]; then
+    echo "error: list takes no arguments (got $#)" >&2
+    exit 1
+  fi
   echo "== git worktree list =="
   git -C "$MAIN_ROOT" worktree list
   echo
@@ -348,7 +368,7 @@ case "$cmd" in
   merge) cmd_merge "$@" ;;
   clean) cmd_clean "$@" ;;
   reap) cmd_reap "$@" ;;
-  list) cmd_list ;;
+  list) cmd_list "$@" ;;
   *)
     echo "error: unknown command '$cmd'" >&2
     usage
