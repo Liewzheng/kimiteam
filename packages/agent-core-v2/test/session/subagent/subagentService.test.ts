@@ -733,11 +733,12 @@ describe('SessionSubagentService — idle reaper & runtime status', () => {
     mockedRun(deferred.promise);
 
     await service.run(AGENT_ID, defaultRequest, defaultOpts);
-    expect(stubs.status.markWorking).toHaveBeenCalledWith(PROFILE_NAME, AGENT_ID);
+    expect(stubs.status.markWorking).toHaveBeenCalledWith(SESSION_ID, PROFILE_NAME, AGENT_ID);
 
     deferred.resolve({ summary: 'done' });
     await vi.advanceTimersByTimeAsync(0);
     expect(stubs.status.markResting).toHaveBeenCalledWith(
+      SESSION_ID,
       PROFILE_NAME,
       AGENT_ID,
       expect.any(String),
@@ -759,7 +760,7 @@ describe('SessionSubagentService — idle reaper & runtime status', () => {
     const entries = new Map<string, { state: string; agentId: string; restExpiresAt: string }>();
     const stubs = buildStubs({ teamMode: true });
     (stubs.status.markResting as Mock).mockImplementation(
-      async (profileName: string, agentId: string, restExpiresAt: string) => {
+      async (_sessionId: string, profileName: string, agentId: string, restExpiresAt: string) => {
         entries.set(profileName, { state: 'resting', agentId, restExpiresAt });
       },
     );
@@ -833,7 +834,7 @@ describe('SessionSubagentService — idle reaper & runtime status', () => {
     deferred.resolve({ summary: 'ok' });
     await vi.advanceTimersByTimeAsync(0); // settle → resting entry written
 
-    const [, , restExpiresAt] = (stubs.status.markResting as Mock).mock.calls.at(-1)!;
+    const [, , , restExpiresAt] = (stubs.status.markResting as Mock).mock.calls.at(-1)!;
     const remainingMs = Date.parse(String(restExpiresAt)) - Date.now();
     // The horizon mirrors the configured 3s TTL (a 2h default would be ~7.2e6).
     expect(remainingMs).toBeGreaterThan(0);

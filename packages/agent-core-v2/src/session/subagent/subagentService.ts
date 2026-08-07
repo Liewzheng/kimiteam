@@ -178,7 +178,7 @@ export class SessionSubagentService extends Disposable implements ISessionSubage
       // the instance — its context snapshot is stale the moment the run starts.
       this.idleReaper.cancel(agentId);
       this.warmService.cancel(agentId);
-      void this.runtimeStatus.markWorking(profileName!, agentId).catch(() => { /* swallow */ });
+      void this.runtimeStatus.markWorking(this.sessionContext.sessionId, profileName!, agentId).catch(() => { /* swallow */ });
     }
 
     let slot: IDisposable;
@@ -285,6 +285,7 @@ export class SessionSubagentService extends Disposable implements ISessionSubage
     this.idleReaper.arm(agentId, profileName);
     this.warmService.arm(agentId, profileName);
     void this.runtimeStatus.markResting(
+      this.sessionContext.sessionId,
       profileName,
       agentId,
       subagentRestExpiresAt(Date.now(), resolveSubagentIdleTtlMs(this.config)),
@@ -302,6 +303,7 @@ export class SessionSubagentService extends Disposable implements ISessionSubage
     this.idleReaper.arm(agentId, profileName);
     this.warmService.arm(agentId, profileName);
     void this.runtimeStatus.markResting(
+      this.sessionContext.sessionId,
       profileName,
       agentId,
       subagentRestExpiresAt(Date.now(), resolveSubagentIdleTtlMs(this.config)),

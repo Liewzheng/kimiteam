@@ -19,6 +19,7 @@ import { IAgentLifecycleService } from '#/session/agentLifecycle/agentLifecycle'
 import { IAgentLoopService } from '#/agent/loop/loop';
 import { IAgentProfileService } from '#/agent/profile/profile';
 import type { ISessionMetadata } from '#/session/sessionMetadata/sessionMetadata';
+import type { ISessionContext } from '#/session/sessionContext/sessionContext';
 import type { ISubagentPoolService } from '#/session/subagentPool/subagentPool';
 import { DutySchedulerService } from '#/session/duty/dutyScheduler';
 
@@ -73,7 +74,7 @@ function makeScheduler(overrides: {
       ),
     }),
   } as unknown as ISessionMetadata;
-  const runtimeStatus = { list: async () => ({}) } as unknown as IRuntimeStatusService;
+  const runtimeStatus = { list: async () => ({}), listForSession: async () => ({}) } as unknown as IRuntimeStatusService;
   const performance = {
     summary: vi.fn(async (name: string) => overrides.perf?.[name] ?? { count: 0 }),
   } as unknown as IAgentPerformanceService;
@@ -83,7 +84,11 @@ function makeScheduler(overrides: {
   const config = {
     get: () => (teamMode ? { teamMode: true } : { teamMode: false }),
   } as unknown as IConfigService;
-  const scheduler = new DutySchedulerService(lifecycle, metadata, runtimeStatus, performance, pool, config);
+  const sessionContext = {
+    _serviceBrand: undefined,
+    sessionId: 'session-d',
+  } as unknown as ISessionContext;
+  const scheduler = new DutySchedulerService(lifecycle, metadata, sessionContext, runtimeStatus, performance, pool, config);
   return { scheduler, performance };
 }
 

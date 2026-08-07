@@ -6,18 +6,36 @@
  * subagent profile as a single JSON document under
  * `<homeDir>/agents/runtime-status.json` (scope `'agents'`, key
  * `'runtime-status.json'`), in the same directory as `performance.json`.
- * Profile-granular: when several instances of the same profile coexist only
- * the most recently updated one is kept — the panel reads at profile
- * granularity and does not need per-instance history. Written by the
- * session-scope idle supervisor at run start (`working`), run settle
- * (`resting` + idle expiry) and reap (entry removed). Write failures are
- * swallowed and logged — they must never block a subagent run.
  *
- * The writer guards against write-order races: a `resting` transition is only
- * applied while the profile's current entry still belongs to the same agent
- * instance. A settle arriving from a superseded instance (its entry already
- * overwritten by a newer run's `working`) is dropped, so a late `resting`
- * write can never mask an in-flight run on the panel.
+ * Session-isolated: the document key for an entry is `sessionId:profileName`,
+ * so two sessions can track the same profile without clobbering one another —
+ * each session only ever sees the state it activated. Profile-granular within
+ * a session: when several instances of the same profile coexist only the most
+ * recently updated one is kept — the panel reads at profile granularity and
+ * does not need per-instance history. Written by the session-scope idle
+ * supervisor at run start (`working`), run settle (`resting` + idle expiry)
+ * and reap (entry removed). Write failures are swallowed and logged — they
+ * must never block a subagent run.
+ *
+ * Reads are session-scoped: {@link IRuntimeStatusService.listForSession}
+ * filters the table to one session's entries (stripping the `sessionId:`
+ * prefix), and {@link IRuntimeStatusService.roster} derives its snapshot from
+ * a single session. {@link IRuntimeStatusService.list} keeps the full table
+ * for consumers that scan across sessions by agent id (the idle-reaper and
+ * cache-warmer cold-resume paths — an agent id is globally unique, so a
+ * full-table scan is exact). Pre-isolation documents hold bare `profileName`
+ * keys (no `:`); they carry no session ownership, so `listForSession` ignores
+ * them (never surfaced to any session's panel) while `list` still exposes
+ * them to the agent-id cold-resume scan. They age out via the resting TTL or
+ * are superseded by the session's own next dispatch.
+ *
+ * The writer guards against write-order races *within a session*: a `resting`
+ * transition is only applied while the session's current entry still belongs
+ * to the same agent instance. A settle arriving from a superseded instance
+ * (its entry already overwritten by a newer run's `working`) is dropped, so a
+ * late `resting` write can never mask an in-flight run on the panel. Across
+ * sessions each write touches a disjoint key, so there is no cross-session
+ * ordering to guard.
  *
  * The persisted document keeps exactly two states (`working` / `resting`) and
  * is never migrated. `standby` is a *derived* state computed on read by
@@ -170,34 +188,51 @@ export function buildRosterSnapshot(
 export interface IRuntimeStatusService {
   readonly _serviceBrand: undefined;
 
-  /** Record a run starting on `agentId` for `profileName` (state `working`). */
-  markWorking(profileName: string, agentId: string): Promise<void>;
-
   /**
-   * Record the profile's latest instance settling into idle (state `resting`)
-   * with the given idle-expiry timestamp.
+   * Record a run starting on `agentId` for `profileName` in `sessionId`
+   * (state `working`). Idempotent for the already-working same instance.
    */
-  markResting(profileName: string, agentId: string, restExpiresAt: string): Promise<void>;
-
-  /** Drop the profile's entry — its instance was reaped (went off duty). */
-  removeProfile(profileName: string): Promise<void>;
+  markWorking(sessionId: string, profileName: string, agentId: string): Promise<void>;
 
   /**
-   * Read the current runtime status table (profile name → latest entry).
-   * Pure read: never writes or repairs — degrades to `{}` when the document
-   * is absent or corrupt (same policy as the writers' read helper).
+   * Record `sessionId`'s latest instance of `profileName` settling into idle
+   * (state `resting`) with the given idle-expiry timestamp. The
+   * instance-generation guard is per-session: a settle is only applied while
+   * the session's current entry still belongs to `agentId`.
+   */
+  markResting(sessionId: string, profileName: string, agentId: string, restExpiresAt: string): Promise<void>;
+
+  /** Drop `sessionId`'s entry for `profileName` — its instance was reaped. */
+  removeProfile(sessionId: string, profileName: string): Promise<void>;
+
+  /**
+   * Read the current runtime status table (full key `sessionId:profileName` →
+   * latest entry, including pre-isolation legacy keys). Pure read: never
+   * writes or repairs — degrades to `{}` when the document is absent or
+   * corrupt (same policy as the writers' read helper). Consumers that scan by
+   * agent id (globally unique) can iterate the full table directly.
    */
   list(): Promise<RuntimeStatusRaw>;
 
   /**
-   * Read-only roster snapshot: who is working / standby / resting / off-duty,
-   * derived from the persisted table at `now` with the given keep-alive
-   * window (`[subagent] standby_keepalive_ms`). Pure read — never writes or
-   * repairs the stored document. Consumers resolve the window via
+   * Read one session's runtime status table (profileName → latest entry),
+   * derived by filtering the stored document to that session's keys and
+   * stripping the `sessionId:` prefix. Legacy pre-isolation keys (no session
+   * prefix) are never surfaced here — they carry no session ownership. Pure
+   * read; degrades to `{}` when the document is absent or corrupt.
+   */
+  listForSession(sessionId: string): Promise<RuntimeStatusRaw>;
+
+  /**
+   * Read-only roster snapshot for one session: who is working / standby /
+   * resting / off-duty among that session's activated members, derived from
+   * the session's entries at `now` with the given keep-alive window
+   * (`[subagent] standby_keepalive_ms`). Pure read — never writes or repairs
+   * the stored document. Consumers resolve the window via
    * {@link resolveSubagentStandbyKeepaliveMs} (the panel and the duty
    * scheduler both read config already); `now` defaults to `Date.now()`.
    */
-  roster(standbyKeepaliveMs: number, now?: number): Promise<RosterSnapshot>;
+  roster(sessionId: string, standbyKeepaliveMs: number, now?: number): Promise<RosterSnapshot>;
 }
 
 export const IRuntimeStatusService: ServiceIdentifier<IRuntimeStatusService> =

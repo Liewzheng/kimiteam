@@ -502,7 +502,8 @@ function runtimeStatusStub(
     markResting: async () => {},
     removeProfile: async () => {},
     list: async () => table,
-    roster: async (windowMs, now = Date.now()) => buildRosterSnapshot(table, now, windowMs),
+    listForSession: async () => table,
+    roster: async (_sessionId: string, windowMs: number, now = Date.now()) => buildRosterSnapshot(table, now, windowMs),
   };
 }
 

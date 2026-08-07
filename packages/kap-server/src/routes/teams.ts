@@ -870,7 +870,9 @@ export function registerTeamsRoutes(app: TeamsRouteHost, core: Scope): void {
       const sessionCwd = session.accessor.get(ISessionContext).cwd;
       const hostFs = core.accessor.get(IHostFileSystem);
       const perf = core.accessor.get(IAgentPerformanceService);
-      const statuses = await core.accessor.get(IRuntimeStatusService).list();
+      // Session-scoped status table: each session only sees the members it
+      // activated — never another session's working/resting state.
+      const statuses = await core.accessor.get(IRuntimeStatusService).listForSession(session_id);
       // Normalize the derived `__secondary__` alias so the surfaced actual
       // model ids are real aliases (same projection the usage route uses).
       const aggregate = normalizeDerivedSecondary(
@@ -939,7 +941,7 @@ export function registerTeamsRoutes(app: TeamsRouteHost, core: Scope): void {
         const member = await buildMemberWire(
           hostFs,
           core.accessor.get(IAgentPerformanceService),
-          await core.accessor.get(IRuntimeStatusService).list(),
+          await core.accessor.get(IRuntimeStatusService).listForSession(session_id),
           roots,
           body.name,
         );
@@ -1039,7 +1041,7 @@ export function registerTeamsRoutes(app: TeamsRouteHost, core: Scope): void {
         const member = await buildMemberWire(
           hostFs,
           core.accessor.get(IAgentPerformanceService),
-          await core.accessor.get(IRuntimeStatusService).list(),
+          await core.accessor.get(IRuntimeStatusService).listForSession(session_id),
           [...globalRoots, ...projectRoots],
           name,
         );

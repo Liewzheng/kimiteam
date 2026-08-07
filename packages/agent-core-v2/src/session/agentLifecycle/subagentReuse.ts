@@ -40,6 +40,8 @@ export interface FindIdleOwnedSubagentInput {
   readonly lifecycle: IAgentLifecycleService;
   readonly metadata: ISessionMetadata;
   readonly runtimeStatus: IRuntimeStatusService;
+  /** The session the reuse scan runs in — scopes the persisted status lookup. */
+  readonly sessionId: string;
   readonly callerAgentId: string;
   readonly profileName: string;
   /** Instances already claimed for reuse within the current batch — skipped. */
@@ -116,7 +118,7 @@ export async function findIdleOwnedSubagent(
   // creation (degradation, never an error).
   let coldBest: IdleOwnedSubagentCandidate | undefined;
   const agents = (await metadata.read()).agents ?? {};
-  const statuses = await runtimeStatus.list();
+  const statuses = await runtimeStatus.listForSession(input.sessionId);
   for (const [agentId, agentMeta] of Object.entries(agents)) {
     if (claimInto?.has(agentId) === true) continue;
     if (!isSubagentMeta(agentMeta)) continue;

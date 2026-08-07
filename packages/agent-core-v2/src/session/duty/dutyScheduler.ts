@@ -33,6 +33,7 @@ import {
   type IdleOwnedSubagentCandidate,
 } from '#/session/agentLifecycle/subagentReuse';
 import { ISessionMetadata } from '#/session/sessionMetadata/sessionMetadata';
+import { ISessionContext } from '#/session/sessionContext/sessionContext';
 import { ISubagentPoolService } from '#/session/subagentPool/subagentPool';
 import { resolveTeamMode } from '#/session/subagent/configSection';
 
@@ -67,6 +68,7 @@ export class DutySchedulerService implements IDutySchedulerService {
   constructor(
     @IAgentLifecycleService private readonly lifecycle: IAgentLifecycleService,
     @ISessionMetadata private readonly metadata: ISessionMetadata,
+    @ISessionContext private readonly sessionContext: ISessionContext,
     @IRuntimeStatusService private readonly runtimeStatus: IRuntimeStatusService,
     @IAgentPerformanceService private readonly performance: IAgentPerformanceService,
     @ISubagentPoolService private readonly pool: ISubagentPoolService,
@@ -111,6 +113,7 @@ export class DutySchedulerService implements IDutySchedulerService {
       lifecycle: this.lifecycle,
       metadata: this.metadata,
       runtimeStatus: this.runtimeStatus,
+      sessionId: this.sessionContext.sessionId,
       callerAgentId,
       profileName,
       claimInto,
@@ -129,6 +132,7 @@ export class DutySchedulerService implements IDutySchedulerService {
       lifecycle: this.lifecycle,
       metadata: this.metadata,
       runtimeStatus: this.runtimeStatus,
+      sessionId: this.sessionContext.sessionId,
       callerAgentId,
       profileName,
       claimInto,

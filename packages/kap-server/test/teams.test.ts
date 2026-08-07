@@ -425,20 +425,49 @@ describe('server-v2 /api/v1/teams/{session_id}', () => {
     expect(members.find((m) => m.name === 'duty-cycle')?.status).toBe('on-duty');
 
     // Working.
-    await status.markWorking('duty-cycle', 'agent-1');
+    await status.markWorking(id, 'duty-cycle', 'agent-1');
     members = allMembers((await teamFetch(`/api/v1/teams/${id}/members`)).body);
     expect(members.find((m) => m.name === 'duty-cycle')?.status).toBe('working');
 
     // Resting with a live rest window → resting.
-    await status.markResting('duty-cycle', 'agent-1', new Date(Date.now() + 60_000).toISOString());
+    await status.markResting(id, 'duty-cycle', 'agent-1', new Date(Date.now() + 60_000).toISOString());
     members = allMembers((await teamFetch(`/api/v1/teams/${id}/members`)).body);
     expect(members.find((m) => m.name === 'duty-cycle')?.status).toBe('resting');
 
     // Resting with an expired rest window → off-duty (a reaped/parked member,
     // same as the TUI deriveMemberStatus).
-    await status.markResting('duty-cycle', 'agent-1', new Date(Date.now() - 1_000).toISOString());
+    await status.markResting(id, 'duty-cycle', 'agent-1', new Date(Date.now() - 1_000).toISOString());
     members = allMembers((await teamFetch(`/api/v1/teams/${id}/members`)).body);
     expect(members.find((m) => m.name === 'duty-cycle')?.status).toBe('off-duty');
+  });
+
+  it('isolates member status per session — a working member in one session never bleeds into another', async () => {
+    const idA = await createSession();
+    const idB = await createSession(); // same cwd → both sessions read the same member files
+    await teamFetch(`/api/v1/teams/${idA}/members`, {
+      method: 'POST',
+      body: { name: 'iso-coder', description: 'iso', prompt: 'p' },
+    });
+    const status = getLiveSessionById(server!.core.accessor, idA)!.accessor.get(IRuntimeStatusService);
+
+    // Two sessions dispatch the same profile concurrently, each on its own
+    // instance. Pre-isolation this clobbered to "latest wins" — one session
+    // would see the other's working entry.
+    await status.markWorking(idA, 'iso-coder', 'agent-a1');
+    await status.markWorking(idB, 'iso-coder', 'agent-b1');
+
+    let membersA = allMembers((await teamFetch(`/api/v1/teams/${idA}/members`)).body);
+    let membersB = allMembers((await teamFetch(`/api/v1/teams/${idB}/members`)).body);
+    expect(membersA.find((m) => m.name === 'iso-coder')?.status).toBe('working');
+    expect(membersB.find((m) => m.name === 'iso-coder')?.status).toBe('working');
+
+    // Session A settles its instance → A shows resting; B must keep showing
+    // working (its own agent-b1), not A's resting state.
+    await status.markResting(idA, 'iso-coder', 'agent-a1', new Date(Date.now() + 60_000).toISOString());
+    membersA = allMembers((await teamFetch(`/api/v1/teams/${idA}/members`)).body);
+    membersB = allMembers((await teamFetch(`/api/v1/teams/${idB}/members`)).body);
+    expect(membersA.find((m) => m.name === 'iso-coder')?.status).toBe('resting');
+    expect(membersB.find((m) => m.name === 'iso-coder')?.status).toBe('working');
   });
 
   it('lists a fired member with performance history as off-duty', async () => {

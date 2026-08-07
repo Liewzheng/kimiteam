@@ -4,23 +4,27 @@
  * Stores per-subagent-profile runtime state as a single JSON document under
  * `<homeDir>/agents/runtime-status.json` (scope `'agents'`, key
  * `'runtime-status.json'`) — the same directory and storage pattern as
- * `performance.json`. Each write upserts the profile's single entry (latest
- * instance wins). On corrupt/missing data the service degrades to an empty
- * table and logs a warning — it must never break a subagent run. Write
- * failures are swallowed and logged (same policy as `recordShift`).
+ * `performance.json`. Each write upserts the entry under the
+ * `sessionId:profileName` key (latest instance wins per session), so sessions
+ * never clobber one another's view of the same profile. On corrupt/missing
+ * data the service degrades to an empty table and logs a warning — it must
+ * never break a subagent run. Write failures are swallowed and logged (same
+ * policy as `recordShift`).
  *
- * Write-order guard: the session supervisor fires `markWorking` for a new run
- * (before its pool slot) and `markResting` for the *settled* run, both
- * fire-and-forget through the in-process serialisation queue. Without a guard,
- * an old instance's late `markResting` (enqueued after a newer instance's
- * `markWorking` on the same profile) would overwrite the working entry and the
- * panel would show the profile resting while a run is live. `markResting`
- * therefore applies an instance-generation check — it only settles the entry
- * when the profile's current entry still carries the same `agentId`; a settle
- * from a superseded instance (its entry already replaced by a newer
- * instance's working) is dropped and logged at debug. `markWorking` is
- * idempotent for the already-working same instance (no-op re-report, keeps the
- * clock from regressing); a different instance's working supersedes.
+ * Per-session write-order guard: the session supervisor fires `markWorking`
+ * for a new run (before its pool slot) and `markResting` for the *settled*
+ * run, both fire-and-forget through the in-process serialisation queue.
+ * Without a guard, an old instance's late `markResting` (enqueued after a
+ * newer instance's `markWorking` on the same session+profile) would overwrite
+ * the working entry and the panel would show the profile resting while a run
+ * is live. `markResting` therefore applies an instance-generation check — it
+ * only settles the entry when the session's current entry still carries the
+ * same `agentId`; a settle from a superseded instance (its entry already
+ * replaced by a newer instance's working) is dropped and logged at debug.
+ * `markWorking` is idempotent for the already-working same instance (no-op
+ * re-report, keeps the clock from regressing); a different instance's working
+ * supersedes. Keys are disjoint across sessions, so the guard only ever
+ * arbitrates same-session orderings.
  */
 
 import { LifecycleScope, ScopeActivation, registerScopedService } from '#/_base/di/scope';
@@ -36,6 +40,25 @@ import { buildRosterSnapshot, IRuntimeStatusService } from './runtimeStatus';
 
 const STORAGE_SCOPE = 'agents';
 const STORAGE_KEY = 'runtime-status.json';
+
+/** Document key for one session's profile entry: `sessionId:profileName`. */
+function buildKey(sessionId: string, profileName: string): string {
+  return `${sessionId}:${profileName}`;
+}
+
+/**
+ * One session's profile-keyed view of the table. Matches the full
+ * `sessionId:` prefix (never a bare split), so the round-trip holds for any
+ * sessionId/profileName content; pre-isolation bare keys simply never match.
+ */
+function sessionTable(raw: RuntimeStatusRaw, sessionId: string): RuntimeStatusRaw {
+  const prefix = `${sessionId}:`;
+  const table: RuntimeStatusRaw = {};
+  for (const [key, entry] of Object.entries(raw)) {
+    if (key.startsWith(prefix)) table[key.slice(prefix.length)] = entry;
+  }
+  return table;
+}
 
 export class RuntimeStatusService implements IRuntimeStatusService {
   declare readonly _serviceBrand: undefined;
@@ -55,47 +78,50 @@ export class RuntimeStatusService implements IRuntimeStatusService {
     @ILogService private readonly log: ILogService,
   ) {}
 
-  markWorking(profileName: string, agentId: string): Promise<void> {
+  markWorking(sessionId: string, profileName: string, agentId: string): Promise<void> {
     return this.enqueue(async () => {
       try {
         const raw = await this._readOrCreate();
-        const current = raw[profileName];
+        const key = buildKey(sessionId, profileName);
+        const current = raw[key];
         // Idempotent: this instance is already working — a re-report must not
         // regress the entry's clock.
         if (current !== undefined && current.state === 'working' && current.agentId === agentId) {
           return;
         }
-        raw[profileName] = {
+        raw[key] = {
           state: 'working',
           agentId,
           updatedAt: new Date().toISOString(),
         };
         await this.store.set<RuntimeStatusRaw>(STORAGE_SCOPE, STORAGE_KEY, raw);
       } catch (error) {
-        this.log.warn('runtime-status: failed to write working state', { profileName, agentId, error });
+        this.log.warn('runtime-status: failed to write working state', { sessionId, profileName, agentId, error });
       }
     });
   }
 
-  markResting(profileName: string, agentId: string, restExpiresAt: string): Promise<void> {
+  markResting(sessionId: string, profileName: string, agentId: string, restExpiresAt: string): Promise<void> {
     return this.enqueue(async () => {
       try {
         const raw = await this._readOrCreate();
-        const current = raw[profileName];
-        // Instance-generation guard: only the instance that currently owns the
-        // profile's entry may settle it. If a newer run on another instance
-        // already marked the profile working, this stale settle belongs to a
-        // superseded instance — dropping it keeps the panel from showing the
-        // profile resting while that newer run is live.
+        const key = buildKey(sessionId, profileName);
+        const current = raw[key];
+        // Instance-generation guard (per-session): only the instance that
+        // currently owns the session's entry may settle it. If a newer run on
+        // another instance already marked the profile working, this stale
+        // settle belongs to a superseded instance — dropping it keeps the
+        // panel from showing the profile resting while that newer run is live.
         if (current !== undefined && current.agentId !== agentId) {
           this.log.debug('runtime-status: stale resting write dropped (superseded by a newer instance)', {
+            sessionId,
             profileName,
             agentId,
             currentAgentId: current.agentId,
           });
           return;
         }
-        raw[profileName] = {
+        raw[key] = {
           state: 'resting',
           agentId,
           updatedAt: new Date().toISOString(),
@@ -103,19 +129,19 @@ export class RuntimeStatusService implements IRuntimeStatusService {
         };
         await this.store.set<RuntimeStatusRaw>(STORAGE_SCOPE, STORAGE_KEY, raw);
       } catch (error) {
-        this.log.warn('runtime-status: failed to write resting state', { profileName, agentId, error });
+        this.log.warn('runtime-status: failed to write resting state', { sessionId, profileName, agentId, error });
       }
     });
   }
 
-  removeProfile(profileName: string): Promise<void> {
+  removeProfile(sessionId: string, profileName: string): Promise<void> {
     return this.enqueue(async () => {
       try {
         const raw = await this._readOrCreate();
-        delete raw[profileName];
+        delete raw[buildKey(sessionId, profileName)];
         await this.store.set<RuntimeStatusRaw>(STORAGE_SCOPE, STORAGE_KEY, raw);
       } catch (error) {
-        this.log.warn('runtime-status: failed to remove profile entry', { profileName, error });
+        this.log.warn('runtime-status: failed to remove profile entry', { sessionId, profileName, error });
       }
     });
   }
@@ -124,8 +150,14 @@ export class RuntimeStatusService implements IRuntimeStatusService {
     return this._readOrCreate();
   }
 
-  roster(standbyKeepaliveMs: number, now: number = Date.now()): Promise<RosterSnapshot> {
-    return this._readOrCreate().then((raw) => buildRosterSnapshot(raw, now, standbyKeepaliveMs));
+  listForSession(sessionId: string): Promise<RuntimeStatusRaw> {
+    return this._readOrCreate().then((raw) => sessionTable(raw, sessionId));
+  }
+
+  roster(sessionId: string, standbyKeepaliveMs: number, now: number = Date.now()): Promise<RosterSnapshot> {
+    return this._readOrCreate().then((raw) =>
+      buildRosterSnapshot(sessionTable(raw, sessionId), now, standbyKeepaliveMs),
+    );
   }
 
   private enqueue(op: () => Promise<void>): Promise<void> {
