@@ -110,7 +110,7 @@ const V2_INJECTED_SECTION_DEFAULTS: Record<string, unknown> = {
  * Skill names registered only in agent-core-v2 (team features); v1 has no
  * equivalent concept, so these are excluded from the parity assertion.
  */
-const V2_ONLY_SKILL_NAMES = new Set(['team-onboarding']);
+const V2_ONLY_SKILL_NAMES = new Set(['team-init']);
 
 /**
  * Tool names registered only in agent-core-v2 (team features); v1 has no

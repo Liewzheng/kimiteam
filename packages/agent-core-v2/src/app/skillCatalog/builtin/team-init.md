@@ -1,10 +1,10 @@
 ---
-name: team-onboarding
+name: team-init
 description: Guide the user through creating or adjusting a team — probe the current workspace (with consent), interview their needs with 4 questions, then TeamHire/TeamFire to match. Use when team mode is on and no agent profiles exist (cold start), or when the user wants to build / create / form / rebuild / adjust a team (e.g. `/team init`).
 type: flow
 ---
 
-# 团队组建与调整 (team-onboarding)
+# 团队组建与调整 (team-init)
 
 本技能负责**组建与调整团队**,可反复执行,不是一次性流程:无成员时冷启动组建;已有成员时经 `/team init`(或明说「组建/调整我的团队」)进入**调整模式**(见「调整模式」节)。
 

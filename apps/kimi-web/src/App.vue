@@ -603,6 +603,23 @@ function handleCommand(cmd: string): void {
     }
     return;
   }
+  // `/team init` runs the team building / adjustment flow (the `team-init`
+  // skill, same entry as the TUI); any other `/team …` form (including bare
+  // `/team`) opens the team panel. Previously `/team init` fell through to the
+  // skill-activation default and tried to activate a nonexistent `team` skill.
+  if (cmd === '/team' || cmd.startsWith('/team ')) {
+    const arg = cmd.slice('/team'.length).trim();
+    if (arg === 'init') {
+      if (!client.activeSessionId.value && client.activeWorkspaceId.value) {
+        void client.startSessionAndActivateSkill(client.activeWorkspaceId.value, 'team-init', undefined);
+      } else {
+        void client.activateSkill('team-init', undefined);
+      }
+    } else {
+      openActiveTeamPanel();
+    }
+    return;
+  }
   switch (cmd) {
     // `/new` and `/clear` are aliases: both open the onboarding composer. The
     // session is only created when the user sends the first message.
@@ -634,10 +651,6 @@ function handleCommand(cmd: string): void {
       break;
     case '/status':
       showStatusPanel.value = true;
-      break;
-    case '/team':
-      // The team is session-scoped — /team without an active session is a no-op.
-      openActiveTeamPanel();
       break;
     case '/usage':
       // Usage is session-scoped — /usage without an active session is a no-op.

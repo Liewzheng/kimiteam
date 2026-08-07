@@ -766,7 +766,7 @@ describe('handleTeamCommand', () => {
     expect(host.showNotice).toHaveBeenCalledWith('Auto initiative: OFF');
   });
 
-  it('triggers the team-onboarding skill with /team init', async () => {
+  it('triggers the team-init skill with /team init', async () => {
     const { host } = makeHost();
     host.session = { cancel: vi.fn() } as unknown as NonNullable<SlashCommandHost['session']>;
 
@@ -774,7 +774,7 @@ describe('handleTeamCommand', () => {
 
     expect(host.sendSkillActivation).toHaveBeenCalledWith(
       host.session,
-      'team-onboarding',
+      'team-init',
       '',
     );
     expect(host.showError).not.toHaveBeenCalled();

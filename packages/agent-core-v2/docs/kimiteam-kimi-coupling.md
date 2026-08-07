@@ -46,7 +46,7 @@ flowchart TB
         P2["model-roster.md<br/>模型能力/限制/幻觉表"]
         P3["pipeline.md 全局+项目"]
         P4["AGENTS.md 层级"]
-        P5["skills（team-onboarding 等）"]
+        P5["skills（team-init 等）"]
     end
 
     CORE --> D1 & D2 & D3 & D4 & D5 & D6

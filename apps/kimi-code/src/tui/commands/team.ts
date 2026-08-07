@@ -49,7 +49,7 @@ export async function handleTeamCommand(host: SlashCommandHost, args: string): P
       host.showError(LLM_NOT_SET_MESSAGE);
       return;
     }
-    host.sendSkillActivation(session, 'team-onboarding', '');
+    host.sendSkillActivation(session, 'team-init', '');
     return;
   }
 
