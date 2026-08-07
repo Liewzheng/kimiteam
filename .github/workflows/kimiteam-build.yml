@@ -31,6 +31,19 @@ jobs:
       - name: Build Kimi Code CJS bundle
         run: pnpm -C apps/kimi-code run build:native:js
 
+      - name: Build Kimi Web (fork dist-web)
+        run: pnpm -C apps/kimi-web run build
+
+      - name: Copy web assets into kimi-code
+        run: node apps/kimi-code/scripts/copy-web-assets.mjs
+
+      - name: Package dist-web.zip
+        run: |
+          cd apps/kimi-code/dist-web
+          zip -qr ../../dist-web.zip index.html boot.js favicon.ico assets -x '*.DS_Store'
+          cd ../..
+          sha256sum dist-web.zip | tee dist-web.zip.sha256
+
       - name: Compute sha256
         run: |
           sha256sum apps/kimi-code/dist-native/intermediates/main.cjs \
@@ -42,7 +55,7 @@ jobs:
         run: |
           gh release create kimiteam-dev \
             --title "kimiteam-dev" \
-            --notes "Rolling dev build of kimiteam (main-team.cjs). Updated on every push to feat/subagent-team." \
+            --notes "Rolling dev build of kimiteam (main-team.cjs + dist-web.zip). Updated on every push to feat/subagent-team." \
             --latest=false \
             --prerelease 2>/dev/null || true
 
@@ -53,6 +66,10 @@ jobs:
              dist-kimiteam/main-team.cjs
           cp apps/kimi-code/dist-native/intermediates/main-team.cjs.sha256 \
              dist-kimiteam/
+          cp dist-web.zip \
+             dist-kimiteam/dist-web.zip
+          cp dist-web.zip.sha256 \
+             dist-kimiteam/dist-web.zip.sha256
 
       - name: Upload bundle asset
         env:
@@ -61,4 +78,6 @@ jobs:
           gh release upload kimiteam-dev \
             dist-kimiteam/main-team.cjs \
             dist-kimiteam/main-team.cjs.sha256 \
+            dist-kimiteam/dist-web.zip \
+            dist-kimiteam/dist-web.zip.sha256 \
             --clobber

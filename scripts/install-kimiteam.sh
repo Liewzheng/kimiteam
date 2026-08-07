@@ -8,7 +8,7 @@
 # Usage:
 #   bash scripts/install-kimiteam.sh
 #
-# Requires: node >= 24, curl.
+# Requires: node >= 24, curl, unzip.
 
 set -eu
 
@@ -18,6 +18,8 @@ set -eu
 # This script ONLY manages:
 #   ~/.kimi-code/bin/kimiteam          (the team-build launcher)
 #   ~/.kimi-code/lib/kimi/main-team.cjs (the team-build CJS bundle)
+#   ~/.kimi-code/lib/kimi/dist-web/     (fork web assets served by kimiteam)
+#   ~/.kimi-code/lib/kimi/*.sha256      (checksum records; the zips are removed)
 #
 # It MUST NOT read, write, or delete:
 #   ~/.kimi-code/bin/kimi
@@ -35,6 +37,9 @@ BIN_DIR="${INSTALL_DIR}/bin"
 BUNDLE_NAME="main-team.cjs"
 BUNDLE_PATH="${LIB_DIR}/${BUNDLE_NAME}"
 SHA256_FILE="main-team.cjs.sha256"
+DIST_WEB_ZIP_NAME="dist-web.zip"
+DIST_WEB_ZIP_SHA256_FILE="dist-web.zip.sha256"
+DIST_WEB_DIR="${LIB_DIR}/dist-web"
 LAUNCHER_PATH="${BIN_DIR}/kimiteam"
 
 # ---------------------------------------------------------------------------
@@ -59,6 +64,12 @@ fi
 # Check for curl
 if ! command -v curl >/dev/null 2>&1; then
   echo "ERROR: 'curl' not found in PATH.  Please install curl." >&2
+  exit 1
+fi
+
+# Check for unzip (needed for the dist-web assets)
+if ! command -v unzip >/dev/null 2>&1; then
+  echo "ERROR: 'unzip' not found in PATH.  Please install unzip." >&2
   exit 1
 fi
 
@@ -87,33 +98,73 @@ echo "Downloading ${SHA256_FILE}..."
 curl -fsSL -o "${LIB_DIR}/${SHA256_FILE}" "${BASE_URL}/${SHA256_FILE}"
 
 # ---------------------------------------------------------------------------
-# Verify sha256 checksum
+# verify_sha256 <file> <hash-file>
+# Verify <file>'s sha256 against the first whitespace-separated field of
+# <hash-file> (the checksum file names the source path, which differs from our
+# local filename, so we compare actual bytes).  Exits 1 on mismatch; warns and
+# returns 0 when no hashing tool is available (parity with legacy behavior).
 # ---------------------------------------------------------------------------
-echo "Verifying sha256 checksum..."
-
-# The sha256 file contains one line like:
-#   <hash>  main.cjs
-# But our local file is named main-team.cjs, so we need to check against
-# the actual bytes, not the filename.  Use sha256sum/shasum with stdin.
-expected_hash="$(cut -d' ' -f1 "${LIB_DIR}/${SHA256_FILE}")"
-if command -v sha256sum >/dev/null 2>&1; then
-  actual_hash="$(sha256sum "${BUNDLE_PATH}" | cut -d' ' -f1)"
-elif command -v shasum >/dev/null 2>&1; then
-  actual_hash="$(shasum -a 256 "${BUNDLE_PATH}" | cut -d' ' -f1)"
-else
-  echo "WARNING: no sha256sum or shasum found; cannot verify checksum." >&2
-  actual_hash=""
-fi
-
-if [ -n "${actual_hash}" ]; then
-  if [ "${expected_hash}" != "${actual_hash}" ]; then
-    echo "ERROR: sha256 mismatch!" >&2
-    echo "  Expected: ${expected_hash}" >&2
-    echo "  Actual:   ${actual_hash}" >&2
+verify_sha256() {
+  _file="$1"
+  _hash_file="$2"
+  _expected_hash="$(cut -d' ' -f1 "${_hash_file}")"
+  if command -v sha256sum >/dev/null 2>&1; then
+    _actual_hash="$(sha256sum "${_file}" | cut -d' ' -f1)"
+  elif command -v shasum >/dev/null 2>&1; then
+    _actual_hash="$(shasum -a 256 "${_file}" | cut -d' ' -f1)"
+  else
+    echo "WARNING: no sha256sum or shasum found; cannot verify checksum." >&2
+    return 0
+  fi
+  if [ "${_expected_hash}" != "${_actual_hash}" ]; then
+    echo "ERROR: sha256 mismatch for ${_file}!" >&2
+    echo "  Expected: ${_expected_hash}" >&2
+    echo "  Actual:   ${_actual_hash}" >&2
     exit 1
   fi
-  echo "sha256 checksum OK: ${actual_hash}"
+  echo "sha256 checksum OK for ${_file}: ${_actual_hash}"
+}
+
+# ---------------------------------------------------------------------------
+# Verify bundle sha256 checksum
+# ---------------------------------------------------------------------------
+echo "Verifying sha256 checksum..."
+verify_sha256 "${BUNDLE_PATH}" "${LIB_DIR}/${SHA256_FILE}"
+
+# ---------------------------------------------------------------------------
+# Download dist-web.zip + sha256
+# ---------------------------------------------------------------------------
+echo "Downloading ${DIST_WEB_ZIP_NAME} from ${BASE_URL}/..."
+curl -fsSL -o "${LIB_DIR}/${DIST_WEB_ZIP_NAME}" "${BASE_URL}/${DIST_WEB_ZIP_NAME}"
+echo "Downloaded ${LIB_DIR}/${DIST_WEB_ZIP_NAME}"
+
+echo "Downloading ${DIST_WEB_ZIP_SHA256_FILE}..."
+curl -fsSL -o "${LIB_DIR}/${DIST_WEB_ZIP_SHA256_FILE}" "${BASE_URL}/${DIST_WEB_ZIP_SHA256_FILE}"
+
+# ---------------------------------------------------------------------------
+# Verify dist-web.zip sha256 (same pattern as the bundle)
+# ---------------------------------------------------------------------------
+echo "Verifying ${DIST_WEB_ZIP_NAME} sha256 checksum..."
+verify_sha256 "${LIB_DIR}/${DIST_WEB_ZIP_NAME}" "${LIB_DIR}/${DIST_WEB_ZIP_SHA256_FILE}"
+
+# ---------------------------------------------------------------------------
+# Install dist-web (fork web assets)
+# ---------------------------------------------------------------------------
+# The zip's top level IS the dist-web content (index.html + assets/), so it
+# unzips directly into ${DIST_WEB_DIR}.  Back up any previous dist-web first.
+if [ -d "${DIST_WEB_DIR}" ]; then
+  web_backup_name="dist-web.bak-$(date +%Y%m%d-%H%M%S)"
+  cp -r "${DIST_WEB_DIR}" "${LIB_DIR}/${web_backup_name}"
+  echo "Backed up existing dist-web to ${LIB_DIR}/${web_backup_name}"
+  rm -rf "${DIST_WEB_DIR}"
 fi
+mkdir -p "${DIST_WEB_DIR}"
+echo "Extracting ${DIST_WEB_ZIP_NAME} to ${DIST_WEB_DIR}..."
+unzip -q -o "${LIB_DIR}/${DIST_WEB_ZIP_NAME}" -d "${DIST_WEB_DIR}"
+echo "Installed dist-web assets."
+
+# Drop the zip; keep the small .sha256 record next to main-team.cjs.sha256.
+rm -f "${LIB_DIR}/${DIST_WEB_ZIP_NAME}"
 
 # ---------------------------------------------------------------------------
 # Write launcher wrapper
