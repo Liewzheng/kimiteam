@@ -13,6 +13,12 @@
  * (`resting` + idle expiry) and reap (entry removed). Write failures are
  * swallowed and logged — they must never block a subagent run.
  *
+ * The writer guards against write-order races: a `resting` transition is only
+ * applied while the profile's current entry still belongs to the same agent
+ * instance. A settle arriving from a superseded instance (its entry already
+ * overwritten by a newer run's `working`) is dropped, so a late `resting`
+ * write can never mask an in-flight run on the panel.
+ *
  * The persisted document keeps exactly two states (`working` / `resting`) and
  * is never migrated. `standby` is a *derived* state computed on read by
  * {@link deriveRosterStatus}: a `resting` entry whose settle time

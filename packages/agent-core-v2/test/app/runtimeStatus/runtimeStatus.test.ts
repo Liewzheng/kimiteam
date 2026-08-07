@@ -24,13 +24,16 @@ import {
 // Build helpers
 // ---------------------------------------------------------------------------
 
-function logStub(warn: ReturnType<typeof vi.fn> = vi.fn()): any {
+function logStub(
+  warn: ReturnType<typeof vi.fn> = vi.fn(),
+  debug: ReturnType<typeof vi.fn> = vi.fn(),
+): any {
   return {
     error: vi.fn(),
     warn,
     info: vi.fn(),
-    debug: vi.fn(),
-    child: () => logStub(warn),
+    debug,
+    child: () => logStub(warn, debug),
     setLevel: vi.fn(),
     level: 'debug' as const,
     flush: async () => {},
@@ -108,6 +111,82 @@ describe('RuntimeStatusService', () => {
     const raw = await readRaw(storage);
     expect(Object.keys(raw ?? {})).toHaveLength(1);
     expect(raw?.['coder']?.agentId).toBe('agent-2');
+  });
+
+  it('drops a stale resting write from a superseded instance (cross-instance overlap)', async () => {
+    const storage = new InMemoryStorageService();
+    const docStore = new JsonAtomicDocumentStore(storage);
+    const warn = vi.fn();
+    const debug = vi.fn();
+    const service = new RuntimeStatusService(docStore, logStub(warn, debug));
+
+    // A newer run on agent-2 takes over the profile while the old agent-1 run
+    // is still finishing; then agent-1 settles late (the write-order race).
+    await service.markWorking('coder', 'agent-1');
+    await service.markWorking('coder', 'agent-2');
+    await service.markResting('coder', 'agent-1', '2025-06-01T10:00:00.000Z');
+
+    // The panel must keep showing the live run — not the stale settle.
+    const raw = await readRaw(storage);
+    expect(raw?.['coder']).toMatchObject({ state: 'working', agentId: 'agent-2' });
+    expect(raw?.['coder']?.restExpiresAt).toBeUndefined();
+    expect(debug).toHaveBeenCalledWith(
+      'runtime-status: stale resting write dropped (superseded by a newer instance)',
+      expect.objectContaining({ profileName: 'coder', agentId: 'agent-1', currentAgentId: 'agent-2' }),
+    );
+  });
+
+  it('applies a resting write when the settling instance still owns the entry (normal settle)', async () => {
+    const { storage, service } = buildRuntimeStatusService();
+    await service.markWorking('coder', 'agent-1');
+    await service.markResting('coder', 'agent-1', '2025-06-01T10:00:00.000Z');
+
+    const raw = await readRaw(storage);
+    expect(raw?.['coder']).toEqual({
+      state: 'resting',
+      agentId: 'agent-1',
+      updatedAt: expect.any(String),
+      restExpiresAt: '2025-06-01T10:00:00.000Z',
+    });
+  });
+
+  it('markWorking is idempotent for the already-working same instance (no redundant write)', async () => {
+    const storage = new InMemoryStorageService();
+    const docStore = new JsonAtomicDocumentStore(storage);
+    const setSpy = vi.spyOn(docStore, 'set');
+    const service = new RuntimeStatusService(docStore, logStub());
+
+    await service.markWorking('coder', 'agent-1');
+    setSpy.mockClear();
+    await service.markWorking('coder', 'agent-1');
+
+    expect(setSpy).not.toHaveBeenCalled();
+    const after = (await readRaw(storage))!['coder']!;
+    expect(after).toMatchObject({ state: 'working', agentId: 'agent-1' });
+  });
+
+  it('markWorking supersedes a working entry from another instance and a resting entry', async () => {
+    const { storage, service } = buildRuntimeStatusService();
+    await service.markWorking('coder', 'agent-1');
+    await service.markWorking('coder', 'agent-2');
+    expect((await readRaw(storage))?.['coder']).toMatchObject({ state: 'working', agentId: 'agent-2' });
+
+    await service.markResting('coder', 'agent-2', '2025-06-01T10:00:00.000Z');
+    await service.markWorking('coder', 'agent-3');
+    expect((await readRaw(storage))?.['coder']).toMatchObject({ state: 'working', agentId: 'agent-3' });
+  });
+
+  it('a stale resting write never downgrades an entry whose owner changed mid-flight', async () => {
+    const { storage, service } = buildRuntimeStatusService();
+    // Same shape as the panel bug: working(A) → working(B) → resting(A).
+    await service.markWorking('coder', 'agent-a');
+    await service.markWorking('coder', 'agent-b');
+    await service.markResting('coder', 'agent-a', '2025-06-01T10:00:00.000Z');
+
+    const snap = await service.roster(900_000, Date.parse('2025-06-01T10:00:00.000Z'));
+    expect(snap.working.map((m) => m.profileName)).toEqual(['coder']);
+    expect(snap.resting).toHaveLength(0);
+    expect(snap.offDuty).toHaveLength(0);
   });
 
   it('removeProfile leaves other profiles untouched', async () => {

@@ -8,6 +8,19 @@
  * instance wins). On corrupt/missing data the service degrades to an empty
  * table and logs a warning — it must never break a subagent run. Write
  * failures are swallowed and logged (same policy as `recordShift`).
+ *
+ * Write-order guard: the session supervisor fires `markWorking` for a new run
+ * (before its pool slot) and `markResting` for the *settled* run, both
+ * fire-and-forget through the in-process serialisation queue. Without a guard,
+ * an old instance's late `markResting` (enqueued after a newer instance's
+ * `markWorking` on the same profile) would overwrite the working entry and the
+ * panel would show the profile resting while a run is live. `markResting`
+ * therefore applies an instance-generation check — it only settles the entry
+ * when the profile's current entry still carries the same `agentId`; a settle
+ * from a superseded instance (its entry already replaced by a newer
+ * instance's working) is dropped and logged at debug. `markWorking` is
+ * idempotent for the already-working same instance (no-op re-report, keeps the
+ * clock from regressing); a different instance's working supersedes.
  */
 
 import { LifecycleScope, ScopeActivation, registerScopedService } from '#/_base/di/scope';
@@ -46,6 +59,12 @@ export class RuntimeStatusService implements IRuntimeStatusService {
     return this.enqueue(async () => {
       try {
         const raw = await this._readOrCreate();
+        const current = raw[profileName];
+        // Idempotent: this instance is already working — a re-report must not
+        // regress the entry's clock.
+        if (current !== undefined && current.state === 'working' && current.agentId === agentId) {
+          return;
+        }
         raw[profileName] = {
           state: 'working',
           agentId,
@@ -62,6 +81,20 @@ export class RuntimeStatusService implements IRuntimeStatusService {
     return this.enqueue(async () => {
       try {
         const raw = await this._readOrCreate();
+        const current = raw[profileName];
+        // Instance-generation guard: only the instance that currently owns the
+        // profile's entry may settle it. If a newer run on another instance
+        // already marked the profile working, this stale settle belongs to a
+        // superseded instance — dropping it keeps the panel from showing the
+        // profile resting while that newer run is live.
+        if (current !== undefined && current.agentId !== agentId) {
+          this.log.debug('runtime-status: stale resting write dropped (superseded by a newer instance)', {
+            profileName,
+            agentId,
+            currentAgentId: current.agentId,
+          });
+          return;
+        }
         raw[profileName] = {
           state: 'resting',
           agentId,
