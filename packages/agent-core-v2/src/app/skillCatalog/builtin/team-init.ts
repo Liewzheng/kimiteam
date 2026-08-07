@@ -1,9 +1,9 @@
 /**
  * `skillCatalog` domain (L3) — builtin `team-init` skill definition.
  *
- * The team building / adjustment onboarding flow, reached via `/team init` on
- * both the TUI and web — the single entry point. The skill was folded into this
- * name so no legacy bare skill item surfaces in the web command menu.
+ * The team building / adjustment onboarding flow. The web command menu surfaces
+ * it as `/team-init`, aligned with the `/team init` command entry on both the
+ * TUI and web — the single way to reach the flow.
  */
 
 import type { SkillDefinition } from '#/app/skillCatalog/types';

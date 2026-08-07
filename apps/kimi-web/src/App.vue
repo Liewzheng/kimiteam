@@ -31,6 +31,7 @@ import GlobalLoading from './components/GlobalLoading.vue';
 import DebugPanel from './debug/DebugPanel.vue';
 import { isTraceEnabled } from './debug/trace';
 import { useKimiWebClient } from './composables/useKimiWebClient';
+import { getKimiWebApi } from './api';
 import { useConfirmDialog } from './composables/useConfirmDialog';
 import type { PromptAttachment } from './composables/useKimiWebClient';
 import type { TurnAttachment } from './types';
@@ -41,6 +42,7 @@ import { useFilePreview, type DetailTarget } from './composables/useFilePreview'
 import { useDetailPanel } from './composables/useDetailPanel';
 import { useTeamRoster } from './composables/useTeamRoster';
 import { replaceTeamMember } from './lib/teamRows';
+import { resolveTeamCommand } from './lib/teamCommand';
 import type { AppTeamMember } from './api/types';
 import { useIsMobile } from './composables/useIsMobile';
 import { openDialogCount } from './composables/dialogStack';
@@ -366,6 +368,10 @@ type SubmitPayload = {
   attachments: PromptAttachment[];
 };
 const pendingWorkspaceSubmit = ref<SubmitPayload | null>(null);
+/** `/team init` typed with no session and no workspace parks here until the
+ *  AddWorkspace dialog resolves, then the team-init skill is activated in the
+ *  freshly added workspace (mirrors pendingWorkspaceSubmit for the first prompt). */
+const pendingTeamInit = ref(false);
 // Inline error shown inside the add-workspace picker after the daemon rejects
 // a path. Kept separate from the global toast so the feedback is visible above
 // the picker's backdrop and persists until the user retries or closes.
@@ -603,20 +609,41 @@ function handleCommand(cmd: string): void {
     }
     return;
   }
-  // `/team init` runs the team building / adjustment flow (the `team-init`
-  // skill, same entry as the TUI); any other `/team …` form (including bare
-  // `/team`) opens the team panel. Previously `/team init` fell through to the
-  // skill-activation default and tried to activate a nonexistent `team` skill.
+  // `/team …` — the decision lives in lib/teamCommand (pure, tested): `/team
+  // init` runs the team building / adjustment flow (the `team-init` skill, same
+  // entry as the TUI), `/team on|off` toggles team mode, everything else
+  // (bare `/team`, TUI-only subcommands) opens the team panel. Previously
+  // `/team init` fell through to the skill-activation default and tried to
+  // activate a nonexistent `team` skill.
   if (cmd === '/team' || cmd.startsWith('/team ')) {
-    const arg = cmd.slice('/team'.length).trim();
-    if (arg === 'init') {
-      if (!client.activeSessionId.value && client.activeWorkspaceId.value) {
-        void client.startSessionAndActivateSkill(client.activeWorkspaceId.value, 'team-init', undefined);
-      } else {
+    const action = resolveTeamCommand(cmd.slice('/team'.length).trim(), {
+      hasSession: !!client.activeSessionId.value,
+      hasWorkspace: !!client.activeWorkspaceId.value,
+    });
+    switch (action.type) {
+      case 'activate-skill':
         void client.activateSkill('team-init', undefined);
+        break;
+      case 'activate-new-session': {
+        const wsId = client.activeWorkspaceId.value;
+        if (wsId) void client.startSessionAndActivateSkill(wsId, 'team-init', undefined);
+        break;
       }
-    } else {
-      openActiveTeamPanel();
+      case 'add-workspace':
+        // Team is session-scoped; without a workspace there is nowhere to start
+        // a session. Mirror the first-prompt path: open the AddWorkspace dialog
+        // and run the activation once a workspace is chosen.
+        pendingTeamInit.value = true;
+        showAddWorkspace.value = true;
+        break;
+      case 'set-team-mode':
+        // The composable does not re-expose setTeamMode — call the API directly
+        // (same channel the team panel's toggle uses).
+        void getKimiWebApi().setTeamMode(action.on);
+        break;
+      case 'open-panel':
+        openActiveTeamPanel();
+        break;
     }
     return;
   }
@@ -729,14 +756,19 @@ async function handleAddWorkspace(root: string): Promise<void> {
   showAddWorkspace.value = false;
   const pending = pendingWorkspaceSubmit.value;
   pendingWorkspaceSubmit.value = null;
+  const pendingInit = pendingTeamInit.value;
+  pendingTeamInit.value = false;
   const wsId = client.activeWorkspaceId.value;
   if (pending && wsId) {
     await client.startSessionAndSendPrompt(wsId, pending.text, pending.attachments);
+  } else if (pendingInit && wsId) {
+    void client.startSessionAndActivateSkill(wsId, 'team-init', undefined);
   }
 }
 
 function handleCloseAddWorkspace(): void {
   pendingWorkspaceSubmit.value = null;
+  pendingTeamInit.value = false;
   addWorkspaceError.value = null;
   showAddWorkspace.value = false;
 }

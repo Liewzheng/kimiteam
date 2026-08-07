@@ -164,9 +164,10 @@ const wsPickOpen = ref(false);
 const wsPickExpanded = ref(false);
 
 /** Standing team entry for the EMPTY state (dock is unmounted there): same
- *  derived hot/disabled logic as the dock's 团队 tab, so the entry stays
- *  clickable-to-open even before the first message exists. Roster counts come
- *  from the team roster (props), never from turns — safe when turns is empty. */
+ *  derived hot/disabled logic as the dock's 团队 tab. Clickable (opens the team
+ *  panel) only while an active session exists; without a session it is greyed
+ *  out (team is session-scoped). Roster counts come from the team roster
+ *  (props), never from turns — safe when turns is empty. */
 const teamState = computed(() =>
   teamTabState({
     working: props.teamWorking ?? 0,
@@ -1403,11 +1404,13 @@ defineExpose({ loadComposerForEdit, focusComposer, openTodosHistory });
             </div>
             <!-- Standing team entry — the dock (with its 团队 tab) is unmounted
                  while the conversation is empty, so keep the entry reachable
-                 here: same pill + roster counts as the dock's tab. -->
+                 here. Clickable only when an active session exists (team is
+                 session-scoped); on a first-launch no-session screen it is
+                 greyed out and shows `—` instead of a misleading (0/0). -->
             <div class="empty-team">
               <Pill
                 class="empty-team-pill"
-                :class="{ hot: teamState.hot }"
+                :hot="teamState.hot"
                 :active="teamOpen"
                 :aria-pressed="teamOpen"
                 :disabled="teamState.disabled"
@@ -1415,7 +1418,8 @@ defineExpose({ loadComposerForEdit, focusComposer, openTodosHistory });
               >
                 <Icon name="team" size="md" />
                 <span>{{ t('tasks.teamTab') }}</span>
-                <span class="empty-team-count">(<b>{{ teamWorking ?? 0 }}</b>/<b>{{ teamTotal ?? 0 }}</b>)</span>
+                <span v-if="teamState.disabled" class="empty-team-count">—</span>
+                <span v-else class="empty-team-count">(<b>{{ teamWorking ?? 0 }}</b>/<b>{{ teamTotal ?? 0 }}</b>)</span>
               </Pill>
             </div>
             <Composer
@@ -1715,8 +1719,9 @@ defineExpose({ loadComposerForEdit, focusComposer, openTodosHistory });
 }
 
 /* Standing team entry in the empty state — mirrors the dock's 团队 tab (same
-   pill + roster count + hot accent while any member works), centered above the
-   empty composer so the entry stays reachable before the first message. */
+   pill + roster count), centered above the empty composer so the entry stays
+   reachable before the first message. The hot/accent styling lives in the
+   shared Pill primitive (`hot` prop). */
 .empty-team {
   flex: none;
   display: flex;
@@ -1728,13 +1733,6 @@ defineExpose({ loadComposerForEdit, focusComposer, openTodosHistory });
 }
 .empty-team-count b {
   font-weight: 500;
-}
-.empty-team-pill.hot :deep(.ui-pill) {
-  background: var(--color-accent-soft);
-  color: var(--color-accent);
-}
-.empty-team-pill.hot :deep(.ui-pill svg) {
-  color: var(--color-accent);
 }
 
 /* Empty-composer workspace picker */

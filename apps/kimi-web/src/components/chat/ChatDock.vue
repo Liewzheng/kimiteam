@@ -267,7 +267,7 @@ defineExpose({ loadForEdit, loadAttachmentsForEdit, focus });
            it is always visible: the dock tabs below stay conditional on work. -->
       <Pill
         class="dw-team"
-        :class="{ hot: teamState.hot }"
+        :hot="teamState.hot"
         :active="teamActive"
         :aria-pressed="teamActive"
         :disabled="teamState.disabled"
@@ -432,17 +432,6 @@ defineExpose({ loadForEdit, loadAttachmentsForEdit, focus });
 }
 .dock-workbar .dw-count { margin-left: 1px; }
 .dock-workbar .dw-count b { font-weight: 500; }
-
-/* Standing team tab — accent emphasis while any member is working, matching
-   the TUI footer's primary badge. Same accent family as Pill's `is-active`,
-   but keyed off the roster's working count rather than "panel open". */
-.dw-team.hot :deep(.ui-pill) {
-  background: var(--color-accent-soft);
-  color: var(--color-accent);
-}
-.dw-team.hot :deep(.ui-pill svg) {
-  color: var(--color-accent);
-}
 
 .dock-approval {
   margin-top: 8px;

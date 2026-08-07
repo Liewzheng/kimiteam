@@ -5,6 +5,7 @@
 withDefaults(defineProps<{
   clickable?: boolean;
   active?: boolean;
+  hot?: boolean;
   disabled?: boolean;
   ariaPressed?: boolean;
 }>(), {
@@ -18,7 +19,7 @@ defineEmits<{ click: [event: MouseEvent] }>();
   <button
     v-if="clickable"
     class="ui-pill"
-    :class="{ 'is-active': active }"
+    :class="{ 'is-active': active, 'is-hot': hot }"
     type="button"
     :disabled="disabled"
     :aria-pressed="ariaPressed"
@@ -26,7 +27,7 @@ defineEmits<{ click: [event: MouseEvent] }>();
   >
     <slot />
   </button>
-  <span v-else class="ui-pill" :class="{ 'is-active': active }"><slot /></span>
+  <span v-else class="ui-pill" :class="{ 'is-active': active, 'is-hot': hot }"><slot /></span>
 </template>
 
 <style scoped>
@@ -54,5 +55,11 @@ button.ui-pill:hover:not(:disabled) { background: var(--color-surface-sunken); c
 button.ui-pill:focus-visible { outline: none; box-shadow: var(--p-focus-ring); }
 button.ui-pill:disabled { opacity: 0.5; cursor: not-allowed; }
 .ui-pill.is-active { background: var(--color-accent-soft); color: var(--color-accent); }
+/* `hot` — accent emphasis keyed off live work (e.g. the standing team entry
+   while any member is working), visually the same family as `is-active` but a
+   distinct state so a pill can be hot without being active. Shared here so the
+   dock and the empty-state team entry don't each re-declare the accent. */
+.ui-pill.is-hot { background: var(--color-accent-soft); color: var(--color-accent); }
+.ui-pill.is-hot :deep(svg) { color: var(--color-accent); }
 .ui-pill :deep(svg) { width: var(--p-ic-sm); height: var(--p-ic-sm); flex: none; color: var(--color-text-faint); }
 </style>

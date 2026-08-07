@@ -17,7 +17,7 @@ export default {
   },
   status: { desc: '查看会话状态' },
   todo: { desc: '查看本会话已完成的任务' },
-  team: { desc: '管理子代理团队' },
+  team: { desc: '团队: /team init 组建/调整团队, /team on|off 开关团队模式, 其余打开团队面板(自动主动仅 TUI 支持)' },
   usage: { desc: '查看子代理 token 用量' },
   undo: { desc: '撤销上一条消息' },
 };

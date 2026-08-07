@@ -17,7 +17,7 @@ export default {
   },
   status: { desc: 'View session status' },
   todo: { desc: 'View this session’s completed tasks' },
-  team: { desc: 'Manage the subagent team' },
+  team: { desc: 'Team: /team init to build/adjust the team, /team on|off to toggle team mode; any other form opens the team panel (auto initiative is TUI-only)' },
   usage: { desc: 'View subagent token usage' },
   undo: { desc: 'Undo the last message' },
 } as const;
