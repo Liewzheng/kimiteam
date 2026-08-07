@@ -1,6 +1,6 @@
 # agent-core-v2 Agent Guide
 
-> New agent engine built on the DI Scope architecture — work-in-progress port of `packages/agent-core`. Design: `plan/PLAN.md`. Porting status: `GAP_ANALYSIS.md`.
+> New agent engine built on the DI Scope architecture — work-in-progress port of `packages/agent-core`. Architecture & porting status: `docs/v2-architecture-panorama.md`.
 
 ## Scopes
 
@@ -8,7 +8,7 @@ Four `LifecycleScope` tiers — `App` (0) / `Workspace` (1) / `Session` (2) / `A
 
 ## Examples
 
-> The runnable examples have moved to the standalone `kimi-code-mini-bench` package at `../kimi-code-mini-bench`. They are wired to `agent-core-v2` through a pnpm `link:` dependency and run as a separate Vitest project.
+> The runnable examples have moved to the standalone `kimi-code-mini-bench` package — a separate repo checked out as a sibling of this one, at `../kimi-code-mini-bench` from the repo root. They are wired to `agent-core-v2` through a pnpm `link:` dependency and run as a separate Vitest project.
 
 Domain-slice scenarios that used to live in `examples/<name>.example.ts` are now maintained there. Each `*.example.ts` exercises one subset of domains end-to-end, builds its own container, runs its slice's services for real, and stubs collaborators outside the slice. See `../kimi-code-mini-bench/README.md` for how to run them.
 
@@ -59,7 +59,7 @@ Business code must not `import 'node:fs'`, write SQL, hand-roll append-logs / at
 
 ## Conversation undo
 
-`context.undo` is the only persisted undo fact. `contextMemory/conversationTime.ts` owns the conversation clock (`isUndoAnchor` — the single tick predicate used by `computeUndoCut`, the checkpoint reducers, and the transcript reducer) and the checkpoint protocol. A wire Model whose state must follow conversation undo (todo, plan, task-notification delivery, …) **MUST** be defined with `defineCheckpointedModel` — never hand-roll the push/clear/restore reducers — which also registers it into `CHECKPOINTED_MODELS` for the undo pipeline's pre-cut depth check. World-time state (turn counters, task registries, revision counters) must stay outside checkpointed Models.
+`context.undo` is the only persisted undo fact. `src/agent/contextMemory/conversationTime.ts` owns the conversation clock (`isUndoAnchor` — the single tick predicate used by `computeUndoCut`, the checkpoint reducers, and the transcript reducer) and the checkpoint protocol. A wire Model whose state must follow conversation undo (todo, plan, task-notification delivery, …) **MUST** be defined with `defineCheckpointedModel` — never hand-roll the push/clear/restore reducers — which also registers it into `CHECKPOINTED_MODELS` for the undo pipeline's pre-cut depth check. World-time state (turn counters, task registries, revision counters) must stay outside checkpointed Models.
 
 ## Docs
 

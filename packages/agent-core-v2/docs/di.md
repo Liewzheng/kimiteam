@@ -21,7 +21,7 @@
 
 ## 场景 1：加一个全局服务（不依赖任何人）
 
-> 你要做的：进程级只有一个、谁都能用的基础能力，比如日志、遥测。参考 [`log`](../src/log/log.ts)。
+> 你要做的：进程级只有一个、谁都能用的基础能力，比如日志、遥测。参考 [`log`](../src/_base/log/log.ts)。
 
 这一步引入四块：**接口 / 身份 / 实现 / 注册**。
 
@@ -137,7 +137,7 @@ const meta = accessor.get(ISessionMetadata);   // 类型是 ISessionMetadata
 
 ## 场景 3：你的服务不是全局一份
 
-> 你要做的：每个会话一份、或每个 agent 一份。参考 [`sessionMetadata`](../src/session/sessionMetadata/sessionMetadata.ts)、[`turn`](../src/turn/turn.ts)。
+> 你要做的：每个会话一份、或每个 agent 一份。参考 [`sessionMetadata`](../src/session/sessionMetadata/sessionMetadata.ts)、[`loop`](../src/agent/loop/loop.ts)。
 
 这一步引入：**`LifecycleScope` 四层生命周期** 与 **父子 scope 的可见性**。
 
@@ -239,13 +239,13 @@ registerScopedService(
   'log',
 );
 
-// 按需：首次 get(IScopeRegistry) 时构造真实实例
+// 按需：首次 get(IBashParserService) 时构造真实实例
 registerScopedService(
   LifecycleScope.App,
-  IScopeRegistry,
-  ScopeRegistry,
+  IBashParserService,
+  BashParserService,
   ScopeActivation.OnDemand,
-  'gateway',
+  'bashParser',
 );
 ```
 
@@ -261,7 +261,7 @@ registerScopedService(
 
 ## 场景 6：在普通函数里临时用服务
 
-> 你要做的：你不想写一个新类，只是在一个函数里临时拿一个服务用一下。或你要给外部提供一个 `ServicesAccessor`。参考 [`gatewayService.ts`](../src/gateway/gatewayService.ts)。
+> 你要做的：你不想写一个新类，只是在一个函数里临时拿一个服务用一下。或你要给外部提供一个 `ServicesAccessor`。参考 [`interactionService.ts`](../src/session/interaction/interactionService.ts)（用 `invokeFunction` 懒解析 `IAgentLifecycleService` 以避开构造期环）。
 
 这一步引入：**`IInstantiationService.invokeFunction`** 与 **`ServicesAccessor`**。
 
@@ -304,41 +304,29 @@ const runner = instantiation.createInstance(TurnRunner, 'hello', 1);
 
 ## 场景 8：你的服务要派生子容器 / 子 scope
 
-> 你要做的：你的服务负责「拉起一个新会话 / 新 agent」，需要为它造一个子 scope。参考 `ScopeRegistry`（[`gatewayService.ts`](../src/gateway/gatewayService.ts)）。
+> 你要做的：你的服务负责「拉起一个新会话 / 新 agent」，需要为它造一个子 scope。参考 `createScopedChildHandle`（[`src/_base/di/scope.ts`](../src/_base/di/scope.ts)）——v2 创建子 scope 的统一入口，`workspaceLifecycle` / `sessionLifecycle` / `agentLifecycle` 都走它。
 
-这一步引入：**注入 `IInstantiationService` 本身** 与 **`createChild`**。
+这一步引入：**注入 `IInstantiationService` 本身** 与 **`createScopedChildHandle`**。
 
-每个容器都把自己绑定成 `IInstantiationService`，所以你可以像注入别的服务一样注入它：
+每个容器都把自己绑定成 `IInstantiationService`，所以你可以像注入别的服务一样注入它，再调 `createScopedChildHandle` 造子 scope：
 
 ```ts
-export class ScopeRegistry implements IScopeRegistry {
-  declare readonly _serviceBrand: undefined;
-
-  constructor(@IInstantiationService private readonly instantiation: IInstantiationService) {}
-
-  createSession(opts: CreateSessionOptions): Promise<IScopeHandle> {
-    const collection = new ServiceCollection();
-    for (const entry of getScopedServiceDescriptors(LifecycleScope.Session)) {
-      collection.set(entry.id, entry.descriptor);   // 收集 Session 这一层的描述符
-    }
-    const child = this.instantiation.createChild(collection);   // 派生子容器
-    const accessor: ServicesAccessor = {
-      get: <T>(id: ServiceIdentifier<T>): T => child.invokeFunction((a) => a.get(id)),
-    };
-    const handle: IScopeHandle = { id: opts.sessionId, kind: LifecycleScope.Session, accessor };
-    this.sessions.set(opts.sessionId, handle);
-    return Promise.resolve(handle);
-  }
-}
+// app/workspaceLifecycle/workspaceLifecycleService.ts —— 真实用法（建 Workspace 子 scope）
+const handle = createScopedChildHandle(
+  this.instantiation,                        // 当前 scope 的 IInstantiationService
+  LifecycleScope.Workspace,
+  workspaceId,
+  { extra: workspaceContextSeed(ctx) },      // 种子：注入该层需要的事实/依赖
+);
 ```
 
 关键点：
 
-- `getScopedServiceDescriptors(scope)` 能拿回注册在某一层的所有描述符，装进一个 `ServiceCollection`。
-- `instantiation.createChild(collection)` 造一个子容器，它的父指针指向当前容器——于是子容器能向上解析到 App 的服务（场景 3 的可见性规则）。
-- 给外部暴露时，用 `invokeFunction` 把子容器包成 `ServicesAccessor`（场景 6）。
+- `createScopedChildHandle(parent, kind, id, { extra })` 内部就是「`getScopedServiceDescriptors(kind)` 筛出这一层的描述符 → `parent.createChild(collection)` 建子容器 → 激活 `OnScopeCreated` 服务 → 用 `invokeFunction` 包成 `ServicesAccessor`」，返回 `IScopeHandle`（`scope.ts:117-136`）。
+- 子容器的父指针指向当前容器——于是能向上解析到更长寿命的服务（场景 3 的可见性规则）。
+- 种子 `extra` 注入该层需要的事实/依赖，如 `workspaceContextSeed(ctx)`（`workspaceLifecycleService.ts:133-137`）。
 
-> 更高层通常直接用 [`Scope.createChild(kind, id)`](../src/_base/di/scope.ts)（它帮你做了「筛描述符 + 建子容器 + 构造 `OnScopeCreated` 服务」）；只有需要手动控制 `ServiceCollection` 时才像上面这样写——手动 `createChild` 不会执行 Scope 激活，服务都要由消费者解析。
+> 两种推荐写法：直接 [`Scope.createChild(kind, id)`](../src/_base/di/scope.ts) 建子 `Scope`，或用上面的 `createScopedChildHandle(parent, kind, id, options)` 拿 `IScopeHandle`——两者都会激活 `OnScopeCreated` 服务。只有需要手动控制 `ServiceCollection` 时才用 `instantiation.createChild(collection)`——它不会执行 Scope 激活，服务都要由消费者解析。
 
 ---
 

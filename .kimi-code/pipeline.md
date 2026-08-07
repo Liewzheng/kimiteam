@@ -38,6 +38,39 @@
 
 - 触发:提供 Windows 安装/卸载 → 动作:提供 `uninstall-kimiteam.ps1`,安装/卸载/验证齐全;官方 kimi 基线 0.33 → 验收:Windows 上可安装/卸载/验证,基线版本 0.33。
 
+## 验收卡控:引擎级硬门禁(2026-08-07 用户拍板)
+
+- **背景**:主管「读 diff/重跑测试后再计分」此前是 doctrine 软约束——引擎无法证明主管真的验收,TeamScore 不验收也能调成功;放水无追溯。用户现场询问卡控现状后拍板做引擎级硬门禁(主管曾建议 TeamScore 加必填验收字段的软方案,用户选择硬门禁)。
+- **决策**:TeamScore `record` 动作在执行前校验**验收证据**——主 agent 自该成员交付完成后,须有可检测的验收动作(读交付产出/读 diff/重跑测试),无证据则拒绝计分并提示缺什么;`penalty` 动作豁免(针对已验收交付的追加扣分);配置 `[subagent] score_gate = "off" | "warn" | "enforce"`,默认 `enforce`,off 为逃生门。
+- **待确认**:① 证据分类的检测规则(命令正则)上线后按误伤情况校准;② 与 worktree 双闸门(A.4 主管验收 + A.5 严戈合并验证)的职责边界——硬门禁管计分,合并门禁管主树。
+
+## 主管响应时限(2026-08-07 用户拍板)
+
+- **决策**:主管必须在 **30s 内响应人类的任何输入**;执行类工作预计超时时,先 **ask permission 向用户说明需要续多久**,获准后再继续(等待用户的时间按既有分类不计入预算)。用户发起回合由 `lead_turn_timeout_ms`(默认 30s)引擎武装计时,主管自身纪律:能派工不执行、回合保持精简。
+- **代码层限制(2026-08-07 用户再拍板)**:30s 响应不停留在提示词纪律,要做成**引擎级硬限制**——预算耗尽不止注入提醒,要在代码层阻断主管继续执行类工作,续时须经用户许可(交互通道授权 N 时长后重新武装)。设计+实现已立项。
+
+## 团队协作:全面 worktree 工作流(2026-08-07 用户拍板)
+
+- **背景**:多名队员并发派工时同改一个工作树(`feat/subagent-team` 主树),存在文件区冲突与互相踩踏风险;已完成的工作与进行中的工作混在同一棵树里,验收/回滚粒度粗。
+- **决策**:全面转向 worktree 工作流——**一个成员(一次派工)一个 git worktree**,在独立 worktree 内完成工作;完工后**由其他员工收尾合并**回主树,**同时清理临时 worktree**。主树只接受经收尾验证的合并,安装构建(全局 pipeline #6)仍只从主树出。
+- **落地规程(2026-08-07 已产出)**:设计稿 `.tmp/team-worktree-design-20260807.md`(杜衡,评 95)——分类闸(只读免树)、主管建树、队员树内完工、严戈按退出码机械收尾(merge --no-ff/clean/reap,冲突 exit 3 打回原作者)、`.tmp/team-worktrees.json` JSONL 注册表;手册 `.agents/skills/team-worktree/SKILL.md` 与脚本 `scripts/team-worktree.sh` 均已落地(韩述,评 94,沙箱全链路实测);**install 探针实测 8s**(2026-08-07,pnpm 硬链接 store,远低于 2min 阈值)→ `create` 默认开 install,仅 ≤2 文件微改用 `--no-install`。
+- **触发规则(试点期,2026-08-07)**:触发:派工前 → 动作:分类闸——只读/探索/评审类免树,写代码/写文档/changeset 类主管先跑 `sh scripts/team-worktree.sh create <member> <slug>` 并把输出的「工作树段」一字不改粘进派工单首段;完工后主管在树内验收(diff+重跑测试),通过计分后派严戈 merge/clean/reap 按退出码机械分流(exit 3 原样上报、打回原作者 rebase) → 验收:合并 commit 在主树、`git worktree list` 无残留、主树 status 干净、注册表状态一致。先跑 3-5 单试点(首选严戈测试扩展单+沈一帆组件单),指标正常再对全部写代码派工强制;机械细节查 `.agents/skills/team-worktree/SKILL.md`。
+
+## 引擎路线:全面 v2(2026-08-07 用户提出,主管附议落盘)
+
+- **背景**:0.33 迁移后出现 v1/v2 双引擎摩擦——老会话 wire 日志中 v1 写入的 `micro_compaction.apply` 记录,v2 回放时不认识只跳过并打 `[unexpected]` 告警;`lead_turn_timeout` 等团队特性疑似迁移掉队。用户提出「全面转向 v2,不要用 v1」。
+- **事实**:官方 0.33 基线本身已默认 v2(`apps/kimi-code/src/cli/experimental-v2.ts`,v1 仅在 `KIMI_CODE_LEGACY_FLAG` 下启用;`kimi web` 只跑 kap-server/v2);团队特性 v2 侧已有实现(agent-core-v2/src/agent/tools/agent-swarm 等)。
+- **决策**:kimiteam 以 v2 为唯一支持引擎路径——安装链路/launcher 不得设 `KIMI_CODE_LEGACY_FLAG`;新特性只在 v2 路径开发与验证;v1 路径不测试不保证。
+- **待确认**:① 是否物理删除 `packages/agent-core`(v1 包)——主管建议**不删**:node-sdk 约 84 处 re-export 依赖它,vis/acp-adapter/migration-legacy 也依赖,且官方仓库仍保留 v1,删除会造成 rebase 官方时巨大分叉;② ~~老会话 wire 记录兼容策略~~ **已定案(2026-08-07)**:v2 wire 层封闭白名单 `LEGACY_SKIPPED_RECORD_TYPES` 静默跳过(`micro_compaction.apply`、`context.update_token_count`),真未知 type 仍上报,韩述落地;③ 迁移丢失特性清单以迁移审计结果为准补齐(已完成 43/44,唯一断线 lead_turn_timeout 已按方向 A 修复)。
+
+## 构建安装授权(2026-08-07 用户拍板)
+
+- **决策**:用户原话「可以随时编译、安装、验证」——全局 pipeline #6 构建安装链(备份、覆盖 `main-team.cjs`、同步 dist-web、grep 验证)无需逐次确认,可随时执行;git commit/push 仍需逐次确认(全局 #5 不变),官方 `main.cjs` 红线不变。
+
 ## 已知现象(2026-08-07 排查定案)
 
 - **web 首启输入短暂不回显(自愈)** → 触发:0.33 升级后首启 web,在首屏 snapshot 未加载完(spinner)期间提交消息,乐观气泡被在途快照覆盖,文本暂不显示 → 动作:重启即自愈(新快照含已落盘消息),数据无损坏,属「快照覆盖乐观消息」竞态(`apps/kimi-web/src/lib/snapshotMessages.ts:11-41`,代码注释自带承认 `useKimiWebClient.ts:1588-1601`);**本次不修**;若再现,应用最小修复:mergeSnapshotMessages 保留 `kimiWeb.optimisticUserMessage` 标记的本地乐观消息 → 验收:现象再现时按上述修复,否则维持记录。
+
+## 待办挂账(记录日期 2026-08-07,未启动)
+
+- **官方 0.34.0 升级评估 + 快速 rebase 规程**:背景:kimiteam 在官方 0.33 基线上分叉出团队特性(硬门禁/worktree/状态三态/display_name/lead 时限/Clerical 等),官方 0.34.0 发布后需评估升级内容并 rebase;**决策(用户,2026-08-07):现在不做,挂账**;启动时两件事:① 看 0.34.0 升级了啥(对比 0.33→0.34 changelog/代码事实);② 设计「快速 rebase」规程——产出**团队特性清单化盘点**(分叉面台账,哪些文件/模块是我们的特性)与**可交接的 rebase 操作手册**(步骤化、验收=特性零丢失检查表),目标是**交给任何人执行 rebase 都不丢特性**(弱模型可照表机械执行,与 worktree/SKILL 机械手册同思路) → 验收:0.34.0 评估报告 + 特性台账 + rebase 手册,且手册经一次实操验证零丢失。

@@ -8,8 +8,9 @@
 | 团队模式与 `/team` 命令族 | 待补(命令在 `apps/kimi-code/src/tui/commands/team.ts`) | Trigger→Action 决策表 | `team_mode` | TC-TEAM-001~003、012~017 | `/team on` / `/team init` / 面板;Team* 工具门控 |
 | `/usage` 用量面板 | 待补 | 无 | 无 | TC-USAGE-001~003 | 按模型/成员统计;resume 恢复;真实 secondary id |
 | 绩效体系(计分/通胀/penalty/未计分提醒) | [score-penalty.md](score-penalty.md)(过错扣分);计分/通胀/提醒无独立文档(doctrine + teamScoreTool) | Controlling 节 + 决策表 Member delivers / Score inflation / Penalty confirmed | 无(TeamScore 工具) | TC-TEAM-009~011、018 | 0-100;通胀窗口 10;penalty 追加负向条目;未计分自动提醒 |
+| 验收硬门禁(score_gate) | 待补(实现 `src/agent/tools/team-score/acceptanceEvidenceService.ts` + `teamScoreTool.ts`) | 决策表 Member delivers / Before scoring | `score_gate` | 待补 | 默认 `enforce`:TeamScore `record` 需可检测验收证据——读交付输出(TaskOutput / `agents/main/tasks/<task_id>/output.log`)、`git diff`/`git show`、或重跑测试(vitest/pnpm test/npm test/pytest)自交付完成起;`warn` 带警告放行;`off` 关闭;`penalty` 豁免;仅形状检测 |
 | 两级 pipeline 注入 | 待补(注入在 `src/agent/profile/context.ts`) | Innovation 节 + 决策表 Same workflow seen twice | 无(pipeline.md 文件) | TC-PIPELINE-001 | 全局 `~/.kimi-code/pipeline.md` + 项目 `.kimi-code/pipeline.md` |
-| 主管限时打断 | [lead-turn-timeout.md](lead-turn-timeout.md) | Controlling 节 Budget your turn + 决策表 Long-running task | `lead_turn_timeout_ms` | TC-LEAD-001~004 | 默认 30s,`0`=关;执行类才计入 |
+| 主管限时打断 | [lead-turn-timeout.md](lead-turn-timeout.md) | Controlling 节 Budget your turn + 决策表 Long-running task | `lead_turn_timeout_ms` | TC-LEAD-001~004 | 默认 30s,`0`=关;执行类工具耗时 + 全部 step 生成时长计入 |
 | 过错扣分(penalty) | [score-penalty.md](score-penalty.md) | 决策表 User reports a defect / Penalty confirmed + 校准节 | 无(TeamScore penalty 动作) | 待补 | 追加负向条目;分级扣分;<80 停派观察 |
 | 团队作用域(全局/项目) | 待补(onboarding skill) | 无(onboarding skill) | 无 | 待补 | 全局=`user` `~/.kimi-code/agents`;项目=`project` `<项目根>/.kimi-code/agents` |
 | Web 团队面板 | 待补(`apps/kimi-web/src/components/team/TeamPanel.vue`) | 无 | 无 | TC-WEB-001~005 | `/web`;只读 roster + hire/fire/评分/递话/并发/teamMode |

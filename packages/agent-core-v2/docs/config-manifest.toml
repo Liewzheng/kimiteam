@@ -393,6 +393,7 @@ timeout_ms = 7200000
 # duty_idle_ttl_ms: integer
 # max_standby: integer
 # standby_keepalive_ms: integer
+# score_gate: "off" | "warn" | "enforce"
 
 # ##########################################################################
 # task
