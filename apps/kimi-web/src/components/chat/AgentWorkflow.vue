@@ -282,15 +282,16 @@ watch(
   max-height: 110px;
   overflow-y: auto;
 }
-/* Tool-call-style render box for the output + progress regions — same
-   surface / line border / radius as the chat's tool-call area
+/* Tool-call-style render box for the output + progress + thinking regions —
+   same surface / line border / radius as the chat's tool-call area
    (ToolGroup.vue .tool-group: background: var(--color-surface), border:
    1px solid var(--color-line), radius-md; inner padding matches
-   ToolOutputBlock's --space-3 body padding). The task prompt and thinking
-   disclosure stay unboxed — only the agent's rendered output and the tool
-   progress log get the "tool call" surface. */
+   ToolOutputBlock's --space-3 body padding). The task prompt stays unboxed —
+   the agent's rendered output, the thinking body and the tool progress log
+   share the "tool call" surface. */
 .aw-box,
-.aw-progress {
+.aw-progress,
+.aw-thinking {
   background: var(--color-surface);
   border: 1px solid var(--color-line);
   border-radius: var(--radius-md);
