@@ -134,11 +134,15 @@ async function assembleSnapshot(
   );
 
   // Messages — most recent page of the main agent's full history, from the
-  // loader shared with the `messages` routes.
+  // loader shared with the `messages` routes. The loader reads through the
+  // per-session transcript cache and rehydrates only this page (P0-3).
   const main = await ensureMainAgent(handle);
-  const all = await loadMessageHistory(core, main, sessionId, meta.createdAt);
-  const hasMore = all.length > SNAPSHOT_MESSAGE_PAGE_SIZE;
-  const items = all.slice(-SNAPSHOT_MESSAGE_PAGE_SIZE);
+  const sessionDir = handle.accessor.get(ISessionContext).sessionDir;
+  const { items, total } = await loadMessageHistory(main, sessionId, meta.createdAt, {
+    sessionDir,
+    limit: SNAPSHOT_MESSAGE_PAGE_SIZE,
+  });
+  const hasMore = total > SNAPSHOT_MESSAGE_PAGE_SIZE;
 
   const currentPromptId = snapState.inFlightTurn === null ? undefined : readCurrentPromptId(main);
   const inFlightTurn = attachCurrentPromptIdToInFlight(snapState.inFlightTurn, currentPromptId);

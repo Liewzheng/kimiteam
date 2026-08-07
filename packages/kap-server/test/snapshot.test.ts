@@ -67,7 +67,10 @@ describe('server-v2 snapshot route enrichment', () => {
     };
     const session = {
       accessor: fakeAccessor([
-        [ISessionContext, { workspaceId }],
+        [
+          ISessionContext,
+          { workspaceId, sessionDir: '/nonexistent/kimi-snapshot-enrichment/sess_snapshot' },
+        ],
         [
           ISessionMetadata,
           {
@@ -289,6 +292,28 @@ describe('server-v2 GET /api/v1/sessions/:id/snapshot', () => {
     } as never);
     const body = (await res.json()) as { code: number };
     expect(body.code).not.toBe(0);
+  });
+
+  it('reflects appended messages in subsequent snapshots (page cache updates)', async () => {
+    const sid = await createSession();
+    await ensureMainAgent(sid);
+    const session = getLiveSessionById(server!.core.accessor, sid);
+    if (session === undefined) throw new Error(`session ${sid} not found`);
+    const agent = session.accessor.get(IAgentLifecycleService).get('main');
+    if (agent === undefined) throw new Error(`main agent ${sid} not found`);
+    const ctx = agent.accessor.get(IAgentContextMemoryService);
+
+    const before = await snapshot(sid);
+    expect(before.messages.items).toEqual([]);
+
+    // New message lands → the loader's transcript cache must not serve the
+    // stale fold on the next snapshot.
+    ctx.append({ role: 'user', content: [{ type: 'text', text: 'hi' }], toolCalls: [] });
+    await agent.accessor.get(IWireService).flush();
+
+    const after = await snapshot(sid);
+    expect(after.messages.items).toHaveLength(1);
+    expect((after.messages.items[0]!.content[0] as { text: string }).text).toBe('hi');
   });
 
   // Regression for the cold-session 404: a session that exists on disk but is

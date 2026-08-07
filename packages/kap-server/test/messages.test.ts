@@ -249,6 +249,29 @@ describe('server-v2 /api/v1/sessions/{sid}/messages', () => {
     expect(got.body.code).toBe(40401);
   });
 
+  it('serves new messages after an append (page cache updates on journal growth)', async () => {
+    const id = await createSession();
+    await seedMainAgentMessages(id, [
+      { role: 'user', content: [{ type: 'text', text: 'first' }], toolCalls: [] },
+    ]);
+    const first = await getJson<PageWire>(`/api/v1/sessions/${id}/messages`);
+    expect(first.body.data.items).toHaveLength(1);
+    expect(first.body.data.items[0]!.content).toEqual([{ type: 'text', text: 'first' }]);
+
+    // New messages land → the loader's transcript cache must not serve the
+    // stale fold: the next read reflects the appended journal tail.
+    await seedMainAgentMessages(id, [
+      { role: 'user', content: [{ type: 'text', text: 'second' }], toolCalls: [] },
+      { role: 'user', content: [{ type: 'text', text: 'third' }], toolCalls: [] },
+    ]);
+    const second = await getJson<PageWire>(`/api/v1/sessions/${id}/messages`);
+    expect(second.body.code).toBe(0);
+    expect(second.body.data.items).toHaveLength(3);
+    // newest first → third, second, first.
+    expect(second.body.data.items[0]!.content).toEqual([{ type: 'text', text: 'third' }]);
+    expect(second.body.data.items[2]!.content).toEqual([{ type: 'text', text: 'first' }]);
+  });
+
   it('paginates with page_size and before_id / after_id cursors', async () => {
     const id = await createSession();
     await seedMainAgentMessages(id, [

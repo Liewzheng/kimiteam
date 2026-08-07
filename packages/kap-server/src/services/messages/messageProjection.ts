@@ -24,7 +24,8 @@ import { parseKimiFileUrl, type ContextMessage } from '@moonshot-ai/agent-core-v
 
 import type { Message, MessageContent, MessageRole, ToolUseContent } from '../../protocol/message';
 
-function deriveMessageId(sessionId: string, index: number): string {
+/** Index-derived message id (`msg_<sid>_<padded index>`), stable across live reads and restore. */
+export function deriveMessageId(sessionId: string, index: number): string {
   const padded = String(index).padStart(6, '0');
   return `msg_${sessionId}_${padded}`;
 }
