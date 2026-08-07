@@ -856,11 +856,14 @@ export function useWorkspaceState(rawState: ExtendedState, deps: UseWorkspaceSta
         return;
       }
       const api = getKimiWebApi();
-      // Parallel: health + meta + models
+      // Parallel: health + meta + models + providers (the settings Providers
+      // tab reads client.providers directly, so bootstrap must populate it —
+      // otherwise it shows the empty state until the manager is opened once).
       await Promise.all([
         api.getHealth().catch(() => null),
         refreshServerMeta(),
         modelProvider.loadModels(),
+        modelProvider.loadProviders(),
       ]);
 
       // Check auth readiness and global config (separate calls — defensive)

@@ -539,6 +539,17 @@ async function save(): Promise<void> {
   flex-direction: column;
   gap: var(--space-3);
 }
+/* Edit mode only: .tmd-body is a bounded scroll container (flex:1; min-height:0;
+   overflow-y:auto) and the sections carry min-height:0 (kept for the bounded
+   AgentWorkflow), so with the default flex-shrink the tall form makes the
+   sections collapse below their content and the un-clipped form / usage /
+   workflow boxes paint over each other. Let the body scroll instead of
+   shrinking the sections. Read-only (.tmd-details) is deliberately untouched. */
+.tmd-body:has(.tmd-form) > .tmd-top,
+.tmd-body:has(.tmd-form) > .tmd-usage,
+.tmd-body:has(.tmd-form) > .tmd-bottom {
+  flex-shrink: 0;
+}
 .tmd-error {
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-md);

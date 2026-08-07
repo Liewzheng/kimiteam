@@ -1157,7 +1157,10 @@ describe('useWorkspaceState — first-load auth gate', () => {
   ): UseWorkspaceStateDeps {
     return {
       ...createDeps(),
-      modelProvider: { loadModels: vi.fn().mockResolvedValue(undefined) },
+      modelProvider: {
+        loadModels: vi.fn().mockResolvedValue(undefined),
+        loadProviders: vi.fn().mockResolvedValue(undefined),
+      },
       initialized,
       connectIssue,
     } as unknown as UseWorkspaceStateDeps;
@@ -1273,7 +1276,10 @@ describe('useWorkspaceState — session list loading', () => {
     state.activeSessionId = sessions[0]?.id ?? null;
     const deps = {
       ...createDeps(),
-      modelProvider: { loadModels: vi.fn().mockResolvedValue(undefined) },
+      modelProvider: {
+        loadModels: vi.fn().mockResolvedValue(undefined),
+        loadProviders: vi.fn().mockResolvedValue(undefined),
+      },
       initialized: ref(false),
       connectIssue: ref<string | null>(null),
       setSessions: vi.fn((next: AppSession[]) => {
