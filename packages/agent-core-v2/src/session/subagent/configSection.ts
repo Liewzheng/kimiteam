@@ -118,6 +118,47 @@ export const SubagentConfigSchema = z.object({
    */
   leadTurnTimeoutMs: z.number().int().min(0).optional(),
   /**
+   * Lead-turn enforcement mode (`[subagent] lead_turn_gate` on disk, default
+   * `enforce`): `off` disables the mechanism entirely (like
+   * `lead_turn_timeout_ms = 0`); `warn` keeps the legacy
+   * cancel → turn.ended → inject reminder, which the lead can ignore;
+   * `enforce` replaces the cancel with a code-layer hard block — once the
+   * budget is exhausted the turn is *locked*, execution-class tools are vetoed
+   * at the executor, and the lead can only continue by dispatching / managing
+   * or by the user granting a fresh budget window (see
+   * `lead_turn_grant_ms`). An explicit `lead_turn_timeout_ms = 0` overrides
+   * any mode.
+   */
+  leadTurnGate: z.enum(['off', 'warn', 'enforce']).optional(),
+  /**
+   * Re-authorization window (`[subagent] lead_turn_grant_ms`, default 30_000;
+   * `0` disables the ask — the turn stays locked until it ends). When the
+   * turn is locked, the engine asks the user for permission and, on approval,
+   * re-arms the turn with a *fresh* budget window of this length; grants never
+   * stack onto the exhausted budget.
+   */
+  leadTurnGrantMs: z.number().int().min(0).optional(),
+  /**
+   * User-answer bound for the grant ask (`[subagent]
+   * lead_turn_grant_timeout_ms`, default 60_000; `0` disables the ask — the
+   * turn stays locked). If the user does not answer in time the ask is treated
+   * as a decline and the turn stays locked.
+   */
+  leadTurnGrantTimeoutMs: z.number().int().min(0).optional(),
+  /**
+   * Per-turn grant cap (`[subagent] lead_turn_max_grants`, default 5): the
+   * maximum number of re-authorizations in one turn; beyond it the turn stays
+   * locked with no further asks.
+   */
+  leadTurnMaxGrants: z.number().int().min(1).optional(),
+  /**
+   * Locked-turn backstop (`[subagent] lead_turn_lock_cap_ms`, default
+   * 120_000; `0` disables). A locked turn that keeps running past this cap
+   * (e.g. runaway text generation) is force-cancelled. A foreground dispatch /
+   * management / wait-user tool still in flight delays the backstop.
+   */
+  leadTurnLockCapMs: z.number().int().min(0).optional(),
+  /**
    * Per-profile model override: `[subagent.model_overrides]` on disk
    * (`coder = "local/qwen3.6-35b-a3b"`). Binds newly spawned subagents of the
    * named profile to the given `[models.<id>]` id, taking precedence over the
@@ -180,6 +221,24 @@ export const DEFAULT_SUBAGENT_IDLE_TTL_MS = 2 * 60 * 60 * 1000;
 
 /** Default lead-turn timeout for the main agent in team mode: 30s (0 disables). */
 export const DEFAULT_LEAD_TURN_TIMEOUT_MS = 30_000;
+
+/** Lead-turn enforcement mode (`[subagent] lead_turn_gate`). */
+export type LeadTurnGateMode = 'off' | 'warn' | 'enforce';
+
+/** Default lead-turn gate mode: `enforce` — the user-mandated hard limit. */
+export const DEFAULT_LEAD_TURN_GATE: LeadTurnGateMode = 'enforce';
+
+/** Default re-authorization window granted on user approval: 30s (0 disables the ask). */
+export const DEFAULT_LEAD_TURN_GRANT_MS = 30_000;
+
+/** Default user-answer bound for the grant ask: 60s (0 disables the ask). */
+export const DEFAULT_LEAD_TURN_GRANT_TIMEOUT_MS = 60_000;
+
+/** Default per-turn grant cap: 5. */
+export const DEFAULT_LEAD_TURN_MAX_GRANTS = 5;
+
+/** Default locked-turn backstop: 120s (0 disables). */
+export const DEFAULT_LEAD_TURN_LOCK_CAP_MS = 120_000;
 
 /** Default idle threshold before team auto-initiative fires: 5 minutes (0 disables). */
 export const DEFAULT_TEAM_AUTO_IDLE_MS = 300_000;
@@ -255,6 +314,61 @@ export function resolveLeadTurnTimeoutMs(config: IConfigService): number {
   return (
     config.get<SubagentConfig | undefined>(SUBAGENT_SECTION)?.leadTurnTimeoutMs ??
     DEFAULT_LEAD_TURN_TIMEOUT_MS
+  );
+}
+
+/**
+ * Resolve the lead-turn enforcement mode (`[subagent] lead_turn_gate`,
+ * default `enforce`). An explicit `lead_turn_timeout_ms = 0` disables the
+ * mechanism regardless of the mode (`shouldArm` checks the timeout first).
+ */
+export function resolveLeadTurnGate(config: IConfigService): LeadTurnGateMode {
+  return (
+    config.get<SubagentConfig | undefined>(SUBAGENT_SECTION)?.leadTurnGate ??
+    DEFAULT_LEAD_TURN_GATE
+  );
+}
+
+/**
+ * Resolve the re-authorization window (`[subagent] lead_turn_grant_ms`,
+ * default 30s; `0` disables the ask — the turn stays locked until it ends).
+ */
+export function resolveLeadTurnGrantMs(config: IConfigService): number {
+  return (
+    config.get<SubagentConfig | undefined>(SUBAGENT_SECTION)?.leadTurnGrantMs ??
+    DEFAULT_LEAD_TURN_GRANT_MS
+  );
+}
+
+/**
+ * Resolve the user-answer bound for the grant ask (`[subagent]
+ * lead_turn_grant_timeout_ms`, default 60s; `0` disables the ask).
+ */
+export function resolveLeadTurnGrantTimeoutMs(config: IConfigService): number {
+  return (
+    config.get<SubagentConfig | undefined>(SUBAGENT_SECTION)?.leadTurnGrantTimeoutMs ??
+    DEFAULT_LEAD_TURN_GRANT_TIMEOUT_MS
+  );
+}
+
+/**
+ * Resolve the per-turn grant cap (`[subagent] lead_turn_max_grants`, default 5).
+ */
+export function resolveLeadTurnMaxGrants(config: IConfigService): number {
+  return (
+    config.get<SubagentConfig | undefined>(SUBAGENT_SECTION)?.leadTurnMaxGrants ??
+    DEFAULT_LEAD_TURN_MAX_GRANTS
+  );
+}
+
+/**
+ * Resolve the locked-turn backstop (`[subagent] lead_turn_lock_cap_ms`,
+ * default 120s; `0` disables).
+ */
+export function resolveLeadTurnLockCapMs(config: IConfigService): number {
+  return (
+    config.get<SubagentConfig | undefined>(SUBAGENT_SECTION)?.leadTurnLockCapMs ??
+    DEFAULT_LEAD_TURN_LOCK_CAP_MS
   );
 }
 
