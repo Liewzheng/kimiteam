@@ -1585,19 +1585,47 @@ function dropWsSubscription(sessionId: string): void {
   sessionsWithStaleCursor.delete(sessionId);
 }
 
-/** Re-open an already-loaded session: always rebuild from a fresh snapshot.
+/** Re-open an already-loaded session: resume from the tracked WS cursor when it
+ *  is still replayable, and fall back to a fresh snapshot only when it is not.
  *
- *  Volatile `assistant.delta` frames are never journaled or replayed: if a
- *  transport hiccup covered the tail of a turn while the user was away, the
- *  local transcript silently lost the model's final text, and a cursor
- *  resubscribe has nothing to recover it with. Always fetching the authoritative
- *  snapshot keeps the logic trivially correct (no freshness heuristics, no
- *  races to reason about); the snapshot is cheap server-side (LRU on the wire
- *  file). Trade-off: a snapshot GET in flight during a steep local send can
- *  momentarily overwrite that optimistic message — the user notices immediately
- *  and the next re-open (or a refresh) reconciles. */
+ *  The 0.23-era code always fetched a snapshot here, so EVERY session switch did
+ *  a full snapshot GET + message reload even when nothing had changed — the
+ *  "0.23 switch-lag regression". A cursor resume is safe as long as the
+ *  subscription was never dropped: the local `lastSeqBySession` + `epochBySession`
+ *  are then the authoritative watermark, and the server answers a cursor it can
+ *  no longer replay with `resync_required` (`epoch_changed` / `buffer_overflow`,
+ *  gap > maxBufferSize — see sessionEventBroadcaster.getBufferedSince), which
+ *  onResync funnels back into a snapshot rebuild. So the snapshot still covers
+ *  every genuinely-stale case; it just stops being the unconditional path.
+ *
+ *  Conservative backstops for the volatile-delta caveat (un-journaled
+ *  `assistant.delta` tails lost to a transport hiccup can't be recovered by a
+ *  cursor replay):
+ *  - an evicted / dropped subscription marks the session in
+ *    `sessionsWithStaleCursor` → snapshot here;
+ *  - a half-open socket triggers `recoverStaleConnection`'s snapshot of the
+ *    active session on focus/online;
+ *  - a real disconnect that exceeded the server buffer comes back as
+ *    `resync_required` → snapshot. */
 async function reopenSession(sessionId: string): Promise<SyncSessionResult> {
-  return syncSessionFromSnapshot(sessionId);
+  // A dropped/evicted subscription may have skipped durable events (global
+  // broadcasts still advance the local cursor while unsubscribed) — rebuild.
+  if (sessionsWithStaleCursor.has(sessionId)) {
+    return syncSessionFromSnapshot(sessionId);
+  }
+  // No known epoch means this session was never synced here (defensive — the
+  // hasLoadedMessages gate in selectSession normally routes it to first-open).
+  if (epochBySession[sessionId] === undefined) {
+    return syncSessionFromSnapshot(sessionId);
+  }
+  const seq = rawState.lastSeqBySession[sessionId] ?? 0;
+  const epoch = epochBySession[sessionId]!;
+  connectEventsIfNeeded();
+  if (eventConn) {
+    eventConn.subscribe(sessionId, { seq, epoch });
+    retainWsSubscription(sessionId);
+  }
+  return 'ok';
 }
 
 // ---------------------------------------------------------------------------

@@ -56,7 +56,12 @@ const props = defineProps<{
   uploadImage?: (file: Blob, name?: string) => Promise<{ fileId: string; name: string; mediaType: string } | null>;
   /** Git changed files (only used for the header diff counter dot). */
   changes?: { path: string; status: string }[];
-  /** Cache-buster that remounts the chat pane when the active session changes. */
+  /**
+   * Identity of the active session. Used as the KeepAlive cache key for the
+   * chat pane (one cached instance per visited session) and by the per-session
+   * scroll-restore watcher. It is no longer a remount cache-buster: switching
+   * sessions swaps the active pane's props instead of tearing the tree down.
+   */
   fileReloadKey?: string | number;
   /** The main conversation has an unfinished prompt (submitted or a main turn
    *  in flight) — the working moon. */
@@ -206,6 +211,26 @@ function pickWorkspace(id: string): void {
 // always centered now. Drop the old persisted preference so users who once
 // picked 'left' aren't frozen on it with no way back.
 safeRemove(STORAGE_KEYS.contentAlign);
+
+// ---------------------------------------------------------------------------
+// Per-session ChatPane caching (KeepAlive)
+//
+// Session switches used to remount ChatPane via `:key="activeSessionId"`,
+// which tore the whole transcript down and re-parsed every message (the
+// "switch-lag" hot path: messagesBySession is cached, but the parsed Markdown /
+// tool cards live in component instances that a remount destroys). KeepAlive
+// keys one cached pane per session instead: switching back re-activates the
+// cached DOM and only props-diffs the turns that actually changed.
+//
+// The cache max matches the WS subscription cap (MAX_WS_SUBSCRIPTIONS = 4 in
+// useKimiWebClient): sessions past the cap are fully cold (re-snapshot +
+// re-mount) on re-open anyway, so keeping more panes warm buys nothing but
+// memory. Eviction just falls back to today's remount behaviour.
+const CHAT_PANE_CACHE_MAX = 4;
+
+/** True while the chat pane (not the empty composer) should be shown. The empty
+ *  composer branch renders when `turns` is empty and not loading. */
+const showChatPane = computed(() => props.turns.length > 0 || props.sessionLoading);
 
 const chatPaneRef = ref<InstanceType<typeof ChatPane> | null>(null);
 const emptyComposerRef = ref<ComposerHandle | null>(null);
@@ -1463,8 +1488,15 @@ defineExpose({ loadComposerForEdit, focusComposer, openTodosHistory });
             />
             <div class="empty-spacer" />
           </template>
-          <template v-else>
+          <!-- Chat pane. KeepAlive caches one instance per session key, so
+               switching sessions only props-diffs the active pane instead of
+               tearing the whole tree down and re-parsing every message (the
+               pre-0.24 `:key` remount). The pane mounts only when the session
+               first has content (or is loading) — the empty composer branch
+               above stays outside the cache and never wipes it. -->
+          <KeepAlive :max="CHAT_PANE_CACHE_MAX">
             <ChatPane
+              v-if="showChatPane"
               ref="chatPaneRef"
               :key="fileReloadKey ?? 'no-session'"
               :turns="turns"
@@ -1493,7 +1525,7 @@ defineExpose({ loadComposerForEdit, focusComposer, openTodosHistory });
               @edit-queued="handleEditQueued"
               @reorder-queue="handleReorderQueue"
             />
-          </template>
+          </KeepAlive>
         </div>
       </div>
       <ChatDock

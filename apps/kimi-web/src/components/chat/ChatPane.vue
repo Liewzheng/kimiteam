@@ -867,6 +867,27 @@ function onOpenAgent(toolCallId: string): void {
   margin-top: 0;
 }
 
+/* ===================== Off-screen turn skipping (content-visibility) ======
+   Skip layout + paint for turns outside the viewport so a long transcript only
+   lays out/renders the visible window (the per-message markstream skip alone
+   still costs the turn wrapper, thinking block and tool cards). The `auto`
+   intrinsic-size remembers each turn's last rendered size, so the flex column
+   keeps a stable height and the scrollbar doesn't jump while off-screen turns
+   contribute only a remembered box. The fixed fallback covers browsers that
+   don't support the `auto` keyword (Safari < 17). */
+.chat > .u-turn,
+.chat > .a-msg {
+  content-visibility: auto;
+  contain-intrinsic-size: 64px;
+  contain-intrinsic-size: auto 64px;
+}
+/* A wide table breaks out of the reading column; content-visibility's paint
+   containment would clip it, so table turns render fully (mirrors the inner
+   markstream override below). */
+.chat > .a-msg:has(.table-node-wrapper) {
+  content-visibility: visible;
+}
+
 /* User turn — wraps the bubble + meta row so they lay out as one right-aligned group. */
 .u-turn {
   display: flex;
