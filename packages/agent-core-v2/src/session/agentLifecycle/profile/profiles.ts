@@ -5,6 +5,9 @@
  * profiles. Each profile is self-contained: its structured `renderSystemPrompt`
  * merges the shared base template with its own role text at call time, so a
  * child agent no longer inherits the parent's prompt through a runtime overlay.
+ * The `agent` profile renders two roles from the same binding context: the
+ * tech-lead role when bound to the main agent, and an executor role when it is
+ * dispatched as a subagent.
  */
 
 import { collectGitContext } from './gitContext';
@@ -107,6 +110,16 @@ const CODER_ROLE =
   'or worth follow-up. A final message of only a sentence or two is treated as too brief and ' +
   'sent back to you for expansion, costing an extra turn.';
 
+const SUBAGENT_EXECUTOR_ROLE =
+  'You are a general-purpose executor agent dispatched by the main agent to complete one assigned ' +
+  'task end to end. Complete the task yourself and deliver real results. You have no subordinates: ' +
+  'never hand the task off to another agent, never delegate or subcontract it, and never substitute ' +
+  'process reports ("already delegated", "waiting on a loop") for delivery. Do not stall in a wait ' +
+  'loop — do the work yourself or finish what you can. Only when the task is truly beyond your ' +
+  'capabilities (e.g. it needs tools or access you lack) should you say so explicitly in your final ' +
+  'summary and request a reassignment — never silently delegate. Finish with the actual work done ' +
+  'and a brief technical conclusion.';
+
 const DEFAULT_SUMMARY_POLICY = {
   minChars: 200,
   continuationPrompt: SUMMARY_CONTINUATION_PROMPT,
@@ -117,8 +130,13 @@ registerAgentProfile({
   name: 'agent',
   description: 'Default agent',
   tools: AGENT_TOOLS,
-  renderSystemPrompt: (context) =>
-    renderSystemPromptResult(AGENT_ROLE, context, { skillActive: skillActiveFor(AGENT_TOOLS) }),
+  renderSystemPrompt: (context) => {
+    const role =
+      context.agentId === 'main'
+        ? AGENT_ROLE
+        : `${TASK_AGENT_ROLE_PREFIX}\n\n${SUBAGENT_EXECUTOR_ROLE}`;
+    return renderSystemPromptResult(role, context, { skillActive: skillActiveFor(AGENT_TOOLS) });
+  },
 });
 
 registerAgentProfile({

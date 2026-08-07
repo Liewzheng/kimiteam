@@ -76,6 +76,13 @@ export interface AgentProfileContext {
   readonly pluginSections?: string;
   readonly productName?: string;
   readonly replyStyleGuide?: string;
+  /**
+   * The id of the agent this prompt is rendered for: `'main'` for the lead
+   * agent, a subagent id otherwise. Lets a profile render different roles
+   * depending on whether it is bound to the main agent or dispatched as a
+   * subagent.
+   */
+  readonly agentId?: string;
   readonly [key: string]: unknown;
 }
 

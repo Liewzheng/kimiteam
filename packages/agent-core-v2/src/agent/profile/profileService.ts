@@ -1006,6 +1006,7 @@ export class AgentProfileService extends Disposable implements IAgentProfileServ
     return {
       ...base,
       cwd: this.sessionContext.cwd,
+      agentId: this.scopeContext.agentId,
       osKind: this.env.osKind,
       shellName: this.env.shellName,
       shellPath: this.env.shellPath,
