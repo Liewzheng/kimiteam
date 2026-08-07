@@ -207,6 +207,7 @@ export class SessionSwarmService implements ISessionSwarmService {
           profile: profile.name,
           model: binding.model,
           thinking: binding.thinking,
+          temperature: binding.temperature,
         },
         labels: subagentLabels(callerAgentId, {
           swarmItem: options.swarmItem,

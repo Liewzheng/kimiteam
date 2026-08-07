@@ -127,6 +127,8 @@ interface LLMRequestLogInput {
   readonly modelName: string;
   readonly modelAlias?: string;
   readonly thinkingEffort?: ThinkingEffort | null;
+  /** Effective sampling temperature actually sent to the provider (per-agent ?? global override). */
+  readonly temperature?: number;
   readonly maxTokens?: number;
   readonly systemPrompt: string;
   readonly tools: readonly Tool[];
@@ -372,6 +374,7 @@ export class AgentLLMRequesterService implements IAgentLLMRequesterService {
         modelName: request.model.name,
         modelAlias: request.modelAlias,
         thinkingEffort: request.thinkingEffort,
+        temperature: request.params.sampling?.temperature,
         maxTokens: effectiveMaxCompletionTokens(request.params),
         systemPrompt: input.systemPrompt,
         tools: input.tools,
@@ -683,7 +686,7 @@ export class AgentLLMRequesterService implements IAgentLLMRequesterService {
         thinkingConfig?.keep,
         input.thinkingEffort ?? 'off',
       ),
-      temperature: overrides?.temperature,
+      temperature: input.temperature ?? overrides?.temperature,
       topP: overrides?.topP,
       maxTokens: input.maxTokens,
       betaApi: modelConfig?.betaApi,

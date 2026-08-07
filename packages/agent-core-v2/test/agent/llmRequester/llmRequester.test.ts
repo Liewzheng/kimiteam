@@ -10,6 +10,7 @@ import {
   type AgentLLMRequestFinish,
 } from '#/agent/llmRequester/llmRequester';
 import { IAgentProfileService } from '#/agent/profile/profile';
+import { DEFAULT_AGENT_PROFILE_NAME } from '#/app/agentProfileCatalog/agentProfileCatalog';
 import type { ILogger as Logger, LogPayload } from '#/_base/log/log';
 import {
   configServices,
@@ -212,6 +213,56 @@ describe('LLMRequester service migration coverage', () => {
       expect(wireEvents(ctx, 'llm.request')[0]?.args).toMatchObject({
         thinkingEffort: 'max',
       });
+    });
+
+    it('records the effective per-agent temperature, not the global model override', async () => {
+      await ctx.dispose();
+      vi.stubEnv('KIMI_MODEL_TEMPERATURE', '0.3');
+      ctx = createTestAgent();
+      llmRequester = ctx.get(IAgentLLMRequesterService);
+      ctx.configure({
+        modelCapabilities: {
+          image_in: false,
+          video_in: false,
+          audio_in: false,
+          thinking: true,
+          tool_use: true,
+          max_context_tokens: 1_000_000,
+        },
+      });
+      // Per-agent temperature 0.9 beats the global `[model_overrides]` 0.3.
+      await ctx.get(IAgentProfileService).bind({
+        profile: DEFAULT_AGENT_PROFILE_NAME,
+        model: 'mock-model',
+        temperature: 0.9,
+      });
+      ctx.mockNextResponse({ type: 'text', text: 'per-agent temperature response' });
+
+      await llmRequester.request();
+
+      expect(wireEvents(ctx, 'llm.request')[0]?.args).toMatchObject({ temperature: 0.9 });
+    });
+
+    it('records the global model-override temperature when no per-agent temperature is bound', async () => {
+      await ctx.dispose();
+      vi.stubEnv('KIMI_MODEL_TEMPERATURE', '0.3');
+      ctx = createTestAgent();
+      llmRequester = ctx.get(IAgentLLMRequesterService);
+      ctx.configure({
+        modelCapabilities: {
+          image_in: false,
+          video_in: false,
+          audio_in: false,
+          thinking: true,
+          tool_use: true,
+          max_context_tokens: 1_000_000,
+        },
+      });
+      ctx.mockNextResponse({ type: 'text', text: 'global temperature response' });
+
+      await llmRequester.request();
+
+      expect(wireEvents(ctx, 'llm.request')[0]?.args).toMatchObject({ temperature: 0.3 });
     });
 
     it('records strict projection resends as separate outbound requests', async () => {

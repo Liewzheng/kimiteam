@@ -371,6 +371,7 @@ export class AgentSwarmTool implements IAgentSwarmTool {
               : args.model !== undefined
                 ? 'model-param'
                 : 'model-preference',
+            targetProfile,
           );
           return binding;
         };

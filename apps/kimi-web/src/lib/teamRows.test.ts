@@ -8,6 +8,7 @@ import {
   sortTeamMembers,
   summarizeTeam,
   teamStatusMeta,
+  thinkModeLabel,
   toMemberCard,
   toMemberCards,
   type TeamMemberStatus,
@@ -162,6 +163,24 @@ describe('toMemberCard / toMemberCards — TeamStatusPanel card grid', () => {
 
   it('renders a null score label when there are no scores yet (card shows empty state)', () => {
     expect(toMemberCard(member({ score: { average: null, count: 0 } })).scoreLabel).toBeNull();
+  });
+
+  it('passes thinkMode + temperature through for the card meta row', () => {
+    const card = toMemberCard(member({ thinkMode: 'max', temperature: 0.3 }));
+    expect(card.thinkMode).toBe('max');
+    expect(card.temperature).toBe(0.3);
+  });
+
+  it('leaves thinkMode / temperature undefined when the wire does not ship them', () => {
+    expect(toMemberCard(member()).thinkMode).toBeUndefined();
+    expect(toMemberCard(member()).temperature).toBeUndefined();
+  });
+
+  it('formats think-mode values capitalized for display (off → Off, max → Max)', () => {
+    expect(thinkModeLabel('off')).toBe('Off');
+    expect(thinkModeLabel('low')).toBe('Low');
+    expect(thinkModeLabel('high')).toBe('High');
+    expect(thinkModeLabel('max')).toBe('Max');
   });
 
   it('maps a roster 1:1 — N members → N cards, order preserved (grid card count)', () => {

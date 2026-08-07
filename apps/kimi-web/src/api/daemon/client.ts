@@ -1427,6 +1427,10 @@ export class DaemonKimiWebApi implements KimiWebApi {
       whenToUse?: string;
       /** Replaces the profile's prompt body (the Markdown after the frontmatter). */
       prompt?: string;
+      /** Reasoning-effort level (wire `think_mode`). `null` clears it. */
+      thinkMode?: string | null;
+      /** Sampling temperature, 0–2. `null` clears it. */
+      temperature?: number | null;
     },
   ): Promise<AppTeamMember> {
     const body: Record<string, unknown> = {};
@@ -1437,6 +1441,8 @@ export class DaemonKimiWebApi implements KimiWebApi {
     if (input.description !== undefined) body['description'] = input.description;
     if (input.whenToUse !== undefined) body['when_to_use'] = input.whenToUse;
     if (input.prompt !== undefined) body['prompt'] = input.prompt;
+    if (input.thinkMode !== undefined) body['think_mode'] = input.thinkMode;
+    if (input.temperature !== undefined) body['temperature'] = input.temperature;
     const data = await this.http.requestFlat<WireTeamMemberResponse>(
       'PUT',
       `/teams/${encodeURIComponent(sessionId)}/members/${encodeURIComponent(name)}`,

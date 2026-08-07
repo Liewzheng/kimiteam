@@ -99,6 +99,12 @@ export function renderFrontmatter(input: AgentProfileCreateInput): string {
   if (input.displayName !== undefined) {
     fields.push(`display_name: ${quoteScalar(input.displayName)}`);
   }
+  if (input.thinkMode !== undefined) {
+    fields.push(`think_mode: ${input.thinkMode}`);
+  }
+  if (input.temperature !== undefined) {
+    fields.push(`temperature: ${input.temperature}`);
+  }
   if (input.modelPreference !== undefined) {
     fields.push(`model_preference: ${quoteScalar(input.modelPreference)}`);
   }
@@ -138,6 +144,8 @@ const PATCH_KEY_TO_FRONTMATTER: Record<
   skills: 'skills',
   duty: 'duty',
   displayName: 'display_name',
+  thinkMode: 'think_mode',
+  temperature: 'temperature',
 };
 
 export class AgentProfileFileService implements IAgentProfileFileService {

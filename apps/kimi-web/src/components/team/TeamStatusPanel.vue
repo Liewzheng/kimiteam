@@ -14,6 +14,7 @@ import type { AppTeamMember, AppTeamMembers } from '../../api/types';
 import {
   sortTeamMembers,
   summarizeTeam,
+  thinkModeLabel,
   toMemberCards,
   type TeamMemberCard,
 } from '../../lib/teamRows';
@@ -79,6 +80,15 @@ function cardAria(card: TeamMemberCard): string {
     name: card.displayName,
     status: t('team.status.' + card.statusKey),
   });
+}
+
+/** Fourth card row — score / thinkMode / temperature (" / "-separated). The
+ *  trailing values appear only when present; score alone keeps the old look. */
+function cardMetaRow(card: TeamMemberCard): string {
+  const parts: string[] = [card.scoreLabel ?? t('team.scoreNone')];
+  if (card.thinkMode) parts.push(thinkModeLabel(card.thinkMode));
+  if (card.temperature !== undefined) parts.push(String(card.temperature));
+  return parts.join(' / ');
 }
 
 // Keep last-known roster on later poll failures; surface the error only while
@@ -166,7 +176,7 @@ const loadFailed = computed(() => props.error !== null && props.members === null
                 <div class="tsp-card-row tsp-model" :title="card.model">{{ card.model }}</div>
                 <div class="tsp-card-row tsp-score">
                   <Icon name="star" size="sm" />
-                  {{ card.scoreLabel ?? t('team.scoreNone') }}
+                  {{ cardMetaRow(card) }}
                 </div>
               </div>
             </Card>

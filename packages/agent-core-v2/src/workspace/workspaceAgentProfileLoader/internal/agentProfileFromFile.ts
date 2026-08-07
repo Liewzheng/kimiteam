@@ -49,6 +49,9 @@ export function agentProfileFromFile(
     modelPreference: definition.modelPreference,
     role: definition.role,
     duty: definition.duty,
+    displayName: definition.displayName,
+    thinkMode: definition.thinkMode,
+    temperature: definition.temperature,
     renderSystemPrompt: (context) =>
       renderPromptTemplateResult(definition.prompt, context, { skillActive }, basePrompt),
   });

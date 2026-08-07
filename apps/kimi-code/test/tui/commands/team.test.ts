@@ -298,11 +298,11 @@ describe('deriveMemberStatus', () => {
     expect(deriveMemberStatus(true, entry, now)).toBe('off-duty');
   });
 
-  it('treats a profile with no status entry as 上班 (on-duty)', () => {
+  it('treats a profile with no status entry as on-duty (displays 下班)', () => {
     expect(deriveMemberStatus(true, undefined, now)).toBe('on-duty');
   });
 
-  it('treats a resting entry without restExpiresAt as 上班 (on-duty)', () => {
+  it('treats a resting entry without restExpiresAt as on-duty (displays 下班)', () => {
     expect(deriveMemberStatus(true, { state: 'resting' } as const, now)).toBe('on-duty');
   });
 
@@ -1317,12 +1317,12 @@ describe('TeamPanelComponent CJK alignment', () => {
     // The focus cell is blank: between the position text and the status cell
     // there is nothing but padding spaces.
     const posEnd = rowLine!.indexOf('产品经理') + '产品经理'.length;
-    const statusStart = rowLine!.indexOf('上班');
+    const statusStart = rowLine!.indexOf('下班');
     const between = rowLine!.slice(posEnd, statusStart);
     expect(between.trim()).toBe('');
 
     // The status cell then sits before the model column.
-    const statusEnd = statusStart + '上班'.length;
+    const statusEnd = statusStart + '下班'.length;
     const modelStart = rowLine!.indexOf('gpt-4o');
     expect(modelStart).toBeGreaterThan(statusEnd);
   });
@@ -1517,14 +1517,14 @@ describe('TeamPanelComponent status column', () => {
     expect(row).toContain(warningFg); // warning
   });
 
-  it('renders 上班 uncoloured for on-duty members', () => {
+  it('renders 下班 uncoloured for on-duty members (never-worked → 下班 label)', () => {
     const panel = new TeamPanelComponent({
       teamMode: true,
       members: [onDuty],
       onClose: () => {},
     });
     const row = panel.render(120).find((l) => l.includes('alice'))!;
-    expect(row).toContain('上班');
+    expect(row).toContain('下班');
     expect(row).not.toContain(workingFg); // no primary
     expect(row).not.toContain(warningFg); // no warning
   });
@@ -1594,7 +1594,7 @@ describe('team panel runtime-status integration', () => {
 
     expect(host.showError).not.toHaveBeenCalled();
     const joined = mountedPanel(host).render(120).join('\n');
-    expect(joined).toContain('上班');
+    expect(joined).toContain('下班');
     expect(joined).not.toContain('工作');
     expect(joined).not.toContain('休息');
     // No project agents dir → only the 全局团队 section is shown.

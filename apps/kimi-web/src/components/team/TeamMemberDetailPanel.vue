@@ -25,11 +25,13 @@ import { usePolling } from '../../composables/usePolling';
 import { usePolishPrompt } from '../../composables/usePolishPrompt';
 import { formatTokens } from '../../lib/formatTokens';
 import {
+  THINK_MODE_OPTIONS,
   averageScoreLabel,
   findMemberTask,
   findTeamMember,
   memberModelOptions,
   teamStatusMeta,
+  thinkModeLabel,
   type MemberModelOption,
 } from '../../lib/teamRows';
 import { memberSessionUsage, tokenTotal } from '../../lib/usageRows';
@@ -156,6 +158,8 @@ const saveError = ref<string | null>(null);
 const title = ref('');
 const model = ref('');
 const prompt = ref('');
+const thinkMode = ref('');
+const temperature = ref('');
 
 // Polish-modal state machine — bound to the api + panel identity so tests can
 // drive it with a mock api. confirm() returns the polished text; the caller
@@ -184,6 +188,8 @@ function startEdit(): void {
   title.value = m.role;
   model.value = m.model;
   prompt.value = m.prompt ?? '';
+  thinkMode.value = m.thinkMode ?? '';
+  temperature.value = m.temperature !== undefined ? String(m.temperature) : '';
   saveError.value = null;
   editing.value = true;
 }
@@ -196,6 +202,16 @@ function cancelEdit(): void {
 async function save(): Promise<void> {
   const m = member.value;
   if (!m) return;
+  // Temperature must be a number in [0, 2] when provided (empty = explicit clear).
+  const tempText = temperature.value.trim();
+  let temp: number | undefined;
+  if (tempText.length > 0) {
+    temp = Number(tempText);
+    if (!Number.isFinite(temp) || temp < 0 || temp > 2) {
+      saveError.value = t('team.temperatureRange');
+      return;
+    }
+  }
   saving.value = true;
   saveError.value = null;
   try {
@@ -204,11 +220,18 @@ async function save(): Promise<void> {
       role: title.value.trim() || undefined,
       // Empty prompt is rejected by the server (min 1) — leave it untouched.
       prompt: prompt.value.trim() || undefined,
+      // Empty think mode / temperature are an explicit clear: `null` tells the
+      // server to delete the frontmatter key (requires server-side null-clear —
+      // see the delivery notes for the exact server配合点).
+      thinkMode: thinkMode.value.trim().length > 0 ? thinkMode.value.trim() : null,
+      temperature: temp ?? null,
     });
     emit('memberUpdated', updated);
     title.value = updated.role;
     model.value = updated.model;
     prompt.value = updated.prompt ?? '';
+    thinkMode.value = updated.thinkMode ?? '';
+    temperature.value = updated.temperature !== undefined ? String(updated.temperature) : '';
     editing.value = false;
   } catch (err) {
     saveError.value = err instanceof Error ? err.message : String(err);
@@ -280,6 +303,17 @@ async function save(): Promise<void> {
               </optgroup>
             </Select>
           </Field>
+          <Field :label="t('team.thinkModeLabel')">
+            <Select v-model="thinkMode">
+              <option value="">{{ t('team.thinkModeNotSet') }}</option>
+              <option v-for="mode in THINK_MODE_OPTIONS" :key="mode" :value="mode">
+                {{ thinkModeLabel(mode) }}
+              </option>
+            </Select>
+          </Field>
+          <Field :label="t('team.temperatureLabel')" :hint="t('team.temperatureHint')">
+            <Input v-model="temperature" type="number" min="0" max="2" step="0.1" />
+          </Field>
           <div v-if="saveError" class="tmd-error" role="alert">{{ saveError }}</div>
           <div class="tmd-form-actions">
             <Button size="sm" variant="secondary" :disabled="saving" @click="cancelEdit">
@@ -303,6 +337,14 @@ async function save(): Promise<void> {
           <div class="tmd-line">
             <span class="tmd-k">{{ t('team.hireModel') }}</span>
             <span class="tmd-v">{{ member.model }}</span>
+          </div>
+          <div v-if="member.thinkMode" class="tmd-line">
+            <span class="tmd-k">{{ t('team.thinkModeLabel') }}</span>
+            <span class="tmd-v">{{ thinkModeLabel(member.thinkMode) }}</span>
+          </div>
+          <div v-if="member.temperature !== undefined" class="tmd-line">
+            <span class="tmd-k">{{ t('team.temperatureLabel') }}</span>
+            <span class="tmd-v">{{ member.temperature }}</span>
           </div>
           <div v-if="member.whenToUse" class="tmd-line">
             <span class="tmd-k">{{ t('team.whenToUse') }}</span>

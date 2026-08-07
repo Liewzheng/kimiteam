@@ -113,6 +113,12 @@ export interface AgentProfile {
   readonly role?: string;
   /** On-duty member: its subagent runs are exempt from the subagent timeout. */
   readonly duty?: boolean;
+  /** Display (e.g. Chinese) name shown on the Web team card; defaults to `name`. */
+  readonly displayName?: string;
+  /** Per-profile thinking effort (`think_mode` frontmatter); folded into the subagent spawn binding. */
+  readonly thinkMode?: string;
+  /** Per-profile sampling temperature (`temperature` frontmatter); folded into the subagent spawn binding. */
+  readonly temperature?: number;
   readonly systemPrompt: (context: AgentProfileContext) => string;
   readonly renderSystemPrompt: (context: AgentProfileContext) => SystemPromptRenderResult;
   readonly promptPrefix?: (ctx: AgentProfilePromptPrefixContext) => Promise<string>;

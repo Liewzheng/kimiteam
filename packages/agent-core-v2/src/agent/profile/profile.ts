@@ -130,6 +130,13 @@ export interface BindAgentInput {
   readonly model?: string;
   readonly thinking?: string;
   readonly strictThinking?: boolean;
+  /**
+   * Per-agent sampling temperature, carried from the subagent spawn binding
+   * (the member's `temperature` frontmatter). Stored per-agent at bind time
+   * and preferred over the global `[model_overrides]` temperature by
+   * `resolveRequestParams`.
+   */
+  readonly temperature?: number;
 }
 
 export interface IAgentProfileService {

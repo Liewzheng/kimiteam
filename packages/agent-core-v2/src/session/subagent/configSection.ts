@@ -44,7 +44,7 @@ import { z } from 'zod';
 
 import { parseBooleanEnv } from '#/_base/utils/env';
 import { Error2, ErrorCodes, isError2 } from '#/errors';
-import type { AgentModelPreference } from '#/app/agentProfileCatalog/agentProfileCatalog';
+import type { AgentModelPreference, AgentProfile } from '#/app/agentProfileCatalog/agentProfileCatalog';
 import { isPlainObject } from '#/app/config/toml';
 import type { IFlagService } from '#/app/flag/flag';
 import {
@@ -379,8 +379,17 @@ export type SubagentBindingSource =
 export interface SubagentSpawnBinding {
   readonly model: string;
   readonly thinking?: string;
+  /** Per-profile sampling temperature, folded from the member's `temperature` frontmatter. */
+  readonly temperature?: number;
   readonly source?: SubagentBindingSource;
 }
+
+/**
+ * The per-profile spawn defaults resolved from the member's agent file
+ * (`think_mode` / `temperature` frontmatter). Kept as the narrow profile
+ * surface so binding assembly never needs the full catalog profile.
+ */
+export type SubagentProfileSpawnDefaults = Pick<AgentProfile, 'thinkMode' | 'temperature'>;
 
 export function resolveSubagentBinding(
   config: IConfigService,
@@ -390,7 +399,9 @@ export function resolveSubagentBinding(
   profileName?: string,
   /** Where `requested` came from; only used for precedence and error provenance. */
   requestedSource: 'model-param' | 'item-models' | 'model-preference' = 'model-param',
-): { model: string; thinking?: string; source: SubagentBindingSource } {
+  /** The member's own spawn defaults (`think_mode` / `temperature` frontmatter), when available. */
+  profile?: SubagentProfileSpawnDefaults,
+): { model: string; thinking?: string; temperature?: number; source: SubagentBindingSource } {
   // Precedence: an explicit per-call choice (model parameter / item_models) >
   // `[subagent.model_overrides]` > the profile's model_preference > the
   // secondary default > inherit the caller. A choice that arrived via the
@@ -402,12 +413,22 @@ export function resolveSubagentBinding(
       ? undefined
       : config.get<SubagentConfig | undefined>(SUBAGENT_SECTION)?.modelOverrides?.[profileName];
   if (override !== undefined) {
-    return { model: override, source: 'model-override' };
+    return {
+      model: override,
+      thinking: profile?.thinkMode,
+      temperature: profile?.temperature,
+      source: 'model-override',
+    };
   }
   // 2) An explicit `[models.<id>]` id (anything but the symbolic shortcuts)
   //    binds directly; validity is checked against the catalog at spawn.
   if (requested !== undefined && requested !== 'primary' && requested !== 'secondary') {
-    return { model: requested, source: requestedSource };
+    return {
+      model: requested,
+      thinking: profile?.thinkMode,
+      temperature: profile?.temperature,
+      source: requestedSource,
+    };
   }
   // 3) Secondary default (unless 'primary' was requested), then inherit.
   const secondary = resolveSecondaryModel(config, flags);
@@ -417,11 +438,22 @@ export function resolveSubagentBinding(
         secondaryModelPatch(secondary) === undefined
           ? secondary.model
           : SECONDARY_DERIVED_MODEL_ID,
-      thinking: secondary.defaultEffort,
+      // An explicitly configured secondary `default_effort` stays authoritative;
+      // the profile's declared think_mode fills in when the recipe has none.
+      thinking: secondary.defaultEffort ?? profile?.thinkMode,
+      temperature: profile?.temperature,
       source: 'secondary',
     };
   }
-  return { model: own.modelAlias, thinking: own.thinkingLevel, source: 'caller' };
+  return {
+    model: own.modelAlias,
+    // The member's own declared think_mode wins over inherited caller thinking
+    // (inheritance is ambient state, not a deliberate binding); effort
+    // validity is normalized downstream by `resolveThinkingEffort`.
+    thinking: profile?.thinkMode ?? own.thinkingLevel,
+    temperature: profile?.temperature,
+    source: 'caller',
+  };
 }
 
 /** Every configured `[models.<id>]` id, sorted; the explicit-id choices. */

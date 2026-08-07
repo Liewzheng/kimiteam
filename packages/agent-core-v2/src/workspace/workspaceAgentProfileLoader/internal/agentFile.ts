@@ -57,6 +57,8 @@ const KNOWN_FRONTMATTER_FIELDS: ReadonlySet<string> = new Set([
   'role',
   'duty',
   'display_name',
+  'think_mode',
+  'temperature',
 ]);
 
 /** Common misspellings → the canonical key, so the warn can point at the fix. */
@@ -130,6 +132,8 @@ export function parseAgentFileText(options: ParseAgentFileOptions): AgentFileDef
   const role = nonEmptyString(frontmatter['role']);
   const duty = parseBoolean(frontmatter['duty'], 'duty', options.path);
   const displayName = nonEmptyString(frontmatter['display_name']);
+  const thinkMode = nonEmptyString(frontmatter['think_mode']);
+  const temperature = parseNumber(frontmatter['temperature'], 'temperature', options.path);
 
   const prompt = parsed.body.trim();
   if (prompt.length === 0) {
@@ -166,10 +170,24 @@ export function parseAgentFileText(options: ParseAgentFileOptions): AgentFileDef
     role,
     duty,
     displayName,
+    thinkMode,
+    temperature,
     prompt,
     path: options.path,
     source: options.source,
   };
+}
+
+function parseNumber(
+  value: unknown,
+  field: string,
+  filePath: string,
+): number | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  throw new AgentFileParseError(
+    `Frontmatter field "${field}" in ${filePath} must be a finite number`,
+  );
 }
 
 function parseModelPreference(

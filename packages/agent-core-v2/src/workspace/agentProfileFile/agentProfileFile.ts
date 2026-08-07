@@ -28,6 +28,10 @@ export interface AgentProfileCreateInput {
   readonly skills?: readonly string[];
   readonly duty?: boolean;
   readonly displayName?: string;
+  /** Per-profile thinking effort (`think_mode` frontmatter), e.g. 'off'/'low'/'high'. */
+  readonly thinkMode?: string;
+  /** Per-profile sampling temperature (`temperature` frontmatter), e.g. 0.3. */
+  readonly temperature?: number;
   readonly scope?: AgentProfileScope;
 }
 
@@ -48,6 +52,8 @@ export interface AgentProfileFilePatch {
   readonly skills?: readonly string[] | undefined;
   readonly duty?: boolean | undefined;
   readonly displayName?: string;
+  readonly thinkMode?: string;
+  readonly temperature?: number;
   readonly prompt?: string;
 }
 

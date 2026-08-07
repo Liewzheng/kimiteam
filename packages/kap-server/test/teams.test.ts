@@ -9,7 +9,7 @@
  * member agent), and concurrency.
  */
 
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -40,6 +40,8 @@ interface MemberWire {
   description: string;
   when_to_use?: string;
   display_name?: string;
+  think_mode?: string;
+  temperature?: number;
   model?: string;
   prompt?: string;
   tools: string[];
@@ -225,6 +227,119 @@ describe('server-v2 /api/v1/teams/{session_id}', () => {
 
     const reloaded = allMembers((await teamFetch(`/api/v1/teams/${id}/members`)).body);
     expect(reloaded.find((m) => m.name === 'code-reviewer')?.display_name).toBe('韩述');
+  });
+
+  it('carries think_mode and temperature from hire through the roster and the PUT patch path', async () => {
+    const id = await createSession();
+    const hire = await teamFetch(`/api/v1/teams/${id}/members`, {
+      method: 'POST',
+      body: {
+        name: 'sharp-coder',
+        description: 'Writes sharp code',
+        prompt: 'You write sharp code.',
+        think_mode: 'max',
+        temperature: 0.3,
+      },
+    });
+    expect(hire.status).toBe(200);
+    expect(hire.body.member?.think_mode).toBe('max');
+    expect(hire.body.member?.temperature).toBe(0.3);
+
+    const list = await teamFetch(`/api/v1/teams/${id}/members`);
+    const roster = allMembers(list.body);
+    expect(roster.find((m) => m.name === 'sharp-coder')).toMatchObject({
+      think_mode: 'max',
+      temperature: 0.3,
+    });
+
+    // PUT patch rewrites both (Web edit form channel).
+    const updated = await teamFetch(`/api/v1/teams/${id}/members/sharp-coder`, {
+      method: 'PUT',
+      body: { think_mode: 'high', temperature: 0.7 },
+    });
+    expect(updated.status).toBe(200);
+    expect(updated.body.member?.think_mode).toBe('high');
+    expect(updated.body.member?.temperature).toBe(0.7);
+
+    const reloaded = allMembers((await teamFetch(`/api/v1/teams/${id}/members`)).body);
+    expect(reloaded.find((m) => m.name === 'sharp-coder')).toMatchObject({
+      think_mode: 'high',
+      temperature: 0.7,
+    });
+  });
+
+  it('clears think_mode and temperature with null via the PUT patch (global write path)', async () => {
+    const id = await createSession();
+    await teamFetch(`/api/v1/teams/${id}/members`, {
+      method: 'POST',
+      body: {
+        name: 'clearable',
+        description: 'Clearable member',
+        prompt: 'You are clearable.',
+        think_mode: 'max',
+        temperature: 0.3,
+      },
+    });
+
+    const cleared = await teamFetch(`/api/v1/teams/${id}/members/clearable`, {
+      method: 'PUT',
+      body: { think_mode: null, temperature: null },
+    });
+    expect(cleared.status).toBe(200);
+    expect(cleared.body.ok).toBe(true);
+    expect(cleared.body.member?.think_mode).toBeUndefined();
+    expect(cleared.body.member?.temperature).toBeUndefined();
+
+    // The roster re-read agrees, and the file on disk carries no literal null.
+    const members = allMembers((await teamFetch(`/api/v1/teams/${id}/members`)).body);
+    const member = members.find((m) => m.name === 'clearable');
+    expect(member?.think_mode).toBeUndefined();
+    expect(member?.temperature).toBeUndefined();
+    const fileText = await readFile(join(home!, 'agents', 'clearable.md'), 'utf-8');
+    expect(fileText).not.toMatch(/think_mode\s*:/);
+    expect(fileText).not.toMatch(/temperature\s*:/);
+  });
+
+  it('clears think_mode and temperature with null for a project-scope member (route-side write path)', async () => {
+    const id = await createSession();
+    await teamFetch(`/api/v1/teams/${id}/members`, {
+      method: 'POST',
+      body: {
+        name: 'proj-clearable',
+        description: 'Project clearable member',
+        prompt: 'You are project clearable.',
+        scope: 'project',
+        think_mode: 'high',
+        temperature: 0.7,
+      },
+    });
+
+    const cleared = await teamFetch(`/api/v1/teams/${id}/members/proj-clearable`, {
+      method: 'PUT',
+      body: { think_mode: null, temperature: null },
+    });
+    expect(cleared.status).toBe(200);
+    expect(cleared.body.ok).toBe(true);
+    expect(cleared.body.member?.think_mode).toBeUndefined();
+    expect(cleared.body.member?.temperature).toBeUndefined();
+
+    const members = allMembers((await teamFetch(`/api/v1/teams/${id}/members`)).body);
+    const member = members.find((m) => m.name === 'proj-clearable');
+    expect(member?.think_mode).toBeUndefined();
+    expect(member?.temperature).toBeUndefined();
+  });
+
+  it('omits think_mode and temperature when the profile has none', async () => {
+    const id = await createSession();
+    await teamFetch(`/api/v1/teams/${id}/members`, {
+      method: 'POST',
+      body: { name: 'plain', description: 'd', prompt: 'p' },
+    });
+
+    const members = allMembers((await teamFetch(`/api/v1/teams/${id}/members`)).body);
+    const plain = members.find((m) => m.name === 'plain');
+    expect(plain?.think_mode).toBeUndefined();
+    expect(plain?.temperature).toBeUndefined();
   });
 
   it('omits display_name when the profile has none', async () => {

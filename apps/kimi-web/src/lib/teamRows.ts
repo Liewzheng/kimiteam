@@ -6,8 +6,8 @@
 //
 // The web displays THREE lifecycle states. The wire still carries the TUI's
 // four (working / resting / on-duty / off-duty); the mapper folds `on-duty`
-// (employed, available, not in a turn) into `resting` — the "on the roster,
-// not currently working" bucket, which also absorbs 常驻 duty members.
+// (employed, available, never worked this session) into `off-duty` — product
+// semantics: a member who hasn't worked reads as 下班, not 休息.
 //   working 工作 · resting 休息 · off-duty 下班
 
 export type TeamMemberStatus = 'working' | 'resting' | 'off-duty';
@@ -47,8 +47,9 @@ export interface TeamRosterSummary {
   total: number;
   /** Members with a live working instance (occupy a turn slot). */
   working: number;
-  /** Employed members on the roster who are not in an active turn (rest
-   *  windows + standing 常驻/duty members — `on-duty` folds in here). */
+  /** Employed members on the roster inside a live rest window (context kept —
+   *  they can continue the working conversation). `on-duty` folds into
+   *  off-duty, not here. */
   resting: number;
   /** Archived / fired members (performance history only). */
   offDuty: number;
@@ -86,6 +87,19 @@ export function averageScoreLabel(score: { average: number | null; count: number
 }
 
 // ---------------------------------------------------------------------------
+// Think-mode options — the member card / detail form's reasoning-effort set.
+// The engine's ThinkingEffort is an open union ('off' | 'on' | string, with
+// per-model `supportEfforts`), so the web ships the product-agreed set. Display
+// capitalizes each level (off → Off, max → Max).
+// ---------------------------------------------------------------------------
+export const THINK_MODE_OPTIONS: readonly string[] = ['off', 'low', 'high', 'max'];
+
+/** Display a think-mode value capitalized (off → Off, max → Max). */
+export function thinkModeLabel(mode: string): string {
+  return mode.length > 0 ? mode.charAt(0).toUpperCase() + mode.slice(1) : mode;
+}
+
+// ---------------------------------------------------------------------------
 // TeamStatusPanel card view-model
 // ---------------------------------------------------------------------------
 
@@ -110,6 +124,10 @@ export interface TeamMemberCard {
   /** The card's "Title" row — the member's role/职位 field. */
   title: string;
   model: string;
+  /** Reasoning-effort level (off/low/high/max) for the card's meta row. */
+  thinkMode?: string;
+  /** Sampling temperature (0–2) for the card's meta row. */
+  temperature?: number;
   scoreLabel: string | null;
 }
 
@@ -129,6 +147,8 @@ export function toMemberCard(member: {
   displayName?: string;
   status: TeamMemberStatus;
   duty?: boolean;
+  thinkMode?: string;
+  temperature?: number;
   score: { average: number | null; count: number };
 }): TeamMemberCard {
   return {
@@ -138,6 +158,8 @@ export function toMemberCard(member: {
     duty: member.duty === true,
     title: member.role,
     model: member.model,
+    thinkMode: member.thinkMode,
+    temperature: member.temperature,
     scoreLabel: averageScoreLabel(member.score),
   };
 }

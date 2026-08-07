@@ -121,6 +121,34 @@ describe('AgentProfileService.bind', () => {
     expect(svc.getSystemPrompt()).toContain('Kimi Code CLI');
   });
 
+  it('prefers a per-agent temperature from the spawn binding over the global model override', async () => {
+    process.env['KIMI_MODEL_TEMPERATURE'] = '0.3';
+    try {
+      const { profile: svc } = buildContext();
+      await svc.bind({
+        profile: DEFAULT_AGENT_PROFILE_NAME,
+        model: MOCK_MODEL,
+        temperature: 0.9,
+      });
+
+      expect(svc.resolveRequestParams().sampling).toEqual({ temperature: 0.9 });
+    } finally {
+      delete process.env['KIMI_MODEL_TEMPERATURE'];
+    }
+  });
+
+  it('falls back to the global model-override temperature when no per-agent temperature is bound', async () => {
+    process.env['KIMI_MODEL_TEMPERATURE'] = '0.3';
+    try {
+      const { profile: svc } = buildContext();
+      await svc.bind({ profile: DEFAULT_AGENT_PROFILE_NAME, model: MOCK_MODEL });
+
+      expect(svc.resolveRequestParams().sampling).toEqual({ temperature: 0.3 });
+    } finally {
+      delete process.env['KIMI_MODEL_TEMPERATURE'];
+    }
+  });
+
   // A fast bootstrap can bind while config is still loading; the model
   // materialization inside bind must wait for the identity freeze instead of
   // tripping its pre-freeze guard through the host-headers port.

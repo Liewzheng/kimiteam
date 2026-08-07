@@ -807,12 +807,12 @@ export function wireEventSeq(wire: WireEvent): number {
 // ---------------------------------------------------------------------------
 
 /** Map the wire's four-state lifecycle onto the web's three display states:
- *  `on-duty` (employed, available, not in a turn) collapses into `resting` —
- *  the "on the roster, not currently working" bucket that also absorbs 常驻
- *  duty members. Folding it into `off-duty` would wrongly archive employed
- *  members, so resting is the closer semantic home. */
+ *  `on-duty` (employed, available, never worked this session) collapses into
+ *  `off-duty` — product semantics: a member who hasn't worked reads as 下班,
+ *  not 休息. `resting` stays reserved for members who worked and are still
+ *  inside their rest window (context kept, conversation continuable). */
 function toAppTeamMemberStatus(status: WireTeamMemberStatus): AppTeamMemberStatus {
-  return status === 'on-duty' ? 'resting' : status;
+  return status === 'on-duty' ? 'off-duty' : status;
 }
 
 export function toAppTeamMember(wire: WireTeamMember): AppTeamMember {
@@ -827,6 +827,8 @@ export function toAppTeamMember(wire: WireTeamMember): AppTeamMember {
     duty: wire.duty,
     displayName: wire.display_name,
     prompt: wire.prompt,
+    thinkMode: wire.think_mode,
+    temperature: wire.temperature,
     status: toAppTeamMemberStatus(wire.status),
     score: {
       average: wire.score.average,

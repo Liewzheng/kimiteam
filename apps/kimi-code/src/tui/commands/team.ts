@@ -147,7 +147,8 @@ export interface RuntimeStatusData {
 
 export interface TeamMemberRow {
   readonly name: string;
-  /** Lifecycle status — 工作 / 休息 / 上班 / 下班. */
+  /** Lifecycle status — display labels 工作 / 休息 / 下班 / 下班: both on-duty
+   *  (never worked this session) and off-duty (archived) read as 下班. */
   readonly status: MemberStatus;
   readonly role: string;
   readonly model: string;
@@ -265,8 +266,8 @@ export function parseRuntimeStatusData(raw: string): RuntimeStatusData | null {
  *  - 工作 working:  profile exists && status.state === 'working'
  *  - 休息 resting:  profile exists && status.state === 'resting'
  *                    && rest window (`restExpiresAt`) has not expired
- *  - 上班 on-duty:  profile exists && no status entry
- *                    — employed, no live instance, spawns on demand
+ *  - 下班 on-duty:  profile exists && no status entry
+ *                    — employed, never worked this session; display 下班
  *  - 下班 off-duty: profile exists && resting window expired (the parked
  *                    instance was reaped — a terminal record); or no profile
  *                    file but performance history exists (fired / archived)
@@ -595,11 +596,14 @@ export interface TeamPanelOptions {
   readonly maxVisible?: number;
 }
 
-/** Status column copy — the four lifecycle states (Chinese, target audience). */
+/** Status column copy — the four lifecycle states (Chinese, target audience).
+ *  Product semantics: on-duty (employed, never worked this session) reads as
+ *  下班 — the same label as off-duty. The enum stays four-state; only the
+ *  display label changes. */
 const STATUS_LABELS: Record<MemberStatus, string> = {
   working: '工作',
   resting: '休息',
-  'on-duty': '上班',
+  'on-duty': '下班',
   'off-duty': '下班',
 };
 
@@ -748,8 +752,9 @@ export class TeamPanelComponent extends Container implements Focusable {
           ? modelText
           : dim(modelText);
         // Status colour: 工作 = primary (the "running badge" token), 休息 =
-        // warning (yellow, the rest window). 上班 / 下班 stay uncoloured — 上班
-        // inherits the row dim, 下班 rows are muted at row level (greyed archive).
+        // warning (yellow, the rest window). 下班 (both on-duty and off-duty)
+        // stays uncoloured — on-duty inherits the row dim, off-duty rows are
+        // muted at row level (greyed archive).
         const statusLabel = STATUS_LABELS[member.status];
         const statusDisplay =
           member.status === 'working'

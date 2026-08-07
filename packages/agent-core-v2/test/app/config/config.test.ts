@@ -2007,6 +2007,69 @@ describe('subagent config section', () => {
     disposables.dispose();
   });
 
+  it('folds per-profile think_mode and temperature into the spawn binding', async () => {
+    const own = { modelAlias: 'provider/main', thinkingLevel: 'medium' };
+    const profile = { thinkMode: 'high', temperature: 0.3 };
+    const { config, disposables } = await createConfig(
+      {},
+      '[secondary_model]\nmodel = "provider/secondary"\n\n[subagent.model_overrides]\ncoder = "provider/override"\n',
+    );
+
+    // Caller-inherit branch: the member's declared think_mode wins over the
+    // inherited caller level; temperature rides along. `primary` suppresses
+    // both the override and the secondary default.
+    expect(resolveSubagentBinding(config, secondaryModelFlags(), own, 'primary', 'coder', 'model-param', profile)).toEqual({
+      model: 'provider/main',
+      thinking: 'high',
+      temperature: 0.3,
+      source: 'caller',
+    });
+    // Model-override branch: think_mode fills the natural-resolution slot.
+    expect(resolveSubagentBinding(config, secondaryModelFlags(), own, undefined, 'coder', 'model-preference', profile)).toEqual({
+      model: 'provider/override',
+      thinking: 'high',
+      temperature: 0.3,
+      source: 'model-override',
+    });
+    // Explicit [models] id branch.
+    expect(resolveSubagentBinding(config, secondaryModelFlags(), own, 'provider/x', 'coder', 'model-param', profile)).toEqual({
+      model: 'provider/x',
+      thinking: 'high',
+      temperature: 0.3,
+      source: 'model-param',
+    });
+    // Secondary branch with a default_effort: the recipe's effort wins over
+    // the profile think_mode; temperature still applies.
+    const withEffort = await createConfig(
+      {},
+      '[secondary_model]\nmodel = "provider/secondary"\ndefault_effort = "low"\n',
+    );
+    expect(resolveSubagentBinding(withEffort.config, secondaryModelFlags(), own, undefined, undefined, 'model-param', profile)).toEqual({
+      model: SECONDARY_DERIVED_MODEL_ID,
+      thinking: 'low',
+      temperature: 0.3,
+      source: 'secondary',
+    });
+    withEffort.disposables.dispose();
+    // Secondary branch without a default_effort: profile think_mode fills in.
+    const withModel = await createConfig({}, '[secondary_model]\nmodel = "provider/secondary"\n');
+    expect(resolveSubagentBinding(withModel.config, secondaryModelFlags(), own, undefined, undefined, 'model-param', profile)).toEqual({
+      model: 'provider/secondary',
+      thinking: 'high',
+      temperature: 0.3,
+      source: 'secondary',
+    });
+    withModel.disposables.dispose();
+    // A profile with only temperature leaves thinking untouched.
+    expect(
+      resolveSubagentBinding(config, secondaryModelFlags(), own, 'primary', 'coder', 'model-param', {
+        temperature: 0.7,
+      }),
+    ).toEqual({ model: 'provider/main', thinking: 'medium', temperature: 0.7, source: 'caller' });
+
+    disposables.dispose();
+  });
+
   it('preserves the coded error contract when adding secondary-model guidance', () => {
     const cause = new Error2(
       ErrorCodes.CONFIG_INVALID,

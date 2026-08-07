@@ -89,8 +89,8 @@ describe('toAppTeamMember — three-state display model', () => {
     }
   });
 
-  it('folds wire on-duty into resting (employed-but-idle → on-roster bucket)', () => {
-    expect(toAppTeamMember(wireMember({ status: 'on-duty' })).status).toBe('resting');
+  it('folds wire on-duty into off-duty (never-worked member reads as 下班)', () => {
+    expect(toAppTeamMember(wireMember({ status: 'on-duty' })).status).toBe('off-duty');
   });
 
   it('carries duty + display_name through to the app member', () => {
@@ -99,5 +99,11 @@ describe('toAppTeamMember — three-state display model', () => {
     );
     expect(mapped.duty).toBe(true);
     expect(mapped.displayName).toBe('顾晚晴');
+  });
+
+  it('carries think_mode + temperature through to the app member', () => {
+    const mapped = toAppTeamMember(wireMember({ think_mode: 'max', temperature: 0.3 }));
+    expect(mapped.thinkMode).toBe('max');
+    expect(mapped.temperature).toBe(0.3);
   });
 });

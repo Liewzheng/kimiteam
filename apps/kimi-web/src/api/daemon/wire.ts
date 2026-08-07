@@ -477,7 +477,10 @@ export interface WireConfig {
 
 /** Four-state member lifecycle status, aligned with the TUI
  *  (apps/kimi-code/src/tui/commands/team.ts): working / resting / on-duty /
- *  off-duty. 工作 · 休息 · 上班 · 下班. */
+ *  off-duty. Display: 工作 · 休息 · 下班 — both on-duty and off-duty read as
+ *  下班, but the internal states differ: on-duty = never worked this session
+ *  (no context kept), off-duty = rest TTL expired (context cleared). The web
+ *  maps on-duty into off-duty for display. */
 export type WireTeamMemberStatus = 'working' | 'resting' | 'on-duty' | 'off-duty';
 
 export interface WireTeamMember {
@@ -496,6 +499,14 @@ export interface WireTeamMember {
   /** The profile's prompt body (Markdown after the frontmatter), when the
    *  server ships it. */
   prompt?: string;
+  /** Per-profile reasoning-effort level (`think_mode` frontmatter), e.g.
+   *  off/low/high/max, editable via updateTeamMember. Older daemons omit the
+   *  field (undefined) — the web card then shows no think-mode value. */
+  think_mode?: string;
+  /** Per-profile sampling temperature (`temperature` frontmatter), 0–2,
+   *  editable via updateTeamMember. Older daemons omit the field (undefined) —
+   *  the web card then shows no temperature value. */
+  temperature?: number;
   status: WireTeamMemberStatus;
   score: {
     average: number | null;

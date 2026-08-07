@@ -106,6 +106,28 @@ describe('parseAgentFileText', () => {
     expect(def.name).toBe('solo');
   });
 
+  it('parses per-profile think_mode and temperature frontmatter', () => {
+    const def = parse(
+      '---\nname: solo\ndescription: d\nthink_mode: max\ntemperature: 0.3\n---\n\nbody\n',
+    );
+
+    expect(def.thinkMode).toBe('max');
+    expect(def.temperature).toBe(0.3);
+  });
+
+  it('leaves think_mode and temperature undefined when omitted', () => {
+    const def = parse('---\nname: solo\ndescription: d\n---\n\nbody\n');
+
+    expect(def.thinkMode).toBeUndefined();
+    expect(def.temperature).toBeUndefined();
+  });
+
+  it('rejects a non-numeric temperature frontmatter field', () => {
+    expect(() =>
+      parse('---\nname: solo\ndescription: d\ntemperature: hot\n---\n\nbody\n'),
+    ).toThrow(/"temperature"/);
+  });
+
   it('rejects missing frontmatter', () => {
     expect(() => parse('no frontmatter here')).toThrow(AgentFileParseError);
   });

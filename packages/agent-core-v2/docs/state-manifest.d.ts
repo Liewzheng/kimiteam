@@ -23,7 +23,7 @@
 // references become '(circular)', and class instances collapse to a '(ClassName)'
 // marker — the wire shape of an entry is the JSON projection of the type here.
 //
-// Index (App: 0 keys · Workspace: 6 keys · Session: 18 keys · Agent: 72 keys)
+// Index (App: 0 keys · Workspace: 6 keys · Session: 18 keys · Agent: 73 keys)
 //   App
 //   Workspace
 //     workspaceDirs.ephemeralDirs          src/workspace/workspaceDirs/workspaceDirsService.ts
@@ -102,6 +102,7 @@
 //     profile.emittedToolPatternWarnings              src/agent/profile/profileService.ts
 //     profile.modelRosterWarning                      src/agent/profile/profileService.ts
 //     profile.pipelineWarning                         src/agent/profile/profileService.ts
+//     profile.temperature                             src/agent/profile/profileService.ts
 //     prompt.launching                                src/agent/prompt/promptService.ts
 //     shellCommand.tasks                              src/agent/shellCommand/shellCommandService.ts
 //     stepRetry.failedAttempts                        src/agent/stepRetry/stepRetryService.ts
@@ -1145,6 +1146,7 @@ export interface AgentStateSnapshot {
   'profile.emittedToolPatternWarnings': Set<string>;
   'profile.modelRosterWarning': string | undefined;
   'profile.pipelineWarning': string | undefined;
+  'profile.temperature': number | undefined;
   // src/agent/prompt/promptService.ts
   'prompt.launching': boolean;
   // src/agent/shellCommand/shellCommandService.ts

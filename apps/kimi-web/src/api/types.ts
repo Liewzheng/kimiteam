@@ -726,8 +726,8 @@ export interface AppSkill {
 
 /** Three-state display lifecycle (web): working / resting / off-duty
  *  (工作 · 休息 · 下班). The wire still carries the TUI's four states; the
- *  mapper folds `on-duty` (employed-but-idle) into `resting` — the roster's
- *  "not currently working" bucket, which also absorbs 常驻 duty members. */
+ *  mapper folds `on-duty` (employed, never worked this session) into
+ *  `off-duty` — product semantics: never-worked members read as 下班. */
 export type AppTeamMemberStatus = 'working' | 'resting' | 'off-duty';
 
 export interface AppTeamMember {
@@ -746,6 +746,11 @@ export interface AppTeamMember {
   /** The profile's prompt body (Markdown after the frontmatter), when the
    *  server ships it — editable via updateTeamMember. */
   prompt?: string;
+  /** Reasoning-effort level (wire `think_mode`) — one of the engine thinking
+   *  effort levels (off/low/high/max), editable via updateTeamMember. */
+  thinkMode?: string;
+  /** Sampling temperature, 0–2, editable via updateTeamMember. */
+  temperature?: number;
   status: AppTeamMemberStatus;
   score: { average: number | null; count: number };
 }
@@ -947,6 +952,10 @@ export interface KimiWebApi {
     whenToUse?: string;
     /** Replaces the profile's prompt body (the Markdown after the frontmatter). */
     prompt?: string;
+    /** Reasoning-effort level (wire `think_mode`). `null` clears it. */
+    thinkMode?: string | null;
+    /** Sampling temperature, 0–2. `null` clears it. */
+    temperature?: number | null;
   }): Promise<AppTeamMember>;
   scoreTeamMember(sessionId: string, name: string, input: {
     score: number;

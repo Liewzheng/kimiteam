@@ -217,6 +217,16 @@ export const profileEmittedPluginBudgetWarningsKey = defineState<Set<string>>(
   'profile.emittedPluginBudgetWarnings',
   () => new Set(),
 );
+/**
+ * Per-agent sampling temperature, set at bind time from the spawn binding's
+ * `temperature` (the member profile's frontmatter). Ephemeral like
+ * `activeToolNamesOverlay` — re-derived on the next spawn binding, never
+ * persisted into the wire ProfileModel (resume re-binds from the member file).
+ */
+export const profileTemperatureKey = defineState<number | undefined>(
+  'profile.temperature',
+  () => undefined as number | undefined,
+);
 
 export class AgentProfileService extends Disposable implements IAgentProfileService {
   declare readonly _serviceBrand: undefined;
@@ -267,6 +277,7 @@ export class AgentProfileService extends Disposable implements IAgentProfileServ
     this.states.register(profileEmittedThinkingEffortWarningsKey);
     this.states.register(profileEmittedToolPatternWarningsKey);
     this.states.register(profileEmittedPluginBudgetWarningsKey);
+    this.states.register(profileTemperatureKey);
     this.configure({});
     this._register(
       this.sessionToolPolicy.onDidChange((event) => {
@@ -337,6 +348,11 @@ export class AgentProfileService extends Disposable implements IAgentProfileServ
 
   private get emittedPluginBudgetWarnings(): Set<string> {
     return this.states.get(profileEmittedPluginBudgetWarningsKey);
+  }
+
+  /** Per-agent sampling temperature bound from the spawn binding, if any. */
+  private get temperature(): number | undefined {
+    return this.states.get(profileTemperatureKey);
   }
 
   configure(options: ProfileServiceOptions): void {
@@ -437,6 +453,13 @@ export class AgentProfileService extends Disposable implements IAgentProfileServ
       input.thinking ?? (currentProfileName !== undefined ? this.thinkingLevel : undefined),
       model,
     );
+
+    // Per-agent temperature from the spawn binding (member profile frontmatter).
+    // Only written when the binding carries one — a rebind without temperature
+    // (main agent, fork) leaves the current value untouched.
+    if (input.temperature !== undefined) {
+      this.states.set(profileTemperatureKey, input.temperature);
+    }
 
     this.activeToolNamesOverlay = undefined;
     this.wire.dispatch(profileBind({
@@ -628,7 +651,9 @@ export class AgentProfileService extends Disposable implements IAgentProfileServ
     const thinkingConfig = this.config.get<ThinkingConfig>(THINKING_SECTION);
     const overrides = this.config.get<ModelOverrides>('modelOverrides');
     const sampling: SamplingOptions = {
-      temperature: overrides?.temperature,
+      // A per-agent temperature (bound from the member profile) wins over the
+      // global `[model_overrides]` temperature.
+      temperature: this.temperature ?? overrides?.temperature,
       topP: overrides?.topP,
     };
     return {

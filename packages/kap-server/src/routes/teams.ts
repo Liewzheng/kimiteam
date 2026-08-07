@@ -106,6 +106,10 @@ const hireBodySchema = z.object({
   duty: z.boolean().optional(),
   /** Display (e.g. Chinese) name shown on the Web team card. */
   display_name: z.string().optional(),
+  /** Per-profile thinking effort (`think_mode` frontmatter), e.g. 'high'. */
+  think_mode: z.string().optional(),
+  /** Per-profile sampling temperature (`temperature` frontmatter), e.g. 0.3. */
+  temperature: z.number().optional(),
   prompt: z.string().min(1),
   /** Team scope: 'global' (user-level ~/.kimi-code/agents, default) or 'project' (session project root). */
   scope: z.enum(['global', 'project']).optional(),
@@ -121,6 +125,10 @@ const updateBodySchema = z
     when_to_use: z.string().optional(),
     /** Display (e.g. Chinese) name shown on the Web team card. */
     display_name: z.string().optional(),
+    /** Per-profile thinking effort (`think_mode` frontmatter), e.g. 'high'; null clears it. */
+    think_mode: z.string().nullable().optional(),
+    /** Per-profile sampling temperature (`temperature` frontmatter), e.g. 0.3; null clears it. */
+    temperature: z.number().nullable().optional(),
     /** Replaces the profile's prompt body (the Markdown after the frontmatter). */
     prompt: z.string().min(1).optional(),
   })
@@ -170,6 +178,10 @@ const memberWireSchema = {
     when_to_use: { type: 'string' },
     /** Display (e.g. Chinese) name shown on the Web team card. */
     display_name: { type: 'string' },
+    /** Per-profile thinking effort (`think_mode` frontmatter), e.g. 'high'. */
+    think_mode: { type: 'string' },
+    /** Per-profile sampling temperature (`temperature` frontmatter), e.g. 0.3. */
+    temperature: { type: 'number' },
     model: { type: 'string' },
     prompt: { type: 'string' },
     tools: { type: 'array', items: { type: 'string' } },
@@ -267,6 +279,8 @@ interface TeamMemberWire {
   description: string;
   when_to_use?: string;
   display_name?: string;
+  think_mode?: string;
+  temperature?: number;
   model?: string;
   prompt?: string;
   tools: string[];
@@ -383,6 +397,8 @@ async function buildMemberWire(
     description: def.description,
     when_to_use: def.whenToUse,
     display_name: def.displayName,
+    think_mode: def.thinkMode,
+    temperature: def.temperature,
     // 实际调用模型三级回退：① 当前会话 usage 桶内用量最大的真实 modelAlias；
     // ② 历史派工记录（perf entries/shifts 聚合出的 byModel，count 最大的
     // model）；③ 配置偏好。usage 只聚合当前 live session 的 lifecycle agent，
@@ -458,6 +474,8 @@ function hireCreateInput(body: z.infer<typeof hireBodySchema>): AgentProfileCrea
     skills: body.skills,
     duty: body.duty,
     displayName: body.display_name,
+    thinkMode: body.think_mode,
+    temperature: body.temperature,
     prompt: body.prompt,
     scope: 'user',
   };
@@ -514,6 +532,8 @@ type MemberPatch = {
   description?: string;
   whenToUse?: string;
   displayName?: string;
+  thinkMode?: string;
+  temperature?: number;
   prompt?: string;
 };
 
@@ -525,6 +545,8 @@ const PATCH_KEY_TO_FRONTMATTER: Record<Exclude<keyof MemberPatch, 'prompt'>, str
   description: 'description',
   whenToUse: 'whenToUse',
   displayName: 'display_name',
+  thinkMode: 'think_mode',
+  temperature: 'temperature',
 };
 
 /**
@@ -993,6 +1015,11 @@ export function registerTeamsRoutes(app: TeamsRouteHost, core: Scope): void {
       if (body.description !== undefined) patch.description = body.description;
       if (body.when_to_use !== undefined) patch.whenToUse = body.when_to_use;
       if (body.display_name !== undefined) patch.displayName = body.display_name;
+      // null from the Web form means "clear" — normalize to undefined so both
+      // write paths (project updateMemberFile, engine AgentProfileFileService)
+      // fall into their existing `undefined → delete data[key]` delete branch.
+      if (body.think_mode !== undefined) patch.thinkMode = body.think_mode ?? undefined;
+      if (body.temperature !== undefined) patch.temperature = body.temperature ?? undefined;
       if (body.prompt !== undefined) patch.prompt = body.prompt;
       const sessionCwd = session.accessor.get(ISessionContext).cwd;
       const hostFs = core.accessor.get(IHostFileSystem);

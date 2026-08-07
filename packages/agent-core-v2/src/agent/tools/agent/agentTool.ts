@@ -485,6 +485,7 @@ export class SubagentTool implements ISubagentTool {
           args.model,
           profile.name,
           'model-param',
+          profile,
         );
         const parkedAlias = reused.accessor.get(IAgentProfileService).data().modelAlias;
         if (parkedAlias !== binding.model) {
@@ -511,6 +512,7 @@ export class SubagentTool implements ISubagentTool {
           args.model ?? profile.modelPreference,
           profile.name,
           args.model !== undefined ? 'model-param' : 'model-preference',
+          profile,
         );
         let created: IAgentScopeHandle;
         try {
@@ -520,6 +522,7 @@ export class SubagentTool implements ISubagentTool {
               profile: profile.name,
               model: binding.model,
               thinking: binding.thinking,
+              temperature: binding.temperature,
             },
             labels: subagentLabels(this.callerAgentId, { profileName: profile.name }),
           });

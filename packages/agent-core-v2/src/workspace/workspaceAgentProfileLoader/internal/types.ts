@@ -36,6 +36,10 @@ export interface AgentFileDefinition {
   readonly duty?: boolean;
   /** Display (e.g. Chinese) name shown on the Web team card; defaults to `name`. */
   readonly displayName?: string;
+  /** Per-profile thinking effort (`think_mode` frontmatter), e.g. 'off'/'low'/'high'. */
+  readonly thinkMode?: string;
+  /** Per-profile sampling temperature (`temperature` frontmatter), e.g. 0.3. */
+  readonly temperature?: number;
   readonly prompt: string;
   readonly path: string;
   readonly source: AgentFileSource;
