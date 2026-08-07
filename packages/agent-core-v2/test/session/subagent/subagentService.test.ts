@@ -286,7 +286,12 @@ function buildStubs(options: {
     _serviceBrand: undefined,
     recordShift: vi.fn().mockResolvedValue(undefined),
     summary: vi.fn().mockResolvedValue({ count: 0 }),
-  } as unknown as IAgentPerformanceService & { recordShift: Mock; summary: Mock };
+    list: vi.fn().mockResolvedValue([]),
+  } as unknown as IAgentPerformanceService & {
+    recordShift: Mock;
+    summary: Mock;
+    list: Mock;
+  };
 
   const sessionContext = {
     _serviceBrand: undefined,
