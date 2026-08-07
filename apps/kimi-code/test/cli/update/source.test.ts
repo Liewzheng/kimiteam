@@ -164,6 +164,17 @@ describe('detectInstallSource', () => {
     ).resolves.toBe('unsupported');
   });
 
+  it('returns unsupported when the package root cannot be resolved (standalone bundle)', async () => {
+    await expect(
+      detectInstallSource({
+        getPackageRoot: () => undefined,
+        getGlobalPrefix: async () => '/usr/local',
+        detectNative: () => false,
+        platform: 'darwin',
+      }),
+    ).resolves.toBe('unsupported');
+  });
+
   it('returns unsupported when npm prefix lookup throws', async () => {
     await expect(
       detectInstallSource({

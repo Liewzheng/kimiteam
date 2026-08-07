@@ -333,12 +333,18 @@ async function runServerInProcess(
  * and the web UI is expected to come from a Vite dev server (the web UI source lives in the code-app repo).
  * Outside dev mode the directory is always returned and kap-server keeps
  * failing fast when the assets are missing.
+ *
+ * `undefined` also comes back when the install has neither SEA-embedded assets
+ * nor a package.json root to look `dist-web` up from — the standalone team
+ * bundle (`~/.kimi-code/lib/kimi/`). In that case the server starts API-only
+ * rather than crashing on the missing package.json.
  */
 export function serverWebAssetsDir(
   env: NodeJS.ProcessEnv = process.env,
   nativeWebAssetsDir: string | null = getNativeWebAssetsDir(),
 ): string | undefined {
   const dir = resolveServerWebAssetsDir(nativeWebAssetsDir);
+  if (dir === undefined) return undefined;
   if (env['KIMI_CODE_DEV_SERVER'] === '1' && !existsSync(join(dir, 'index.html'))) {
     return undefined;
   }
@@ -347,8 +353,10 @@ export function serverWebAssetsDir(
 
 export function resolveServerWebAssetsDir(
   nativeWebAssetsDir: string | null = getNativeWebAssetsDir(),
-): string {
-  return nativeWebAssetsDir ?? join(getHostPackageRoot(), WEB_ASSETS_DIR);
+): string | undefined {
+  if (nativeWebAssetsDir !== null) return nativeWebAssetsDir;
+  const packageRoot = getHostPackageRoot();
+  return packageRoot === undefined ? undefined : join(packageRoot, WEB_ASSETS_DIR);
 }
 
 interface FormatReadyBannerOptions {

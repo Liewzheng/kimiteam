@@ -66,7 +66,12 @@ export function classifyByPathHeuristic(packageRoot: string): InstallSource | nu
 }
 
 export interface DetectInstallSourceDeps {
-  readonly getPackageRoot: () => string;
+  /**
+   * Package root of the installed kimi-code. `undefined` when the install has
+   * no package.json (standalone team bundle deployed at
+   * `~/.kimi-code/lib/kimi/`) — in that case the source is `unsupported`.
+   */
+  readonly getPackageRoot: () => string | undefined;
   readonly getGlobalPrefix: () => Promise<string>;
   readonly detectNative: () => boolean;
   readonly platform: NodeJS.Platform;
@@ -148,6 +153,9 @@ export async function detectInstallSource(
   if (resolved.detectNative()) return 'native';
 
   const packageRoot = resolved.getPackageRoot();
+  // Standalone bundle with no package.json: no install layout to classify.
+  if (packageRoot === undefined) return 'unsupported';
+
   const heuristic = classifyByPathHeuristic(packageRoot);
   if (heuristic !== null) return heuristic;
 
