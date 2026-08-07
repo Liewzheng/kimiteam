@@ -2,7 +2,14 @@
  * `team-score` tool domain (L7) — ITeamScoreTool implementation.
  *
  * Writes a score entry via IAgentPerformanceService and returns an updated
- * summary text. When invoked by a subagent, returns an error. Bound at Agent scope.
+ * summary text. When invoked by a subagent, returns an error. The `record`
+ * action is gated by the TeamScore acceptance gate (`[subagent] score_gate`,
+ * default `enforce`): unless disabled (`off`) or downgraded (`warn`), a
+ * record requires a detectable acceptance action since the profile's latest
+ * delivery completed — read of its output, a diff review, or a test rerun —
+ * resolved through `IAcceptanceEvidenceService`. Shape detection only; it
+ * blocks "scored with no acceptance at all", never "perfunctory acceptance".
+ * `penalty` is always exempt. Bound at Agent scope.
  */
 
 import { IAgentScopeContext } from '#/agent/scopeContext/scopeContext';
@@ -11,10 +18,13 @@ import { registerAgentToolService } from '#/agent/toolRegistry/toolContribution'
 import { toInputJsonSchema } from '#/tool/input-schema';
 import { ToolAccesses, type ExecutableToolContext, type ExecutableToolResult, type ToolExecution } from '#/tool/toolContract';
 import { IAgentPerformanceService, type PerformanceEntry } from '#/app/agentPerformance/agentPerformance';
+import { IConfigService } from '#/app/config/config';
+import { resolveScoreGate, resolveTeamMode } from '#/session/subagent/configSection';
 
 import { ISessionMetadata } from '#/session/sessionMetadata/sessionMetadata';
 import { isSubagentMeta } from '#/session/agentLifecycle/subagentMetadata';
 import { ITeamScoreTool, TeamScoreToolInputSchema, SUBAGENT_NOT_ALLOWED, type TeamScoreToolInput } from './team-score';
+import { IAcceptanceEvidenceService } from './acceptanceEvidence';
 
 const TOOL_DESCRIPTION =
   'Give a subagent member a performance score (0-100) with a one-line comment. Score history is used for dispatch decisions when the main agent needs to pick which subagent is most capable. ' +
@@ -68,6 +78,8 @@ export class TeamScoreTool implements ITeamScoreTool {
     @IAgentScopeContext scopeContext: IAgentScopeContext,
     @IAgentPerformanceService private readonly perf: IAgentPerformanceService,
     @ILogService private readonly log: ILogService,
+    @IConfigService private readonly config: IConfigService,
+    @IAcceptanceEvidenceService private readonly evidence: IAcceptanceEvidenceService,
   ) {
     this.callerAgentId = scopeContext.agentId;
   }
@@ -111,6 +123,27 @@ export class TeamScoreTool implements ITeamScoreTool {
     // ── record (default) ── schema guarantees `score` / `note` are present.
     const score = args.score!;
     const note = args.note!;
+
+    // Engine-level acceptance gate (record only; penalty exempt): the main
+    // agent must have performed a detectable acceptance action since the
+    // member's delivery completed — read of its output, a diff review, or a
+    // test rerun. Shape detection only: blocks "scored with no acceptance at
+    // all", never "perfunctory acceptance". `enforce` rejects; `warn` records
+    // and appends a warning; `off` is unchanged. Active only in team mode.
+    let gateWarning: string | undefined;
+    if (resolveScoreGate(this.config) !== 'off' && resolveTeamMode(this.config)) {
+      const gate = this.evidence.evaluateRecordGate(args.profile);
+      if (!gate.ok) {
+        if (resolveScoreGate(this.config) === 'enforce') {
+          return {
+            isError: true,
+            output: `[TeamScore] Blocked by acceptance gate: ${gate.message}`,
+          };
+        }
+        gateWarning = gate.message;
+      }
+    }
+
     await this.perf.record({
       profileName: args.profile,
       ts: new Date().toISOString(),
@@ -123,7 +156,9 @@ export class TeamScoreTool implements ITeamScoreTool {
 
     const sum = await this.perf.summary(args.profile);
     if (sum.count === 0) {
-      return { output: `[TeamScore] Scored "${args.profile}" — \`${score}/100\`. No scores yet.` };
+      const parts = [`[TeamScore] Scored "${args.profile}" — \`${score}/100\`. No scores yet.`];
+      if (gateWarning !== undefined) parts.push(`[TeamScore] Warning: ${gateWarning}`);
+      return { output: parts.join(' ') };
     }
 
     const parts: string[] = [`[TeamScore] Scored "${args.profile}" — \`${score}/100\`.`];
@@ -140,6 +175,11 @@ export class TeamScoreTool implements ITeamScoreTool {
     const inflationWarning = detectScoreInflation(args.profile, recentScores);
     if (inflationWarning !== undefined) {
       parts.push(inflationWarning);
+    }
+    // Acceptance-gate warning (`score_gate=warn`): recorded anyway, but the
+    // main agent is told the evidence was missing.
+    if (gateWarning !== undefined) {
+      parts.push(`[TeamScore] Warning: ${gateWarning}`);
     }
     return { output: parts.join(' ') };
   }

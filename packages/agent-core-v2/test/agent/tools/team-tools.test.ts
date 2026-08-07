@@ -21,6 +21,23 @@ import type { AgentFileDefinition } from '#/workspace/workspaceAgentProfileLoade
 import { TeamHireInputSchema, TEAM_HIRE_NAME_PATTERN as NAME_PAT } from '#/agent/tools/team-hire/team-hire';
 import { buildPerformanceCard } from '#/agent/tools/agent/agentTool';
 import { detectScoreInflation } from '#/agent/tools/team-score/teamScoreTool';
+import {
+  IAcceptanceEvidenceService,
+  type AcceptanceGateResult,
+} from '#/agent/tools/team-score/acceptanceEvidence';
+import {
+  AcceptanceEvidenceService,
+  classifyGlobalBashCommand,
+  evaluateAcceptanceGate,
+  taskIdFromOutputLogPath,
+  type AcceptanceEvidenceState,
+} from '#/agent/tools/team-score/acceptanceEvidenceService';
+import {
+  SUBAGENT_SECTION,
+  type ScoreGateMode,
+} from '#/session/subagent/configSection';
+import { ISessionSubagentService, type RunSettledContext } from '#/session/subagent/subagent';
+import type { IAgentTaskService } from '#/agent/task/task';
 
 
 // ---------------------------------------------------------------------------
@@ -659,18 +676,47 @@ class ScorePerfStub {
   }
 }
 
+interface ScoreGateTestOptions {
+  readonly scoreGate?: ScoreGateMode;
+  readonly teamMode?: boolean;
+  readonly evidence?: IAcceptanceEvidenceService;
+}
+
 function makeScoreTool(
   tmpDir: string,
   callerId: string,
   agents: Record<string, unknown>,
   perf: ScorePerfStub,
+  opts: ScoreGateTestOptions = {},
 ): TeamScoreTool {
   const stubs = gateStubs(tmpDir, callerId, agents);
+  const configStub = {
+    _serviceBrand: undefined,
+    get: (domain: string) => {
+      if (domain === SUBAGENT_SECTION) {
+        return {
+          // Default `off` so pre-gate tests keep recording untouched; gate
+          // tests pass an explicit mode.
+          scoreGate: opts.scoreGate ?? 'off',
+          teamMode: opts.teamMode ?? true,
+        };
+      }
+      return undefined;
+    },
+  };
+  const evidenceStub: IAcceptanceEvidenceService =
+    opts.evidence ??
+    ({
+      _serviceBrand: undefined,
+      evaluateRecordGate: () => ({ ok: true }),
+    } as IAcceptanceEvidenceService);
   return new TeamScoreTool(
     stubs.sessionMeta as never,
     stubs.scopeContext as never,
     perf as never,
     gateLogStub() as never,
+    configStub as never,
+    evidenceStub as never,
   );
 }
 
@@ -923,6 +969,316 @@ describe('TeamScore', () => {
     expect(perf.entries[0]!.note).toBe('good turn');
     expect(perf.entries[1]!.score).toBe(75);
     expect(perf.entries[1]!.note).toBe('[penalty] regression introduced');
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// TeamScore — engine-level acceptance gate ([subagent] score_gate).
+// ---------------------------------------------------------------------------
+
+class GateEvidenceStub implements IAcceptanceEvidenceService {
+  declare readonly _serviceBrand: undefined;
+  constructor(private readonly result: AcceptanceGateResult) {}
+  evaluateRecordGate(_profileName: string): AcceptanceGateResult {
+    return this.result;
+  }
+}
+
+const FAILING_GATE: AcceptanceGateResult = {
+  ok: false,
+  message:
+    'No acceptance evidence for "coder": missing read-delivery or a diff/test rerun after delivery.',
+};
+
+describe('TeamScore acceptance gate — tool wiring', () => {
+  let tmpDir: string;
+  beforeEach(() => { tmpDir = mkTempDir(); });
+  afterEach(() => { cleanup(tmpDir); });
+
+  it('enforce rejects a record with no acceptance evidence and records nothing', async () => {
+    const perf = new ScorePerfStub({ coder: { count: 0 } });
+    const tool = makeScoreTool(tmpDir, 'main', { main: {} }, perf, {
+      scoreGate: 'enforce',
+      evidence: new GateEvidenceStub(FAILING_GATE),
+    });
+    const result = await runResolution(
+      await tool.resolveExecution({ profile: 'coder', score: 80, note: 'solid' }),
+    );
+    expect(result.isError).toBe(true);
+    expect(String(result.output)).toContain('Blocked by acceptance gate');
+    expect(String(result.output)).toContain('No acceptance evidence');
+    expect(perf.entries).toHaveLength(0);
+  });
+
+  it('enforce allows a record when acceptance evidence exists', async () => {
+    const perf = new ScorePerfStub({ coder: { count: 0 } });
+    const tool = makeScoreTool(tmpDir, 'main', { main: {} }, perf, {
+      scoreGate: 'enforce',
+      evidence: new GateEvidenceStub({ ok: true }),
+    });
+    const result = await runResolution(
+      await tool.resolveExecution({ profile: 'coder', score: 80, note: 'solid' }),
+    );
+    expect(result.isError).toBeUndefined();
+    expect(perf.entries).toHaveLength(1);
+    expect(perf.entries[0]!.score).toBe(80);
+  });
+
+  it('penalty is exempt from the gate even when evidence is missing', async () => {
+    const perf = new ScorePerfStub({ coder: { last: 85, average: 80, count: 4 } });
+    const tool = makeScoreTool(tmpDir, 'main', { main: {} }, perf, {
+      scoreGate: 'enforce',
+      evidence: new GateEvidenceStub(FAILING_GATE),
+    });
+    const result = await runResolution(
+      await tool.resolveExecution({
+        action: 'penalty',
+        profile: 'coder',
+        points: 10,
+        reason: 'missed deadline',
+        model: 'provider/model-x',
+      }),
+    );
+    expect(result.isError).toBeUndefined();
+    expect(perf.entries).toHaveLength(1);
+    expect(perf.entries[0]!.note).toBe('[penalty] missed deadline');
+  });
+
+  it('warn records the score but appends the missing-evidence warning', async () => {
+    const perf = new ScorePerfStub({ coder: { count: 0 } });
+    const tool = makeScoreTool(tmpDir, 'main', { main: {} }, perf, {
+      scoreGate: 'warn',
+      evidence: new GateEvidenceStub(FAILING_GATE),
+    });
+    const result = await runResolution(
+      await tool.resolveExecution({ profile: 'coder', score: 70, note: 'ok' }),
+    );
+    expect(result.isError).toBeUndefined();
+    expect(perf.entries).toHaveLength(1);
+    const output = String(result.output);
+    expect(output).toContain('[TeamScore] Scored "coder"');
+    expect(output).toContain('[TeamScore] Warning');
+    expect(output).toContain('No acceptance evidence');
+  });
+
+  it('off records without any gate warning', async () => {
+    const perf = new ScorePerfStub({ coder: { count: 0 } });
+    const tool = makeScoreTool(tmpDir, 'main', { main: {} }, perf, {
+      scoreGate: 'off',
+      evidence: new GateEvidenceStub(FAILING_GATE),
+    });
+    const result = await runResolution(
+      await tool.resolveExecution({ profile: 'coder', score: 70, note: 'ok' }),
+    );
+    expect(result.isError).toBeUndefined();
+    expect(perf.entries).toHaveLength(1);
+    expect(String(result.output)).not.toContain('Warning');
+    expect(String(result.output)).not.toContain('No acceptance evidence');
+  });
+
+  it('does not apply the gate when team mode is off', async () => {
+    const perf = new ScorePerfStub({ coder: { count: 0 } });
+    const tool = makeScoreTool(tmpDir, 'main', { main: {} }, perf, {
+      scoreGate: 'enforce',
+      teamMode: false,
+      evidence: new GateEvidenceStub(FAILING_GATE),
+    });
+    const result = await runResolution(
+      await tool.resolveExecution({ profile: 'coder', score: 70, note: 'ok' }),
+    );
+    expect(result.isError).toBeUndefined();
+    expect(perf.entries).toHaveLength(1);
+    expect(String(result.output)).not.toContain('No acceptance evidence');
+  });
+});
+
+describe('acceptance evidence classification (shape detection)', () => {
+  it('extracts the delivery task id from a Read on agents/main/tasks/<id>/output.log', () => {
+    expect(taskIdFromOutputLogPath('agents/main/tasks/agent-3f2a9c1d/output.log')).toBe('agent-3f2a9c1d');
+    expect(taskIdFromOutputLogPath('/abs/session/dir/agents/main/tasks/agent-3f2a9c1d/output.log')).toBe('agent-3f2a9c1d');
+    expect(taskIdFromOutputLogPath('agents\\main\\tasks\\agent-3f2a9c1d\\output.log')).toBe('agent-3f2a9c1d');
+    // Not a delivery log.
+    expect(taskIdFromOutputLogPath('agents/main/output.log')).toBeUndefined();
+    expect(taskIdFromOutputLogPath('src/output.log')).toBeUndefined();
+    expect(taskIdFromOutputLogPath('agents/main/tasks/agent-3f2a9c1d/notes.md')).toBeUndefined();
+  });
+
+  it('classifies Bash commands as read-diff / rerun-tests by shape', () => {
+    expect(classifyGlobalBashCommand('Bash', { command: 'git diff' })).toBe('read-diff');
+    expect(classifyGlobalBashCommand('Bash', { command: 'git diff --stat HEAD~1' })).toBe('read-diff');
+    expect(classifyGlobalBashCommand('Bash', { command: 'git show abc123' })).toBe('read-diff');
+    expect(classifyGlobalBashCommand('Bash', { command: 'git -C packages/agent-core-v2 diff' })).toBe('read-diff');
+    expect(classifyGlobalBashCommand('Bash', { command: 'pnpm exec vitest run' })).toBe('rerun-tests');
+    expect(classifyGlobalBashCommand('Bash', { command: 'pnpm test' })).toBe('rerun-tests');
+    expect(classifyGlobalBashCommand('Bash', { command: 'pnpm -C packages/agent-core-v2 test' })).toBe('rerun-tests');
+    expect(classifyGlobalBashCommand('Bash', { command: 'npm test' })).toBe('rerun-tests');
+    expect(classifyGlobalBashCommand('Bash', { command: 'pytest -q' })).toBe('rerun-tests');
+    // Not acceptance actions.
+    expect(classifyGlobalBashCommand('Bash', { command: 'ls -la' })).toBeUndefined();
+    expect(classifyGlobalBashCommand('Bash', { command: 'git log' })).toBeUndefined();
+    expect(classifyGlobalBashCommand('Bash', { command: 'pnpm install' })).toBeUndefined();
+    expect(classifyGlobalBashCommand('Read', { path: 'x' })).toBeUndefined();
+    expect(classifyGlobalBashCommand('Bash', {})).toBeUndefined();
+  });
+});
+
+describe('evaluateAcceptanceGate — evidence semantics', () => {
+  function stateFor(
+    completions: Record<string, number>,
+    opts: { diffAt?: number; testsAt?: number; readDelivered?: string[] } = {},
+  ): AcceptanceEvidenceState {
+    return {
+      deliveryCompletedAt: new Map(Object.entries(completions)),
+      readDeliveredProfiles: new Set(opts.readDelivered ?? []),
+      latestDiffAt: opts.diffAt ?? 0,
+      latestTestsAt: opts.testsAt ?? 0,
+    };
+  }
+
+  it('rejects with no evidence of any kind', () => {
+    const gate = evaluateAcceptanceGate(stateFor({}), 'coder');
+    expect(gate.ok).toBe(false);
+    if (!gate.ok) expect(gate.message).toContain('coder');
+  });
+
+  it('passes when the profile delivery was read (read-delivery)', () => {
+    const state = stateFor({}, { readDelivered: ['coder'] });
+    expect(evaluateAcceptanceGate(state, 'coder').ok).toBe(true);
+  });
+
+  it('rejects when the only global evidence predates the delivery completion', () => {
+    const state = stateFor({ coder: 2000 }, { diffAt: 1000 });
+    expect(evaluateAcceptanceGate(state, 'coder').ok).toBe(false);
+  });
+
+  it('read-diff global evidence after delivery covers the whole batch (other profiles too)', () => {
+    // Two members delivered in one turn; a single diff review after both
+    // completions satisfies the gate for both.
+    const state = stateFor({ coder: 1000, reviewer: 1500 }, { diffAt: 2000 });
+    expect(evaluateAcceptanceGate(state, 'coder').ok).toBe(true);
+    expect(evaluateAcceptanceGate(state, 'reviewer').ok).toBe(true);
+  });
+
+  it('rerun-tests global evidence after delivery satisfies the gate', () => {
+    const state = stateFor({ coder: 1000 }, { testsAt: 3000 });
+    expect(evaluateAcceptanceGate(state, 'coder').ok).toBe(true);
+  });
+
+  it('rejects when no delivery completion is observed, even with global evidence', () => {
+    const state = stateFor({}, { diffAt: 5000 });
+    const gate = evaluateAcceptanceGate(state, 'coder');
+    expect(gate.ok).toBe(false);
+    if (!gate.ok) expect(gate.message).toContain('no delivery completion');
+  });
+});
+
+describe('AcceptanceEvidenceService — event pipeline', () => {
+  // Minimal in-memory event bus + stubs, exercising the real service wiring.
+  class BusStub {
+    readonly _serviceBrand: undefined;
+    private readonly handlers = new Map<string, Array<(e: unknown) => void>>();
+    publish(): void { /* noop */ }
+    subscribe(type: unknown, handler: unknown): IDisposable {
+      const key = type as string;
+      const list = this.handlers.get(key) ?? [];
+      list.push(handler as (e: unknown) => void);
+      this.handlers.set(key, list);
+      return { dispose: () => {} };
+    }
+    emit(type: string, event: unknown): void {
+      for (const handler of this.handlers.get(type) ?? []) handler(event);
+    }
+  }
+
+  function subagentsStub(settleListeners: Array<(ctx: RunSettledContext) => void>): ISessionSubagentService {
+    return {
+      _serviceBrand: undefined,
+      onDidRunSettle: (handler: (ctx: RunSettledContext) => void) => {
+        settleListeners.push(handler);
+        return { dispose: () => {} };
+      },
+    } as unknown as ISessionSubagentService;
+  }
+
+  it('attributes a TaskOutput read to the delivering profile and opens the gate', () => {
+    const bus = new BusStub();
+    const settleListeners: Array<(ctx: RunSettledContext) => void> = [];
+    const tasks = {
+      _serviceBrand: undefined,
+      getTask: (taskId: string) =>
+        taskId === 'agent-3f2a9c1d'
+          ? { taskId, kind: 'agent', subagentType: 'coder', agentId: 'inst-1', status: 'completed' }
+          : undefined,
+    } as unknown as IAgentTaskService;
+
+    const service = new AcceptanceEvidenceService(
+      { agentId: 'main' } as never,
+      bus as never,
+      tasks as never,
+      subagentsStub(settleListeners) as never,
+      gateLogStub() as never,
+    );
+
+    // The member's delivery settles, then the main agent reads its output.
+    settleListeners.forEach((fn) => fn({ agentId: 'inst-1', profileName: 'coder' }));
+    bus.emit('tool.call.started', {
+      type: 'tool.call.started', turnId: 1, toolCallId: 'c1',
+      name: 'TaskOutput', args: { task_id: 'agent-3f2a9c1d' },
+    });
+    bus.emit('tool.result', { type: 'tool.result', turnId: 1, toolCallId: 'c1', output: 'ok' });
+
+    expect(service.evaluateRecordGate('coder').ok).toBe(true);
+    // A different profile never read → no evidence leaks across members.
+    expect(service.evaluateRecordGate('reviewer').ok).toBe(false);
+  });
+
+  it('a Bash git diff after settle covers the whole batch via the real service', () => {
+    const bus = new BusStub();
+    const settleListeners: Array<(ctx: RunSettledContext) => void> = [];
+    const tasks = {
+      _serviceBrand: undefined,
+      getTask: () => undefined,
+    } as unknown as IAgentTaskService;
+
+    const service = new AcceptanceEvidenceService(
+      { agentId: 'main' } as never,
+      bus as never,
+      tasks as never,
+      subagentsStub(settleListeners) as never,
+      gateLogStub() as never,
+    );
+
+    settleListeners.forEach((fn) => fn({ agentId: 'inst-1', profileName: 'coder' }));
+    settleListeners.forEach((fn) => fn({ agentId: 'inst-2', profileName: 'reviewer' }));
+    bus.emit('tool.call.started', {
+      type: 'tool.call.started', turnId: 1, toolCallId: 'c2',
+      name: 'Bash', args: { command: 'git diff HEAD' },
+    });
+    bus.emit('tool.result', { type: 'tool.result', turnId: 1, toolCallId: 'c2', output: '...' });
+
+    expect(service.evaluateRecordGate('coder').ok).toBe(true);
+    expect(service.evaluateRecordGate('reviewer').ok).toBe(true);
+  });
+
+  it('is inert for a subagent scope (collects nothing)', () => {
+    const bus = new BusStub();
+    const settleListeners: Array<(ctx: RunSettledContext) => void> = [];
+    const service = new AcceptanceEvidenceService(
+      { agentId: 'agent-0' } as never,
+      bus as never,
+      { getTask: () => undefined } as never,
+      subagentsStub(settleListeners) as never,
+      gateLogStub() as never,
+    );
+    // Settle + a diff would be evidence in the main scope; here it is not.
+    settleListeners.forEach((fn) => fn({ agentId: 'inst-1', profileName: 'coder' }));
+    bus.emit('tool.call.started', {
+      type: 'tool.call.started', turnId: 1, toolCallId: 'c2',
+      name: 'Bash', args: { command: 'git diff HEAD' },
+    });
+    bus.emit('tool.result', { type: 'tool.result', turnId: 1, toolCallId: 'c2', output: '...' });
+    expect(service.evaluateRecordGate('coder').ok).toBe(false);
   });
 });
 

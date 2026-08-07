@@ -60,6 +60,7 @@ import {
   type AgentTaskStopHookContext,
   ISessionSubagentService,
   type RunAgentOptions,
+  type RunSettledContext,
 } from '#/session/subagent/subagent';
 import { IEventBus, type DomainEvent } from '#/app/event/eventBus';
 import { ISubagentPoolService } from '#/session/subagentPool/subagentPool';
@@ -339,6 +340,7 @@ function createAgentLifecycleStub(options: AgentLifecycleStubOptions = {}): Agen
       onWillStartAgentTask: hookSlot(),
     },
     onDidStopAgentTask: Event.None as KimiEvent<AgentTaskStopHookContext>,
+    onDidRunSettle: Event.None as KimiEvent<RunSettledContext>,
     onDidCreate: Event.None as KimiEvent<IAgentScopeHandle>,
     onDidDispose: Event.None as KimiEvent<string>,
     onDidRestore: Event.None as KimiEvent<string>,

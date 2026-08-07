@@ -43,6 +43,19 @@ export interface AgentTaskStopHookContext {
   readonly response: string;
 }
 
+/**
+ * A supervised subagent run settled (success, failure, timeout, or
+ * TaskStop-style cancellation). Fired at the same run-completion point that
+ * drives the unscored-score reminder and the PerformanceShift `endedAt`, so
+ * per-member evidence windows (e.g. the TeamScore acceptance gate) can anchor
+ * on the delivery-completion moment.
+ */
+export interface RunSettledContext {
+  readonly agentId: string;
+  /** The subagent profile the settled run belonged to. */
+  readonly profileName: string;
+}
+
 export type AgentTaskHooks = {
   readonly onWillStartAgentTask: AgentTaskStartHookContext;
 };
@@ -53,6 +66,9 @@ export interface ISessionSubagentService {
   readonly hooks: Hooks<AgentTaskHooks>;
 
   readonly onDidStopAgentTask: Event<AgentTaskStopHookContext>;
+
+  /** Fired when a supervised subagent run settles (see `RunSettledContext`). */
+  readonly onDidRunSettle: Event<RunSettledContext>;
 
   run(agentId: string, request: AgentRunRequest, opts: RunAgentOptions): Promise<AgentRunHandle>;
 

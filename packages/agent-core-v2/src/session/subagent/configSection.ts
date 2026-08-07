@@ -156,6 +156,19 @@ export const SubagentConfigSchema = z.object({
    * the effective value through {@link resolveSubagentStandbyKeepaliveMs}.
    */
   standbyKeepaliveMs: z.number().int().min(0).optional(),
+  /**
+   * TeamScore acceptance gate (`[subagent] score_gate` on disk, default
+   * `enforce`): whether TeamScore `record` requires the main agent to have
+   * performed a detectable acceptance action — reading the member's delivery
+   * output (TaskOutput / `agents/main/tasks/<task_id>/output.log`), reviewing
+   * a diff (`git diff` / `git show`), or rerunning tests (vitest / pnpm test /
+   * npm test / pytest) — since the member's delivery completed. `enforce`
+   * rejects a record with no evidence; `warn` records it with a warning; `off`
+   * keeps the pre-gate behavior. Penalty actions are always exempt. Shape
+   * detection only: this blocks "scored with no acceptance at all", never
+   * "perfunctory acceptance".
+   */
+  scoreGate: z.enum(['off', 'warn', 'enforce']).optional(),
 });
 
 export type SubagentConfig = z.infer<typeof SubagentConfigSchema>;
@@ -182,6 +195,12 @@ export const DEFAULT_SUBAGENT_MAX_STANDBY = 8;
 
 /** Default standby keep-alive window: 15 minutes. */
 export const DEFAULT_SUBAGENT_STANDBY_KEEPALIVE_MS = 900_000;
+
+/** TeamScore acceptance-gate mode. */
+export type ScoreGateMode = 'off' | 'warn' | 'enforce';
+
+/** Default TeamScore acceptance-gate mode: `enforce`. */
+export const DEFAULT_SCORE_GATE: ScoreGateMode = 'enforce';
 
 export const SUBAGENT_TIMEOUT_ENV = 'KIMI_SUBAGENT_TIMEOUT_MS';
 
@@ -332,6 +351,17 @@ export function resolveTeamMode(config: IConfigService): boolean {
   const configured = config.get<SubagentConfig | undefined>(SUBAGENT_SECTION)?.teamMode;
   if (configured !== undefined) return configured;
   return parseBooleanEnv(process.env[TEAM_MODE_ENV]) ?? false;
+}
+
+/**
+ * Resolve the TeamScore acceptance-gate mode (`[subagent] score_gate`, default
+ * `enforce`). See `SubagentConfigSchema.scoreGate` for the semantics.
+ */
+export function resolveScoreGate(config: IConfigService): ScoreGateMode {
+  return (
+    config.get<SubagentConfig | undefined>(SUBAGENT_SECTION)?.scoreGate ??
+    DEFAULT_SCORE_GATE
+  );
 }
 
 export type SubagentModelChoice = AgentModelPreference;

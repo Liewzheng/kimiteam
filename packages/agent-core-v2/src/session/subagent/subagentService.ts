@@ -40,6 +40,7 @@ import {
   type AgentTaskStopHookContext,
   ISessionSubagentService,
   type RunAgentOptions,
+  type RunSettledContext,
 } from './subagent';
 import { ISubagentPoolService } from '../subagentPool/subagentPool';
 import { resolveRecordedModelId, resolveSubagentIdleTtlMs, resolveTeamMode } from './configSection';
@@ -58,6 +59,15 @@ export class SessionSubagentService extends Disposable implements ISessionSubage
   readonly hooks = createHooks<AgentTaskHooks, keyof AgentTaskHooks>(['onWillStartAgentTask']);
   private readonly onDidStopAgentTaskEmitter = this._register(
     new Emitter<AgentTaskStopHookContext>(),
+  );
+  /**
+   * Run-settle announcement: fired from the same `run.completion` settle point
+   * that drives the unscored-score reminder, so downstream per-member evidence
+   * windows (the TeamScore acceptance gate) observe the delivery-completion
+   * moment without re-deriving it.
+   */
+  private readonly onDidRunSettleEmitter = this._register(
+    new Emitter<RunSettledContext>(),
   );
   /**
    * Team-mode idle supervisor: arms an idle countdown per subagent after its
@@ -98,6 +108,10 @@ export class SessionSubagentService extends Disposable implements ISessionSubage
 
   get onDidStopAgentTask() {
     return this.onDidStopAgentTaskEmitter.event;
+  }
+
+  get onDidRunSettle() {
+    return this.onDidRunSettleEmitter.event;
   }
 
   constructor(
@@ -313,6 +327,12 @@ export class SessionSubagentService extends Disposable implements ISessionSubage
     if (scoreCountAtStart !== undefined) {
       void this.remindToScoreIfUnscored(profileName, scoreCountAtStart);
     }
+    // Announce the delivery-completion moment (same settle point as the shift
+    // `endedAt` and the reminder) to per-member evidence observers — the
+    // TeamScore acceptance gate anchors its "since delivery completed" window
+    // on this. Fire-and-forget: a slow/never listener must not block the run
+    // settle bookkeeping.
+    this.onDidRunSettleEmitter.fire({ agentId, profileName });
   }
 
   /**

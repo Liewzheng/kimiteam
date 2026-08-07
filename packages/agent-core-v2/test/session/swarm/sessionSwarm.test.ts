@@ -1637,6 +1637,7 @@ function subagentStub(): ISessionSubagentService {
     _serviceBrand: undefined,
     hooks: createHooks<AgentTaskHooks, keyof AgentTaskHooks>(['onWillStartAgentTask']),
     onDidStopAgentTask: Event.None,
+    onDidRunSettle: Event.None,
     run: vi.fn(async (agentId: string) => ({
       agentId,
       turn: {} as never,

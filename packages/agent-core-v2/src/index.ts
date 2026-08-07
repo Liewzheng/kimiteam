@@ -370,6 +370,8 @@ import '#/agent/tools/agent/agentTool';
 import '#/agent/tools/team-hire/team-hireTool';
 import '#/agent/tools/team-fire/team-fireTool';
 import '#/agent/tools/team-score/teamScoreTool';
+export * from '#/agent/tools/team-score/acceptanceEvidence';
+export * from '#/agent/tools/team-score/acceptanceEvidenceService';
 import '#/agent/tools/team-message/teamMessageTool';
 import '#/agent/tools/team-concurrency/teamConcurrencyTool';
 export * from '#/app/workspaceLifecycle/workspaceLifecycle';
