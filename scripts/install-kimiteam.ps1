@@ -18,6 +18,7 @@ $ErrorActionPreference = 'Stop'
 #   $HOME\.kimi-code\lib\kimi\main-team.cjs    (team 构建 CJS bundle)
 #   $HOME\.kimi-code\lib\kimi\dist-web\        (fork web 资产,kimiteam 服务用)
 #   $HOME\.kimi-code\lib\kimi\*.sha256         (校验记录;zip 解压后删除)
+#   $HOME\.kimi-code\lib\kimi\package.json     (仅缺失时写入最小标记;存在则绝不碰)
 #
 # 绝不读/写/删:
 #   $HOME\.kimi-code\bin\kimi
@@ -149,6 +150,20 @@ Write-Host '已安装 dist-web 资产。'
 
 # 删除 zip,保留小体积 .sha256 记录(与 main-team.cjs.sha256 一致)。
 Remove-Item -LiteralPath (Join-Path $LibDir $DistWebZipName) -Force
+
+# ---------------------------------------------------------------------------
+# 确保 package.json 标记存在(webAssetsDir 解析必要条件)
+# ---------------------------------------------------------------------------
+# 运行期从 bundle 目录向上找 package.json(version.ts 6 层内)才能服务
+# dist-web;缺失时 web 仅 API-only(GET / 返回 404)。若官方 kimi 已留有
+# package.json 则保留不动——fork dist-web 已覆盖其内容目录,语义不变。
+$PackageJsonPath = Join-Path $LibDir 'package.json'
+if (-not (Test-Path -LiteralPath $PackageJsonPath)) {
+  Set-Content -LiteralPath $PackageJsonPath -Value '{"name":"kimiteam","version":"0.33.0","type":"commonjs"}' -Encoding ASCII -NoNewline
+  Write-Host "已写入最小 package.json: $PackageJsonPath"
+} else {
+  Write-Host "package.json 已存在,保留不动: $PackageJsonPath"
+}
 
 # ---------------------------------------------------------------------------
 # 写启动器(纯 ASCII,无 BOM)

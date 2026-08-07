@@ -20,6 +20,7 @@ set -eu
 #   ~/.kimi-code/lib/kimi/main-team.cjs (the team-build CJS bundle)
 #   ~/.kimi-code/lib/kimi/dist-web/     (fork web assets served by kimiteam)
 #   ~/.kimi-code/lib/kimi/*.sha256      (checksum records; the zips are removed)
+#   ~/.kimi-code/lib/kimi/package.json  (written only when missing; kept if present)
 #
 # It MUST NOT read, write, or delete:
 #   ~/.kimi-code/bin/kimi
@@ -165,6 +166,22 @@ echo "Installed dist-web assets."
 
 # Drop the zip; keep the small .sha256 record next to main-team.cjs.sha256.
 rm -f "${LIB_DIR}/${DIST_WEB_ZIP_NAME}"
+
+# ---------------------------------------------------------------------------
+# Ensure package.json marker (required for webAssetsDir resolution)
+# ---------------------------------------------------------------------------
+# The runtime resolves dist-web by walking up from the bundle (version.ts
+# looks for a package.json within 6 levels); without one in ${LIB_DIR} the
+# web server runs API-only and `kimi web` returns 404 on GET /.  If the
+# official kimi already left a package.json here, keep it untouched — our
+# fork dist-web already overlays that directory, so the semantics are
+# unchanged either way.
+if [ ! -f "${LIB_DIR}/package.json" ]; then
+  printf '%s\n' '{"name":"kimiteam","version":"0.33.0","type":"commonjs"}' > "${LIB_DIR}/package.json"
+  echo "Wrote minimal package.json marker: ${LIB_DIR}/package.json"
+else
+  echo "package.json already exists, kept untouched: ${LIB_DIR}/package.json"
+fi
 
 # ---------------------------------------------------------------------------
 # Write launcher wrapper
