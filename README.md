@@ -4,7 +4,7 @@
 
 > [!IMPORTANT]
 > **最后维护版本（Last maintained release）**：kimiteam 是本系列**最后维护的开源版本**（v0.33.0，基于官方 Kimi Code 0.33 基线），此后不再继续维护。
-> - 原因如实说明：官方社区最终采纳了社区其他方案（MoonshotAI/kimi-code PR #2633 `tower` 命令，作者 tpoisonooo），本项目的 subagent-team 方案未被官方采纳；官方 Web 界面也已闭源（code-app 私有仓库，本仓库仅保留 dist-web bundle）。
+> - 原因如实说明：官方推荐并采纳了社区另一方案（MoonshotAI/kimi-code PR #2633 `tower` 命令，作者 tpoisonooo）；我们自己的 subagent-team 方案从未提交官方 PR，官方未看到、也未推荐我们的工作。官方 Web 界面也已闭源（code-app 私有仓库，本仓库仅保留 dist-web bundle）。
 > - 本版本仍可正常安装、使用与 fork，欢迎自行 fork 继续维护。感谢所有使用者与贡献者。
 
 ## 快速安装
