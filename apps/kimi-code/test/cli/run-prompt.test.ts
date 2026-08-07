@@ -250,6 +250,11 @@ describe('runPrompt', () => {
     vi.stubEnv('KIMI_CODE_LEGACY_FLAG', '1');
     vi.stubEnv('KIMI_CODE_EXPERIMENTAL_FLAG', '');
     vi.stubEnv('KIMI_MODEL_OUTPUT_FORMAT', '');
+    // The resume hint names the active binary via KIMI_CODE_BIN_NAME (fallback
+    // 'kimi'). Default-path assertions below pin the fallback, so clear a
+    // launcher-exported value here; the explicit override path is covered by
+    // the dedicated "uses KIMI_CODE_BIN_NAME" test.
+    vi.stubEnv('KIMI_CODE_BIN_NAME', undefined);
   });
 
   afterEach(() => {

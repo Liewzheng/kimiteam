@@ -105,6 +105,10 @@ describe('WelcomeComponent', () => {
   });
 
   it('shows the official banner when KIMI_CODE_BIN_NAME is unset', () => {
+    // Hermetic by contract: this test asserts the fallback banner, so a
+    // launcher-exported KIMI_CODE_BIN_NAME=kimiteam must not leak in.
+    vi.stubEnv('KIMI_CODE_BIN_NAME', undefined);
+
     const header = headerOf(new WelcomeComponent(appState).render(80));
 
     expect(header).toContain('Welcome to Kimi Code!');

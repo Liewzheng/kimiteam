@@ -158,6 +158,10 @@ vi.mock('node:child_process', () => ({
 describe('runShell', () => {
   beforeEach(() => {
     vi.stubEnv('KIMI_CODE_LEGACY_FLAG', '1');
+    // The resume hint names the active binary via KIMI_CODE_BIN_NAME (fallback
+    // 'kimi'). The exit-handler assertions below pin the fallback, so clear a
+    // launcher-exported value (KIMI_CODE_BIN_NAME=kimiteam) for hermetic runs.
+    vi.stubEnv('KIMI_CODE_BIN_NAME', undefined);
   });
 
   afterEach(() => {
