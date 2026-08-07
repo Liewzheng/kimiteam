@@ -269,6 +269,31 @@ describe('WireService', () => {
     }
   });
 
+  it('silently skips known legacy record types during replay (v1 compat, no unexpected report)', async () => {
+    const unexpected: unknown[] = [];
+    setUnexpectedErrorHandler((error) => unexpected.push(error));
+    try {
+      await restoreTestAgentWire(
+        wire,
+        log,
+        testWireScope(SCOPE, KEY),
+        [
+          { type: 'store.counter.add', by: 2 },
+          // v1-only record types: v2 has no Op for either, but restore must
+          // tolerate them without raising wire.unknown_record.
+          { type: 'micro_compaction.apply', cutoff: 42 },
+          { type: 'context.update_token_count', tokenCount: 1234 },
+          { type: 'store.counter.add', by: 3 },
+        ],
+      );
+
+      expect(wire.getModel(CounterModel)).toEqual({ value: 5 });
+      expect(unexpected).toHaveLength(0);
+    } finally {
+      resetUnexpectedErrorHandler();
+    }
+  });
+
   it('freezes state: getModel is frozen and mutation throws in strict mode', () => {
     wire.dispatch(counterAdd({ by: 2 }));
     const state = wire.getModel(CounterModel);

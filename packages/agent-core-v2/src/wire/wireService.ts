@@ -5,6 +5,11 @@
  * combines the model reducer engine with the `wire.jsonl` journal protocol,
  * including creation-time sealing, metadata, migrations, atomic healing
  * rewrites, blob dehydration and rehydration plus an ordered post-restore hook.
+ * Restore replays every record through `OP_REGISTRY`; a short explicit list of
+ * legacy record types written only by older engines (`micro_compaction.apply`,
+ * `context.update_token_count`) is tolerated as recognized-but-ignored so
+ * resuming an old session stays quiet, while genuinely unknown types still
+ * surface as `wire.unknown_record` via `onUnexpectedError`.
  * It is bound at Agent scope because the aggregate identity is the Agent
  * identity.
  */
@@ -48,6 +53,17 @@ import {
 } from './record';
 
 const MAX_DRAIN = 100;
+
+/**
+ * Legacy record types written by older engines / wire versions that this
+ * engine no longer models. Restore replays them as recognized-but-ignored
+ * (silent skip) rather than an unexpected-error report; genuinely unknown
+ * types still report.
+ */
+const LEGACY_SKIPPED_RECORD_TYPES: ReadonlySet<string> = new Set([
+  'micro_compaction.apply',
+  'context.update_token_count',
+]);
 
 export class CycleError extends WireError {
   constructor(readonly depth: number, readonly opTypes: readonly string[]) {
@@ -213,6 +229,9 @@ export class WireService extends Disposable implements IWireService {
   private replayRecord(record: WireRecord, index: number): void {
     const descriptor = OP_REGISTRY.get(record.type);
     if (descriptor === undefined) {
+      // Known legacy record (v1 / older engine) with no v2 Op: tolerate and
+      // skip silently instead of raising unexpected-error noise on resume.
+      if (LEGACY_SKIPPED_RECORD_TYPES.has(record.type)) return;
       this.reportSkippedRecord(record.type, index);
       return;
     }
