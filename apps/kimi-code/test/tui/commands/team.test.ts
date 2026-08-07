@@ -66,6 +66,9 @@ function makeHost() {
     state: {
       appState: {
         model: 'kimi-model',
+        // Runtime-status reads scope to the current session (engine keys each
+        // entry `sessionId:profileName`); fixtures must use this id as prefix.
+        sessionId: 'test-session',
       },
       // The panel's refresh path calls requestRender after each re-read.
       ui: {
@@ -230,48 +233,71 @@ describe('parsePerformanceData', () => {
 // ===========================================================================
 
 describe('parseRuntimeStatusData', () => {
-  it('parses a valid runtime-status.json with working and resting entries', () => {
+  const sessionId = 'test-session';
+
+  it('parses a valid runtime-status.json with working and resting entries for the session', () => {
     const raw = JSON.stringify({
-      Alice: { state: 'working', agentId: 'agent-1', updatedAt: '2026-07-30T10:00:00.000Z' },
-      Bob: {
+      'test-session:Alice': { state: 'working', agentId: 'agent-1', updatedAt: '2026-07-30T10:00:00.000Z' },
+      'test-session:Bob': {
         state: 'resting',
         agentId: 'agent-2',
         updatedAt: '2026-07-30T10:05:00.000Z',
         restExpiresAt: '2026-07-30T10:15:00.000Z',
       },
     });
-    const parsed = parseRuntimeStatusData(raw)!;
+    const parsed = parseRuntimeStatusData(raw, sessionId)!;
     expect(parsed['Alice']!.state).toBe('working');
     expect(parsed['Bob']!.state).toBe('resting');
     expect(parsed['Bob']!.restExpiresAt).toBe('2026-07-30T10:15:00.000Z');
   });
 
+  it('keeps only the current session\'s prefixed entries and ignores bare legacy keys', () => {
+    // Engine-side session isolation: keys are `sessionId:profileName`. Other
+    // sessions' entries and pre-isolation bare keys must never surface — the
+    // same semantics as IRuntimeStatusService.listForSession.
+    const raw = JSON.stringify({
+      'sess-a:Alice': { state: 'working', agentId: 'a1' },
+      'sess-b:Bob': {
+        state: 'resting',
+        agentId: 'b1',
+        restExpiresAt: '2026-07-30T12:10:00.000Z',
+      },
+      Alice: { state: 'working', agentId: 'legacy' },
+    });
+    const parsed = parseRuntimeStatusData(raw, 'sess-a')!;
+    expect(parsed['Alice']!.state).toBe('working');
+    expect(parsed['Alice']!.agentId).toBe('a1');
+    // Other session's resting entry and the bare legacy key are both dropped.
+    expect(parsed['Bob']).toBeUndefined();
+    expect(Object.keys(parsed)).toEqual(['Alice']);
+  });
+
   it('returns null for invalid JSON', () => {
-    expect(parseRuntimeStatusData('not json')).toBeNull();
+    expect(parseRuntimeStatusData('not json', sessionId)).toBeNull();
   });
 
   it('returns null for non-object JSON', () => {
-    expect(parseRuntimeStatusData('"hello"')).toBeNull();
-    expect(parseRuntimeStatusData('42')).toBeNull();
+    expect(parseRuntimeStatusData('"hello"', sessionId)).toBeNull();
+    expect(parseRuntimeStatusData('42', sessionId)).toBeNull();
   });
 
   it('returns null for arrays', () => {
-    expect(parseRuntimeStatusData('[]')).toBeNull();
+    expect(parseRuntimeStatusData('[]', sessionId)).toBeNull();
   });
 
   it('drops entries with an unknown state instead of failing the whole parse', () => {
     // A future engine state must degrade to "no entry", never crash the panel.
     const raw = JSON.stringify({
-      Alice: { state: 'suspended' },
-      Bob: { state: 'working' },
+      'test-session:Alice': { state: 'suspended' },
+      'test-session:Bob': { state: 'working' },
     });
-    const parsed = parseRuntimeStatusData(raw)!;
+    const parsed = parseRuntimeStatusData(raw, sessionId)!;
     expect(parsed['Alice']).toBeUndefined();
     expect(parsed['Bob']!.state).toBe('working');
   });
 
   it('handles an empty object', () => {
-    const parsed = parseRuntimeStatusData('{}');
+    const parsed = parseRuntimeStatusData('{}', sessionId);
     expect(parsed).not.toBeNull();
     expect(Object.keys(parsed!)).toHaveLength(0);
   });
@@ -1626,9 +1652,11 @@ describe('team panel runtime-status integration', () => {
   it('flips 工作 → 休息 after a 2.5s refresh re-reads runtime-status.json', async () => {
     vi.useFakeTimers();
     try {
+      // Engine keys are `sessionId:profileName` — the mock host's session id
+      // is 'test-session' (see makeHost).
       writeFileSync(
         join(tmp, 'agents', 'runtime-status.json'),
-        JSON.stringify({ Alice: { state: 'working' } }),
+        JSON.stringify({ 'test-session:Alice': { state: 'working' } }),
       );
       const { host } = makeHost();
       await handleTeamCommand(host, '');
@@ -1639,7 +1667,7 @@ describe('team panel runtime-status integration', () => {
       writeFileSync(
         join(tmp, 'agents', 'runtime-status.json'),
         JSON.stringify({
-          Alice: { state: 'resting', restExpiresAt: '2999-01-01T00:00:00.000Z' },
+          'test-session:Alice': { state: 'resting', restExpiresAt: '2999-01-01T00:00:00.000Z' },
         }),
       );
       await vi.advanceTimersByTimeAsync(TEAM_PANEL_REFRESH_INTERVAL_MS);
@@ -1650,6 +1678,42 @@ describe('team panel runtime-status integration', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('shows only the current session\'s runtime status, ignoring other sessions and bare legacy keys', async () => {
+    // Two sessionId-prefixed entries + one bare legacy key: the current
+    // session's Alice is working, another session's Bob is resting, and a bare
+    // (pre-isolation) Alice claims resting. Only the current session's entry
+    // may drive the panel — Bob (no current-session entry) reads as on-duty
+    // 下班, and Alice must stay 工作 despite the bare key.
+    writeFileSync(
+      join(tmp, 'agents', 'runtime-status.json'),
+      JSON.stringify({
+        'test-session:Alice': { state: 'working', agentId: 'a1' },
+        'other-session:Bob': {
+          state: 'resting',
+          agentId: 'b1',
+          restExpiresAt: '2999-01-01T00:00:00.000Z',
+        },
+        Alice: { state: 'resting', restExpiresAt: '2999-01-01T00:00:00.000Z' },
+      }),
+    );
+    const { host } = makeHost();
+    // beforeEach only writes alice.md; add Bob so he renders as a member with
+    // no current-session entry (the 下班 on-duty case).
+    writeFileSync(
+      join(tmp, 'agents', 'bob.md'),
+      '---\nname: Bob\ndescription: Reviewer\nrole: Reviewer\n---\n',
+    );
+    await handleTeamCommand(host, '');
+
+    const joined = mountedPanel(host).render(120).join('\n');
+    // Current session's Alice is working.
+    expect(joined).toContain('工作');
+    // Other-session resting and the bare resting key must not leak in.
+    expect(joined).not.toContain('休息');
+    // Bob has no current-session entry → on-duty (下班), never resting/working.
+    expect(joined).toContain('下班');
   });
 
   it('lists a perf-only name as an off-duty archive row with history', async () => {

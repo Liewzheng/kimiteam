@@ -138,7 +138,10 @@ export interface RuntimeStatusEntry {
 }
 
 /**
- * Parsed shape of `<dataDir>/agents/runtime-status.json`, keyed by profile name.
+ * Parsed shape of `<dataDir>/agents/runtime-status.json`, keyed by profile name
+ * for one session. The engine writes each entry under a `sessionId:profileName`
+ * key; `parseRuntimeStatusData` filters to the current session and strips the
+ * prefix, so other sessions' entries and bare legacy keys never surface here.
  * The file may be absent (v1 engine / team mode never ran) — treat as empty.
  */
 export interface RuntimeStatusData {
@@ -228,19 +231,28 @@ export function parsePerformanceData(raw: string): PerformanceData | null {
 }
 
 /**
- * Parse the raw content of `runtime-status.json` (engine-written, team mode).
+ * Parse the raw content of `runtime-status.json` (engine-written, team mode),
+ * scoped to one session. The engine keys each entry `sessionId:profileName` so
+ * sessions never clobber one another; this keeps only entries whose key carries
+ * the given `sessionId:` prefix and strips the prefix back to the profile name —
+ * mirroring `IRuntimeStatusService.listForSession`. Bare legacy keys (written
+ * before session isolation) and other sessions' entries are ignored, so a
+ * member only ever reflects its own session's lifecycle state.
  * Returns null if JSON is invalid or not an object. Malformed entries are
  * dropped per-key rather than failing the whole parse, so a future engine
  * state can never crash the panel.
  */
-export function parseRuntimeStatusData(raw: string): RuntimeStatusData | null {
+export function parseRuntimeStatusData(raw: string, sessionId: string): RuntimeStatusData | null {
   try {
     const parsed = JSON.parse(raw);
     if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
       return null;
     }
+    const prefix = `${sessionId}:`;
     const result: Record<string, RuntimeStatusEntry> = {};
-    for (const [name, rawEntry] of Object.entries(parsed)) {
+    for (const [key, rawEntry] of Object.entries(parsed)) {
+      if (!key.startsWith(prefix)) continue;
+      const name = key.slice(prefix.length);
       if (typeof rawEntry !== 'object' || rawEntry === null) continue;
       const entry = rawEntry as Record<string, unknown>;
       const state = entry['state'];
@@ -535,15 +547,20 @@ export function readPerformanceData(dataDir: string): PerformanceData | null {
 }
 
 /**
- * Read and parse runtime-status.json from the data-dir agents folder.
+ * Read and parse runtime-status.json from the data-dir agents folder, scoped
+ * to the given session. Only `${sessionId}:`-prefixed entries are kept; bare
+ * legacy keys and other sessions' entries are ignored (`listForSession` parity).
  * Absent file (v1 engine / team mode never ran) → null, treated as empty —
  * never an error.
  */
-export function readRuntimeStatusData(dataDir: string): RuntimeStatusData | null {
+export function readRuntimeStatusData(
+  dataDir: string,
+  sessionId: string,
+): RuntimeStatusData | null {
   const filePath = join(dataDir, 'agents', 'runtime-status.json');
   try {
     const raw = readFileSync(filePath, 'utf-8');
-    return parseRuntimeStatusData(raw);
+    return parseRuntimeStatusData(raw, sessionId);
   } catch {
     return null;
   }
@@ -879,9 +896,11 @@ async function loadTeamPanelData(host: SlashCommandHost): Promise<TeamPanelData>
   try {
     const profiles = readAgentProfiles(dataDir, cwd);
     const perf = readPerformanceData(dataDir);
-    // Live engine lifecycle state. Missing file → null → every profile with no
-    // status entry is on-duty; perf-only names still list as off-duty archives.
-    const runtimeStatus = readRuntimeStatusData(dataDir);
+    // Live engine lifecycle state, scoped to the current session. Missing file
+    // → null → every profile with no status entry is on-duty; perf-only names
+    // still list as off-duty archives. Other sessions' entries and bare legacy
+    // keys are ignored inside readRuntimeStatusData (listForSession parity).
+    const runtimeStatus = readRuntimeStatusData(dataDir, host.state.appState.sessionId);
 
     // Resolve effective model for each profile.
     // `fullConfig.secondaryModel` is available on both v1 and v2 engines now.
