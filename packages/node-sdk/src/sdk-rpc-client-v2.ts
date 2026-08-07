@@ -74,7 +74,8 @@
  *   `handlePrintMainTurnCompleted` → rebuilt over the v2 print-mode config
  *   helpers and the session's per-agent task services (no v2 service owns
  *   the print policy).
- * - `listGlobalMcpServers` / `addGlobalMcpServer` / `updateGlobalMcpServer` /
+ * - `listGlobalMcpServers` / `listGlobalMcpServerAuthStatuses` /
+ *   `addGlobalMcpServer` / `updateGlobalMcpServer` /
  *   `removeGlobalMcpServer` / `beginGlobalMcpServerAuth` /
  *   `completeGlobalMcpServerAuth` / `cancelGlobalMcpServerAuth` /
  *   `resetGlobalMcpServerAuth` / `testGlobalMcpServer` → the v1 user-global
@@ -265,6 +266,8 @@ import type {
   ForkSessionInput,
   GetConfigOptions,
   GetCronTasksResult,
+  GlobalMcpServerAuthState,
+  GlobalMcpServerAuthStatus,
   GoalSnapshot,
   GoalToolResult,
   JsonObject,
@@ -2062,6 +2065,21 @@ export class SDKRpcClientV2 extends SDKRpcClientBase {
     return this.globalMcpConfig.list();
   }
 
+  override async listGlobalMcpServerAuthStatuses(): Promise<
+    readonly GlobalMcpServerAuthStatus[]
+  > {
+    const servers = await this.globalMcpConfig.list();
+    const oauth = new McpOAuthService({
+      store: createMcpOAuthStore(this.engineAccessor.get(IAtomicDocumentStore)),
+    });
+    return Promise.all(
+      servers.map(async (server) => ({
+        name: server.name,
+        authStatus: await this.globalMcpServerAuthState(server, oauth),
+      })),
+    );
+  }
+
   override async addGlobalMcpServer(
     server: McpServerConfig,
   ): Promise<readonly McpServerConfig[]> {
@@ -2169,6 +2187,18 @@ export class SDKRpcClientV2 extends SDKRpcClientBase {
     } finally {
       await manager.shutdown();
     }
+  }
+
+  private async globalMcpServerAuthState(
+    server: McpServerConfig,
+    oauth: McpOAuthService,
+  ): Promise<GlobalMcpServerAuthState> {
+    if (server.transport === 'stdio') return 'not-applicable';
+    if (server.bearerTokenEnvVar !== undefined) return 'bearer-token';
+    if (server.auth !== 'oauth') return 'not-applicable';
+    return (await oauth.hasTokens(server.name, server.url))
+      ? 'oauth-authorized'
+      : 'oauth-required';
   }
 
   /**
