@@ -1,13 +1,13 @@
 /**
  * `LeadTurnTimeoutService` — team-mode main-agent lead-turn timeout.
  *
- * Verifies the tool-call-budget mechanism per the finalized design: arming
- * gates (main agent + team mode + displayable origin + budget > 0),
- * execution-class tool durations accumulate by `toolCallId`, dispatch /
- * management / wait-user tools neither consume budget nor get interrupted
- * mid-flight, and the cancel → turn.ended → inject ordering holds with
- * per-turn dedupe and the user-ESC skip. The classifier is exercised as pure
- * functions; pure generation is not charged (tool-level accumulation).
+ * Verifies the budget mechanism per the finalized design: arming gates (main
+ * agent + team mode + displayable origin + budget > 0), execution-class tool
+ * durations accumulate by `toolCallId` and every completed step charges its
+ * LLM generation duration, dispatch / management / wait-user tools neither
+ * consume budget nor get interrupted mid-flight, and the cancel → turn.ended
+ * → inject ordering holds with per-turn dedupe and the user-ESC skip. The
+ * classifier is exercised as pure functions.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
@@ -51,10 +51,6 @@ function turnEnded(
   interruptReason?: 'user_cancelled' | 'aborted',
 ): unknown {
   return { type: 'turn.ended', turnId, reason, ...(interruptReason === undefined ? {} : { interruptReason }) };
-}
-
-function stepStarted(turnId: number, step: number): unknown {
-  return { type: 'turn.step.started', turnId, step };
 }
 
 function stepCompleted(turnId: number, step: number, llmStreamDurationMs?: number): unknown {
@@ -238,7 +234,6 @@ describe('LeadTurnTimeoutService', () => {
 
   it('charges a pure-generation step (no tool calls) and interrupts when it exceeds the budget', async () => {
     publish(userTurnStarted(1));
-    publish(stepStarted(1, 1));
     publish(stepCompleted(1, 1, 6000)); // a 6s LLM generation with no tools
     expect(loop.cancels).toEqual([{ turnId: 1, reason: { kind: LEAD_TURN_TIMEOUT_CANCEL_KIND } }]);
 
@@ -247,48 +242,41 @@ describe('LeadTurnTimeoutService', () => {
     expect(injectSpy).toHaveBeenCalledTimes(1);
   });
 
-  it('does not additionally charge the LLM generation of a step that called a tool', async () => {
+  it('charges the LLM generation of a step that also called a tool', async () => {
     publish(userTurnStarted(1));
-    // Step 1 has a Bash tool: its 3s duration counts, the 10s generation does not.
-    publish(stepStarted(1, 1));
+    // Step 1: the LLM stream ends with a Bash tool call. Its 3s generation
+    // charges like any other step; the tool's 3s wall time charges on top →
+    // 6s crosses the 5s budget (the old 口径 exempted this step's generation).
+    publish(stepCompleted(1, 1, 3000)); // generation charged: 3000 < 5000
     publish(toolStarted(1, 'b1', 'Bash'));
     await vi.advanceTimersByTimeAsync(3000);
-    publish(toolResult(1, 'b1')); // 3000 consumed
-    publish(stepCompleted(1, 1, 10_000)); // NOT charged — step has a tool
-    expect(loop.cancels).toHaveLength(0); // if the 10s had counted we'd have fired here
-
-    // Step 2: another execution tool crosses the budget.
-    publish(stepStarted(1, 2));
-    publish(toolStarted(1, 'b2', 'Read'));
-    await vi.advanceTimersByTimeAsync(2000);
-    publish(toolResult(1, 'b2')); // 5000 → interrupt
-    publish(stepCompleted(1, 2, 10_000)); // not charged either
+    publish(toolResult(1, 'b1')); // +3000 = 6000 → interrupt
     expect(loop.cancels).toEqual([{ turnId: 1, reason: { kind: LEAD_TURN_TIMEOUT_CANCEL_KIND } }]);
   });
 
-  it('does not charge the generation of a dispatch-only step (Agent)', async () => {
+  it('exempts dispatch tool time but charges the dispatch step generation (Agent)', async () => {
     publish(userTurnStarted(1));
-    publish(stepStarted(1, 1));
+    // A long foreground dispatch consumes nothing…
     publish(toolStarted(1, 'a1', 'Agent', { subagent_type: 'coder' }));
-    await vi.advanceTimersByTimeAsync(5000);
-    publish(toolResult(1, 'a1')); // dispatch not counted
-    publish(stepCompleted(1, 1, 10_000)); // step has a tool → generation not counted
+    await vi.advanceTimersByTimeAsync(20_000);
+    publish(toolResult(1, 'a1')); // dispatch duration not counted
     expect(loop.cancels).toHaveLength(0);
+    // …but the step that produced the dispatch charges its 6s generation → over.
+    publish(stepCompleted(1, 1, 6000));
+    expect(loop.cancels).toEqual([{ turnId: 1, reason: { kind: LEAD_TURN_TIMEOUT_CANCEL_KIND } }]);
   });
 
   it('accumulates pure generation and execution tools together across a mixed turn', async () => {
     publish(userTurnStarted(1));
     // Step 1: pure generation 3000ms.
-    publish(stepStarted(1, 1));
     publish(stepCompleted(1, 1, 3000));
     expect(loop.cancels).toHaveLength(0); // 3000 < 5000
 
     // Step 2: Bash 2000ms crosses the budget.
-    publish(stepStarted(1, 2));
     publish(toolStarted(1, 'b1', 'Bash'));
     await vi.advanceTimersByTimeAsync(2000);
     publish(toolResult(1, 'b1')); // 3000 + 2000 = 5000 → interrupt
-    publish(stepCompleted(1, 2, 9999)); // step has a tool → not charged
+    publish(stepCompleted(1, 2, 9999)); // already fired — charging it is a no-op
     expect(loop.cancels).toEqual([{ turnId: 1, reason: { kind: LEAD_TURN_TIMEOUT_CANCEL_KIND } }]);
   });
 

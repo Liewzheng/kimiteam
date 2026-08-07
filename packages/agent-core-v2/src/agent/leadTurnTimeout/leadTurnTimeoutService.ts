@@ -12,11 +12,13 @@
  * **Budget accounting (per the finalized design)**: the budget accumulates
  * execution-class tool durations by `toolCallId` — the service self-times each
  * `tool.call.started` → `tool.result` pair and adds the delta to the armed
- * turn when `classifyToolCall(name, args)` returns `'execution'`. Dispatch /
- * management / wait-user tools do not consume budget, and — crucially — while
- * one of them is still in flight at budget-exceeded time the interrupt is
- * *delayed* (a foreground `Agent` dispatch must not be cut mid-flight); the
- * interrupt fires once the last delaying tool settles.
+ * turn when `classifyToolCall(name, args)` returns `'execution'` — **plus every
+ * completed step's LLM generation duration** (`llmStreamDurationMs`), charged
+ * whether or not the step ended in a tool call. Dispatch / management /
+ * wait-user tools do not consume budget, and — crucially — while one of them
+ * is still in flight at budget-exceeded time the interrupt is *delayed* (a
+ * foreground `Agent` dispatch must not be cut mid-flight); the interrupt fires
+ * once the last delaying tool settles.
  *
  * **Interrupt + inject ordering** (the critical race): ① `loop.cancel` with a
  * plain `{ kind: 'lead_turn_timeout' }` reason (NOT a `UserCancellationError`,
@@ -26,12 +28,13 @@
  * before the mechanism fired never injects; a mechanism-fired turn injects
  * exactly once (per-turn `fired` flag + cleanup on `turn.ended`).
  *
- * **Pure generation**: a completed step with zero tool calls charges its LLM
- * stream duration (`TurnStepCompletedEvent.llmStreamDurationMs`) — long
- * generations consume budget per doctrine. A step that called any tool is
- * accounted only via its tool durations (charging the stream time too would
- * double-count), so dispatch / management steps charge neither their tool nor
- * their generation time.
+ * **Generation**: every completed step — tool-bearing or not — charges its LLM
+ * stream duration (`llmStreamDurationMs`): long generations consume budget per
+ * doctrine. The stream duration covers only the LLM streaming segment, and tool
+ * execution happens between steps (disjoint wall-clock intervals), so charging
+ * both tool time and generation time is not double-counting. Dispatch /
+ * management / wait-user steps' *generation* still counts; only their tool
+ * durations are exempt.
  *
  * Bound at Agent scope.
  */
@@ -46,7 +49,6 @@ import { IAgentLoopService } from '#/agent/loop/loop';
 import {
   isDisplayablePromptOrigin,
   type TurnStepCompletedEvent,
-  type TurnStepStartedEvent,
 } from '#/agent/loop/turnEvents';
 import type {
   ToolCallStartedEvent,
@@ -100,7 +102,7 @@ export function classifyToolCall(name: string, _args: unknown): ToolCallClass {
 }
 
 interface ArmedTurn {
-  /** Accumulated execution-class tool duration in ms. */
+  /** Accumulated budget (execution-class tool duration + step generation) in ms. */
   consumedMs: number;
   /** The mechanism already interrupted this turn. */
   fired: boolean;
@@ -119,10 +121,6 @@ export class LeadTurnTimeoutService extends Disposable implements ILeadTurnTimeo
   private readonly callerAgentId: string;
   private readonly armed = new Map<number, ArmedTurn>();
   private readonly inFlight = new Map<string, InFlightCall>();
-  /** Current step index per armed turn (for attributing tool calls to a step). */
-  private readonly currentStep = new Map<number, number>();
-  /** Steps (keyed `${turnId}:${step}`) that saw at least one tool call. */
-  private readonly stepsWithTools = new Set<string>();
 
   constructor(
     @IAgentScopeContext private readonly scopeContext: IAgentScopeContext,
@@ -153,18 +151,8 @@ export class LeadTurnTimeoutService extends Disposable implements ILeadTurnTimeo
       }),
     );
     this._register(
-      eventBus.subscribe('turn.step.started', (event) => {
-        if (this.armed.has(event.turnId)) this.currentStep.set(event.turnId, event.step);
-      }),
-    );
-    this._register(
       eventBus.subscribe('turn.step.completed', (event) => {
         this.onStepCompleted(event);
-      }),
-    );
-    this._register(
-      eventBus.subscribe('turn.step.interrupted', (event) => {
-        this.forgetStep(event.turnId, event.step);
       }),
     );
     this._register(
@@ -203,11 +191,6 @@ export class LeadTurnTimeoutService extends Disposable implements ILeadTurnTimeo
       args: event.args,
       t0: Date.now(),
     });
-    // Attribute the tool call to the current step: a step with any tool call
-    // is not "pure generation", so its LLM stream time is not charged (a
-    // tool-bearing step is accounted via the tool durations only).
-    const step = this.currentStep.get(event.turnId);
-    if (step !== undefined) this.stepsWithTools.add(`${event.turnId}:${step}`);
   }
 
   private trackResult(event: ToolResultEvent): void {
@@ -226,25 +209,18 @@ export class LeadTurnTimeoutService extends Disposable implements ILeadTurnTimeo
   }
 
   /**
-   * Charge a completed step's LLM generation when the step had NO tool calls
-   * (pure generation). A tool-bearing step is accounted only via its tool
-   * durations — charging the stream time as well would double-count. A
-   * pure-generation step has nothing in flight, so the in-flight exemption in
-   * `checkBudget` is naturally inert: an over-budget generation interrupts.
+   * Charge a completed step's LLM generation. Every step charges — whether or
+   * not it ended in a tool call: `llmStreamDurationMs` covers only the LLM
+   * streaming segment, and tool execution happens between steps, so charging
+   * both is not double-counting. A freshly completed step has nothing in
+   * flight, so the in-flight exemption in `checkBudget` is naturally inert: an
+   * over-budget generation interrupts.
    */
   private onStepCompleted(event: TurnStepCompletedEvent): void {
     const state = this.armed.get(event.turnId);
     if (state === undefined || state.fired) return;
-    if (!this.stepsWithTools.has(`${event.turnId}:${event.step}`)) {
-      state.consumedMs += Math.max(0, event.llmStreamDurationMs ?? 0);
-      this.checkBudget(event.turnId, state);
-    }
-    this.forgetStep(event.turnId, event.step);
-  }
-
-  private forgetStep(turnId: number, step: number): void {
-    this.stepsWithTools.delete(`${turnId}:${step}`);
-    if (this.currentStep.get(turnId) === step) this.currentStep.delete(turnId);
+    state.consumedMs += Math.max(0, event.llmStreamDurationMs ?? 0);
+    this.checkBudget(event.turnId, state);
   }
 
   private checkBudget(turnId: number, state: ArmedTurn): void {
@@ -293,10 +269,6 @@ export class LeadTurnTimeoutService extends Disposable implements ILeadTurnTimeo
     for (const [toolCallId, call] of this.inFlight) {
       if (call.turnId === turnId) this.inFlight.delete(toolCallId);
     }
-    for (const key of [...this.stepsWithTools]) {
-      if (key.startsWith(`${turnId}:`)) this.stepsWithTools.delete(key);
-    }
-    this.currentStep.delete(turnId);
     this.armed.delete(turnId);
   }
 }
