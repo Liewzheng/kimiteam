@@ -302,17 +302,18 @@ const loadFailed = computed(() => props.error !== null && props.members === null
 .tsp-card:focus-visible { outline: none; box-shadow: var(--p-focus-ring); }
 .tsp-card :deep(.ui-card__body) { padding: var(--space-2) var(--space-3); }
 
-/* Member-card backgrounds — three display states, ONE hue family: a grey base
-   tinted blue (working) / blue-green, 偏绿 (resting); off-duty stays pure grey.
-   All values derive from tokens via color-mix (no hardcoded colour):
-   `--color-text` is the neutral ink, `--color-accent` the blue, and resting
-   mixes accent into success for the teal cast. 值守 duty members are absorbed
-   into resting (blue-green) and stay identifiable via the 值守 badge. The
-   compound `.tsp-card.ui-card` overrides the Card primitive's own background
-   (same pattern as GoalStrip / QuestionCard). */
-.tsp-card.ui-card { background: color-mix(in srgb, var(--color-surface) 88%, var(--color-text)); }
-.tsp-card--working.ui-card { background: color-mix(in srgb, var(--color-surface) 88%, var(--color-accent)); }
-.tsp-card--resting.ui-card { background: color-mix(in srgb, var(--color-surface) 86%, color-mix(in srgb, var(--color-accent) 40%, var(--color-success))); }
+/* Member-card backgrounds — pure-grey three-tier (product decision, replacing
+   the earlier blue / blue-green tint): working = darkest grey, resting =
+   middle, off-duty = lightest (closest to the surface, most subtle). Values
+   come from the dedicated `--color-team-*` tokens in style.css — no existing
+   neutral token is a pure grey at these exact levels (the surface / line greys
+   carry a blue cast) — and the dark theme flips them via token overrides,
+   keeping the same tier order. 值守 duty members stay identifiable via the 值守
+   badge. The compound `.tsp-card.ui-card` overrides the Card primitive's own
+   background (same pattern as GoalStrip / QuestionCard). */
+.tsp-card.ui-card { background: var(--color-team-off-duty); }
+.tsp-card--working.ui-card { background: var(--color-team-working); }
+.tsp-card--resting.ui-card { background: var(--color-team-resting); }
 
 .tsp-card-rows {
   display: flex;

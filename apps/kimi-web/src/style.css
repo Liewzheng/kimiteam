@@ -418,6 +418,14 @@ html[data-color-scheme="dark"][data-accent="mono"] {
   --color-text-on-accent: #ffffff;
   --color-line: #e7eaee;
   --color-line-strong: #d4d9e0;
+  /* Team member-card status backgrounds — pure-grey three-tier (product
+     decision): working 230 / resting 240 / off-duty 250. No existing neutral
+     token is a pure grey at these levels (the surface / line greys carry a
+     blue cast), so they get dedicated tokens; the dark theme flips them via
+     the data-color-scheme overrides below, keeping the same tier order. */
+  --color-team-working: #e6e6e6;
+  --color-team-resting: #f0f0f0;
+  --color-team-off-duty: #fafafa;
   /* Neutral selected fill (sidebar rows, list pickers) — deliberately NOT
      accent-tinted, so selection reads as "where I am", not as an action. */
   --color-selected: #00000014;
@@ -553,6 +561,13 @@ html[data-color-scheme="dark"] {
   --color-text-faint: #6b7280;
   --color-line: #2d333b;
   --color-line-strong: #3d444d;
+  /* Team member-card status tiers, flipped for dark: working = lightest grey
+     (most contrast against the dark panel), resting = middle, off-duty =
+     surface (most subtle, blends with the panel). Derived from the existing
+     dark surface family so a theme reskin flows through automatically. */
+  --color-team-working: var(--color-line-strong);
+  --color-team-resting: var(--color-surface-raised);
+  --color-team-off-duty: var(--color-surface);
   --color-selected: #ffffff14;
   --color-hover: #ffffff0d;
   --color-sidebar-bg: #181817;
@@ -595,6 +610,10 @@ html[data-color-scheme="dark"] {
     --color-text-faint: #6b7280;
     --color-line: #2d333b;
     --color-line-strong: #3d444d;
+    /* Team member-card status tiers, flipped for dark (system preference). */
+    --color-team-working: var(--color-line-strong);
+    --color-team-resting: var(--color-surface-raised);
+    --color-team-off-duty: var(--color-surface);
     --color-selected: #ffffff14;
     --color-hover: #ffffff0d;
     --color-sidebar-bg: #181817;
