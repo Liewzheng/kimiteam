@@ -12,11 +12,13 @@ import Composer from './Composer.vue';
 import ChatDock from './ChatDock.vue';
 import ConversationToc, { type ConversationTocItem } from './ConversationToc.vue';
 import Icon from '../ui/Icon.vue';
+import Pill from '../ui/Pill.vue';
 import Spinner from '../ui/Spinner.vue';
 import Tooltip from '../ui/Tooltip.vue';
 import { getVisibleWorkspaces } from '../../lib/workspacePicker';
 import { safeRemove, STORAGE_KEYS } from '../../lib/storage';
 import { findActiveTurnIndex } from '../../lib/tocActive';
+import { teamTabState } from '../../lib/teamRows';
 
 const { t } = useI18n();
 
@@ -160,6 +162,18 @@ const emit = defineEmits<{
 // Empty-composer workspace picker.
 const wsPickOpen = ref(false);
 const wsPickExpanded = ref(false);
+
+/** Standing team entry for the EMPTY state (dock is unmounted there): same
+ *  derived hot/disabled logic as the dock's 团队 tab, so the entry stays
+ *  clickable-to-open even before the first message exists. Roster counts come
+ *  from the team roster (props), never from turns — safe when turns is empty. */
+const teamState = computed(() =>
+  teamTabState({
+    working: props.teamWorking ?? 0,
+    total: props.teamTotal ?? 0,
+    hasSession: !!props.sessionId,
+  }),
+);
 
 const activeWorkspaceLabel = computed(() => {
   const w = props.workspaces?.find((ws) => ws.id === props.activeWorkspaceId);
@@ -1387,6 +1401,23 @@ defineExpose({ loadComposerForEdit, focusComposer, openTodosHistory });
                 <span>{{ t('conversation.addWorkspace') }}</span>
               </button>
             </div>
+            <!-- Standing team entry — the dock (with its 团队 tab) is unmounted
+                 while the conversation is empty, so keep the entry reachable
+                 here: same pill + roster counts as the dock's tab. -->
+            <div class="empty-team">
+              <Pill
+                class="empty-team-pill"
+                :class="{ hot: teamState.hot }"
+                :active="teamOpen"
+                :aria-pressed="teamOpen"
+                :disabled="teamState.disabled"
+                @click="emit('openTeam')"
+              >
+                <Icon name="team" size="md" />
+                <span>{{ t('tasks.teamTab') }}</span>
+                <span class="empty-team-count">(<b>{{ teamWorking ?? 0 }}</b>/<b>{{ teamTotal ?? 0 }}</b>)</span>
+              </Pill>
+            </div>
             <Composer
               ref="emptyComposerRef"
               class="empty-composer"
@@ -1681,6 +1712,29 @@ defineExpose({ loadComposerForEdit, focusComposer, openTodosHistory });
 }
 .empty-add-workspace svg {
   flex: none;
+}
+
+/* Standing team entry in the empty state — mirrors the dock's 团队 tab (same
+   pill + roster count + hot accent while any member works), centered above the
+   empty composer so the entry stays reachable before the first message. */
+.empty-team {
+  flex: none;
+  display: flex;
+  justify-content: center;
+  padding: 0 16px 14px;
+}
+.empty-team-count {
+  margin-left: 1px;
+}
+.empty-team-count b {
+  font-weight: 500;
+}
+.empty-team-pill.hot :deep(.ui-pill) {
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+.empty-team-pill.hot :deep(.ui-pill svg) {
+  color: var(--color-accent);
 }
 
 /* Empty-composer workspace picker */
