@@ -157,12 +157,7 @@ vi.mock('node:child_process', () => ({
 
 describe('runShell', () => {
   beforeEach(() => {
-    // Pin the experimental flag off so the default v1 path is deterministic
-    // regardless of the host environment (matches run-prompt.test.ts and
-    // goal-prompt.test.ts). `isKimiV2Enabled()` reads the env lazily at each
-    // runShell() call, so this is enough to isolate the suite; the two
-    // harness-construction tests below opt back in / out with withEnv().
-    vi.stubEnv('KIMI_CODE_EXPERIMENTAL_FLAG', '');
+    vi.stubEnv('KIMI_CODE_LEGACY_FLAG', '1');
   });
 
   afterEach(() => {
@@ -229,20 +224,35 @@ describe('runShell', () => {
     });
   }
 
-  it('builds the v2 harness when the master experimental flag is set', async () => {
+  it('builds the v2 harness by default', async () => {
     stubTuiStartup();
-    await withEnv({ KIMI_CODE_EXPERIMENTAL_FLAG: '1' }, async () => {
-      await runShell(minimalCliOptions, '1.2.3-test');
-    });
+    await withEnv(
+      { KIMI_CODE_LEGACY_FLAG: undefined, KIMI_CODE_EXPERIMENTAL_FLAG: undefined },
+      async () => {
+        await runShell(minimalCliOptions, '1.2.3-test');
+      },
+    );
     expect(mocks.kimiHarnessV2Constructor).toHaveBeenCalledTimes(1);
     expect(mocks.kimiHarnessConstructor).not.toHaveBeenCalled();
   });
 
-  it('keeps the v1 harness when the master experimental flag is unset', async () => {
+  it('uses the legacy harness when the legacy flag is truthy', async () => {
     stubTuiStartup();
-    await withEnv({ KIMI_CODE_EXPERIMENTAL_FLAG: undefined }, async () => {
+    await withEnv({ KIMI_CODE_LEGACY_FLAG: '1' }, async () => {
       await runShell(minimalCliOptions, '1.2.3-test');
     });
+    expect(mocks.kimiHarnessConstructor).toHaveBeenCalledTimes(1);
+    expect(mocks.kimiHarnessV2Constructor).not.toHaveBeenCalled();
+  });
+
+  it('lets the legacy flag take priority over the experimental master switch', async () => {
+    stubTuiStartup();
+    await withEnv(
+      { KIMI_CODE_LEGACY_FLAG: '1', KIMI_CODE_EXPERIMENTAL_FLAG: '1' },
+      async () => {
+        await runShell(minimalCliOptions, '1.2.3-test');
+      },
+    );
     expect(mocks.kimiHarnessConstructor).toHaveBeenCalledTimes(1);
     expect(mocks.kimiHarnessV2Constructor).not.toHaveBeenCalled();
   });

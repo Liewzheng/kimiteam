@@ -3,7 +3,6 @@ import type {
   ContextMessage,
   GoalChange,
   PermissionMode,
-  PromptOrigin,
   ResumedAgentState,
   Session,
   TokenUsage,
@@ -44,6 +43,7 @@ import {
   pluginCommandFromOrigin,
   toolCallFromReplayMessage,
   toolResultOutput,
+  type BackgroundTaskNotificationOrigin,
   type ReplayRenderContext,
   type SkillActivationProjection,
   type PluginCommandProjection,
@@ -733,7 +733,7 @@ export class SessionReplayRenderer {
 
   private renderBackgroundTaskNotification(
     context: ReplayRenderContext,
-    origin: Extract<PromptOrigin, { kind: 'background_task' }>,
+    origin: BackgroundTaskNotificationOrigin,
   ): void {
     const { sessionEventHandler } = this.host;
     const task = sessionEventHandler.backgroundTasks.get(origin.taskId);
