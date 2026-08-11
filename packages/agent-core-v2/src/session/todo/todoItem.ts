@@ -60,7 +60,11 @@ export function renderTodoList(todos: readonly TodoItem[], title = 'Current todo
   }
   const lines = todos.map((t) => {
     const marker = statusMarker(t.status);
-    return `  ${marker} ${t.title}`;
+    // The stable id is the dispatch handle (Agent/AgentSwarm todo_id resolves
+    // by exact id lookup), so it must be visible on every rendered line. Legacy
+    // items without an id render as before and pick up an id on the next write.
+    const id = t.id !== undefined && t.id.length > 0 ? `${t.id} ` : '';
+    return `  ${id}${marker} ${t.title}`;
   });
   return [title, ...lines].join('\n');
 }

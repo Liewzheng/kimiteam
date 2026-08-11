@@ -65,8 +65,8 @@ describe('todoListStaleReminder', () => {
 
   it('injects a reminder after enough assistant turns since the last TodoList write', async () => {
     const todos: TodoItem[] = [
-      { title: 'Read current TodoList implementation', status: 'in_progress' },
-      { title: 'Add reminder injector tests', status: 'pending' },
+      { title: 'Read current TodoList implementation', status: 'in_progress', id: 'T1' },
+      { title: 'Add reminder injector tests', status: 'pending', id: 'T2' },
     ];
     const history = [todoListWrite(todos), ...Array.from({ length: 10 }, () => assistantMessage())];
     const result = todoListStaleReminder({ history, todos, active: true });
@@ -74,8 +74,21 @@ describe('todoListStaleReminder', () => {
     expect(result).toContain('The TodoList tool has not been updated recently');
     expect(result).toContain('NEVER mention this reminder to the user');
     expect(result).toContain('Current todo list:');
-    expect(result).toContain('1. [in_progress] Read current TodoList implementation');
-    expect(result).toContain('2. [pending] Add reminder injector tests');
+    // The stable id (the dispatch handle) is shown; a positional number is not —
+    // "1. / 2." is not a todo_id and invites a bogus dispatch guess.
+    expect(result).toContain('T1 [in_progress] Read current TodoList implementation');
+    expect(result).toContain('T2 [pending] Add reminder injector tests');
+    expect(result).not.toMatch(/\d+\. \[/);
+  });
+
+  it('renders legacy todos without an id bare (no positional number)', async () => {
+    const todos: TodoItem[] = [{ title: 'Legacy item', status: 'in_progress' }];
+    const history = [todoListWrite(todos), ...Array.from({ length: 10 }, () => assistantMessage())];
+    const result = todoListStaleReminder({ history, todos, active: true });
+
+    expect(result).toContain('Current todo list:');
+    expect(result).toContain('[in_progress] Legacy item');
+    expect(result).not.toMatch(/\d+\. \[/);
   });
 
   it('does not inject before the assistant-turn threshold', async () => {
