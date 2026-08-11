@@ -189,7 +189,7 @@ export type ApprovalBlock =
   | { kind: 'url'; method?: string; url: string }
   | { kind: 'search'; query: string; scope?: string }
   | { kind: 'invocation'; kind2: string; name: string; description?: string }
-  | { kind: 'todo'; items: { title: string; status: string }[] }
+  | { kind: 'todo'; items: { title: string; status: string; id?: string }[] }
   | {
       kind: 'plan_review';
       plan: string;
