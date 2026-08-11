@@ -95,7 +95,11 @@ export class SessionTodoService extends Disposable implements ISessionTodoServic
       i === index
         ? sanitizeTodoItem({
             ...todo,
-            status: 'done',
+            // Delivered, awaiting acceptance: pending → in_progress (a
+            // delivered unit can be re-dispatched / reworked). `done` is only
+            // ever set by the main agent explicitly via TodoList — dispatch
+            // validation rejects done todos, so reaching one here is defensive.
+            status: todo.status === 'pending' ? 'in_progress' : todo.status,
             whatDone: update.whatDone ?? todo.whatDone,
             assignee: update.assignee ?? todo.assignee,
             completedAt: new Date().toISOString(),

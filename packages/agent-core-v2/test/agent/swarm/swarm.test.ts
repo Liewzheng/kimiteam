@@ -209,7 +209,7 @@ function stubTodoControlled(
     setTodoCompleted: (id: string, update: { whatDone?: string; assignee?: string }) => {
       if (state[id] === undefined) return false;
       completed.push({ id, whatDone: update.whatDone, assignee: update.assignee });
-      state[id] = 'done';
+      state[id] = 'in_progress'; // delivered, awaiting acceptance — never auto-done
       return true;
     },
   } as unknown as ISessionTodoService;
