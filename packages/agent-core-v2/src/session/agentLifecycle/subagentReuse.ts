@@ -28,6 +28,7 @@ import { IAgentProfileService } from '#/agent/profile/profile';
 import { IAgentLoopService } from '#/agent/loop/loop';
 import { IRuntimeStatusService } from '#/app/runtimeStatus/runtimeStatus';
 import { ISessionMetadata } from '#/session/sessionMetadata/sessionMetadata';
+import type { IAgentScopeHandle } from '#/_base/di/scope';
 
 import { IAgentLifecycleService } from './agentLifecycle';
 import {
@@ -89,6 +90,28 @@ export async function listIdleOwnedSubagents(
 }
 
 /**
+ * Materialize an owned subagent by id — cold or hot. Validates the persisted
+ * session metadata (the agent exists, is a subagent, and is owned by
+ * `callerAgentId`) before creating the scope; `create` is create-or-get for an
+ * explicit id, so an already-live instance is returned as-is and concurrent
+ * materializations of the same instance join into a single scope. Returns
+ * `undefined` when the metadata check fails (typo / another parent's agent /
+ * the main agent), so callers never materialize an agent they do not own.
+ */
+export async function materializeOwnedSubagent(input: {
+  readonly lifecycle: IAgentLifecycleService;
+  readonly metadata: ISessionMetadata;
+  readonly callerAgentId: string;
+  readonly agentId: string;
+}): Promise<IAgentScopeHandle | undefined> {
+  const { lifecycle, metadata, callerAgentId, agentId } = input;
+  const meta = (await metadata.read()).agents?.[agentId];
+  if (!isSubagentMeta(meta)) return undefined;
+  if (subagentParentAgentId(meta) !== callerAgentId) return undefined;
+  return lifecycle.create({ agentId });
+}
+
+/**
  * Find the best parked, idle, owned subagent of `profileName` for reuse.
  *
  * Returns the agent id of the most recently allocated candidate (highest
@@ -131,10 +154,17 @@ export async function findIdleOwnedSubagent(
   }
   if (coldBest === undefined) return undefined;
 
-  // Materialize the parked instance back into the live registry. `create` is
-  // create-or-get for an explicit id, so concurrent cold materializations of
-  // the same instance join into a single scope — no lock needed here.
-  const handle = await lifecycle.create({ agentId: coldBest.agentId });
+  // Materialize the parked instance back into the live registry through the
+  // shared owned-subagent helper (`create` is create-or-get for an explicit id,
+  // so concurrent cold materializations of the same instance join into a single
+  // scope — no lock needed here).
+  const handle = await materializeOwnedSubagent({
+    lifecycle,
+    metadata,
+    callerAgentId,
+    agentId: coldBest.agentId,
+  });
+  if (handle === undefined) return undefined;
   // Re-check running: a concurrent path may have materialized and started the
   // instance while we were scanning; a running instance is not reusable.
   if (handle.accessor.get(IAgentLoopService).status().state === 'running') {

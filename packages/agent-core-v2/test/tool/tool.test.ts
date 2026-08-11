@@ -1953,6 +1953,131 @@ describe('Agent tool execution contract', () => {
     );
   });
 
+  it('cold-resumes a lost owned subagent from persisted metadata after a restart', async () => {
+    const lifecycle = createAgentLifecycleStub({
+      createAgentIds: ['agent-lost'],
+      runCompletion: async () => ({ summary: 'cold resumed result' }),
+    });
+    const context = createAgentToolContext(
+      lifecycle,
+      sessionService(
+        ISessionMetadata,
+        sessionMetadataStub({ 'agent-lost': subagentMeta('main', 'coder') }),
+      ),
+    );
+    // The registry does not hold agent-lost (CLI restart rebuilt only main).
+
+    const result = await executeAgentTool(context, {
+      prompt: 'Continue',
+      description: 'Continue work',
+      resume: 'agent-lost',
+    });
+
+    expect(result.isError).toBeUndefined();
+    // Cold-materialized via create({ agentId }) — create-or-get on the id.
+    expect(lifecycle.create).toHaveBeenCalledWith({ agentId: 'agent-lost' });
+    expect(lifecycle.run).toHaveBeenCalledWith(
+      'agent-lost',
+      { kind: 'prompt', prompt: 'Continue' },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    expect(String(result.output)).toContain('cold resumed result');
+  });
+
+  it('cold-resumes a legacy subagent that predates the profileName label', async () => {
+    const lifecycle = createAgentLifecycleStub({
+      createAgentIds: ['agent-legacy'],
+      runCompletion: async () => ({ summary: 'legacy resumed result' }),
+    });
+    const context = createAgentToolContext(
+      lifecycle,
+      // Legacy metadata: parentAgentId present, no profileName label — resume
+      // goes by agentId directly and must not depend on profile matching.
+      sessionService(
+        ISessionMetadata,
+        sessionMetadataStub({ 'agent-legacy': subagentMeta('main') }),
+      ),
+    );
+
+    const result = await executeAgentTool(context, {
+      prompt: 'Continue',
+      description: 'Continue work',
+      resume: 'agent-legacy',
+    });
+
+    expect(result.isError).toBeUndefined();
+    expect(lifecycle.create).toHaveBeenCalledWith({ agentId: 'agent-legacy' });
+    expect(lifecycle.run).toHaveBeenCalledWith(
+      'agent-legacy',
+      { kind: 'prompt', prompt: 'Continue' },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    expect(String(result.output)).toContain('legacy resumed result');
+  });
+
+  it('still rejects cold resume when the agent is absent from metadata (no fabrication)', async () => {
+    const lifecycle = createAgentLifecycleStub();
+    const context = createAgentToolContext(
+      lifecycle,
+      sessionService(ISessionMetadata, sessionMetadataStub({})),
+    );
+
+    const result = await executeAgentTool(context, {
+      prompt: 'Continue',
+      description: 'Continue work',
+      resume: 'agent-typo',
+    });
+
+    expect(result.isError).toBe(true);
+    expect(String(result.output)).toContain('Agent instance "agent-typo" does not exist');
+    expect(lifecycle.create).not.toHaveBeenCalled();
+    expect(lifecycle.run).not.toHaveBeenCalled();
+  });
+
+  it('rejects cold resume of a persisted non-subagent with agent.not_found', async () => {
+    const lifecycle = createAgentLifecycleStub();
+    const context = createAgentToolContext(
+      lifecycle,
+      sessionService(
+        ISessionMetadata,
+        sessionMetadataStub({ 'agent-main2': { type: 'main' } }),
+      ),
+    );
+
+    const result = await executeAgentTool(context, {
+      prompt: 'Continue',
+      description: 'Continue work',
+      resume: 'agent-main2',
+    });
+
+    expect(result.isError).toBe(true);
+    expect(String(result.output)).toContain('does not exist');
+    expect(lifecycle.create).not.toHaveBeenCalled();
+    expect(lifecycle.run).not.toHaveBeenCalled();
+  });
+
+  it('rejects cold resume of another parent owned subagent with agent.not_found', async () => {
+    const lifecycle = createAgentLifecycleStub();
+    const context = createAgentToolContext(
+      lifecycle,
+      sessionService(
+        ISessionMetadata,
+        sessionMetadataStub({ 'agent-other': subagentMeta('other') }),
+      ),
+    );
+
+    const result = await executeAgentTool(context, {
+      prompt: 'Continue',
+      description: 'Continue work',
+      resume: 'agent-other',
+    });
+
+    expect(result.isError).toBe(true);
+    expect(String(result.output)).toContain('does not exist');
+    expect(lifecycle.create).not.toHaveBeenCalled();
+    expect(lifecycle.run).not.toHaveBeenCalled();
+  });
+
   it('reuses an idle owned subagent of the same profile instead of creating (team mode)', async () => {
     const lifecycle = createAgentLifecycleStub({
       runCompletion: async () => ({ summary: 'reused result' }),
