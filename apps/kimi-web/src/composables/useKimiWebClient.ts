@@ -78,6 +78,7 @@ import { createInitialState, reduceAppEvent, type CompactionStatus, type KimiCli
 import { isPlaceholderSessionUsage, toAppEvent } from '../api/daemon/mappers';
 
 import { messagesToTurns } from './messagesToTurns';
+import { createSessionDerivedCache } from './sessionDerivedCache';
 import { latestTodos, todoHistory as aggregateTodoHistory } from './latestTodos';
 import { buildSwarmGroups, countSwarmMembers, swarmMembersByToolCall } from './swarmGroups';
 import type { SwarmGroup, SwarmMember } from './swarmGroups';
@@ -1986,41 +1987,80 @@ const sideChat = useSideChat(rawState, {
     modelProvider.resolveThinkingForPrompt(sessionId, modelId),
 });
 
+// ---------------------------------------------------------------------------
+// Per-session derived-view caches (F1: stable references on session switch)
+//
+// `turns` / `tasks` / `todos` / ... below used to be plain computeds that read
+// `activeSessionId` at the top, so EVERY session switch rebuilt the whole
+// derived value — even when the newly selected session's data was unchanged
+// since the last visit. Every derived object got a fresh identity, which forced
+// Vue's `shouldUpdateComponent` to re-render the entire ChatPane subtree on
+// each switch. The KeepAlive cache in ConversationPane can't fix that: it
+// caches DOM, not the derived arrays that feed the props.
+//
+// The fix: derive per-session, cache per-session (see sessionDerivedCache.ts).
+// Each session's computed reads only that session's own reactive inputs, so it
+// is not invalidated by a switch; switching back re-reads the cached computed
+// and hands the pane the SAME array references, letting Vue skip the subtree
+// re-render. The cap aligns with MAX_WS_SUBSCRIPTIONS / CHAT_PANE_CACHE_MAX:
+// sessions past the cap are cold on every layer (DOM evicted, WS cursor stale →
+// snapshot rebuild), so their derived arrays would be dead weight.
+// ---------------------------------------------------------------------------
+const SESSION_DERIVED_CACHE_MAX = MAX_WS_SUBSCRIPTIONS;
+
+const appTasksForSession = createSessionDerivedCache<AppTask[]>(
+  (sid) => {
+    const hiddenBtwAgentId = sideChat.sideChatTargetBySession.value[sid]?.agentId;
+    return (rawState.tasksBySession[sid] ?? []).filter((task) => task.id !== hiddenBtwAgentId);
+  },
+  SESSION_DERIVED_CACHE_MAX,
+);
+
 const activeAppTasks = computed<AppTask[]>(() => {
   const sid = rawState.activeSessionId;
-  if (!sid) return [];
-  const hiddenBtwAgentId = sideChat.sideChatTargetBySession.value[sid]?.agentId;
-  return (rawState.tasksBySession[sid] ?? []).filter((task) => task.id !== hiddenBtwAgentId);
+  return sid ? appTasksForSession(sid).value : [];
 });
 
 const taskPoller = useTaskPoller(rawState, activeAppTasks);
 
+const turnsForSession = createSessionDerivedCache<ChatTurn[]>(
+  (sid) => {
+    const hiddenIds = new Set(rawState.sideChatUserMessageIdsBySession[sid] ?? []);
+    const messages = (rawState.messagesBySession[sid] ?? []).filter((m) => !hiddenIds.has(m.id));
+    const approvals = rawState.approvalsBySession[sid] ?? [];
+    return messagesToTurns(
+      messages,
+      approvals,
+      (fileId) => getKimiWebApi().getFileUrl(fileId),
+      isSessionTurnActive(sid),
+      rawState.planReviewByToolCallId,
+    );
+  },
+  SESSION_DERIVED_CACHE_MAX,
+);
+
+/** Turns of the active session. The per-session cache keeps the array identity
+ *  stable while the session's own data is unchanged, so switching back props-
+ *  diffs the cached ChatPane instead of re-rendering its whole subtree. */
 const turns = computed<ChatTurn[]>(() => {
   const sid = rawState.activeSessionId;
-  if (!sid) return [];
-  const hiddenIds = new Set(rawState.sideChatUserMessageIdsBySession[sid] ?? []);
-  const messages = (rawState.messagesBySession[sid] ?? []).filter((m) => !hiddenIds.has(m.id));
-  const approvals = rawState.approvalsBySession[sid] ?? [];
-  return messagesToTurns(
-    messages,
-    approvals,
-    (fileId) => getKimiWebApi().getFileUrl(fileId),
-    turnActive.value,
-    rawState.planReviewByToolCallId,
-  );
+  return sid ? turnsForSession(sid).value : [];
 });
 
-/** The MAIN agent of the active session has a turn in flight — the working
- *  moon's authoritative half (the optimistic `inFlight` window covers the gap
- *  before the turn.started round-trips). Background agents and BTW side chats
- *  do NOT set this; the session-busy status lives on `activity`. */
-const turnActive = computed<boolean>(() => {
-  const sid = rawState.activeSessionId;
-  if (!sid) return false;
+/** The MAIN agent of this session has a turn in flight — the working moon's
+ *  authoritative half (the optimistic `inFlight` window covers the gap before
+ *  the turn.started round-trips). Background agents and BTW side chats do NOT
+ *  set this; the session-busy status lives on `activity`. Kept per-session so
+ *  the turns cache above never depends on the active-session switch key. */
+function isSessionTurnActive(sid: string): boolean {
   return (
     (rawState.turnActiveBySession[sid] ?? false) ||
     (rawState.sessions.find((session) => session.id === sid)?.mainTurnActive ?? false)
   );
+}
+const turnActive = computed<boolean>(() => {
+  const sid = rawState.activeSessionId;
+  return sid ? isSessionTurnActive(sid) : false;
 });
 
 /** The working moon: the main conversation has an unfinished prompt — either
@@ -2028,18 +2068,39 @@ const turnActive = computed<boolean>(() => {
  *  (`turnActive`). */
 const working = computed<boolean>(() => inFlight.value || turnActive.value);
 
+const tasksForSession = createSessionDerivedCache<TaskItem[]>(
+  (sid) => {
+    // Touch the clock so a running task's elapsed time recomputes each tick.
+    void taskPoller.taskClock.value;
+    return appTasksForSession(sid).value.map(toUiTask);
+  },
+  SESSION_DERIVED_CACHE_MAX,
+);
+
 const tasks = computed<TaskItem[]>(() => {
-  // Touch the clock so a running task's elapsed time recomputes each tick.
-  void taskPoller.taskClock.value;
-  return activeAppTasks.value.map(toUiTask);
+  const sid = rawState.activeSessionId;
+  return sid ? tasksForSession(sid).value : [];
 });
 
-const swarms = computed<SwarmGroup[]>(() => buildSwarmGroups(activeAppTasks.value));
+const swarmsForSession = createSessionDerivedCache<SwarmGroup[]>(
+  (sid) => buildSwarmGroups(appTasksForSession(sid).value),
+  SESSION_DERIVED_CACHE_MAX,
+);
+const swarms = computed<SwarmGroup[]>(() => {
+  const sid = rawState.activeSessionId;
+  return sid ? swarmsForSession(sid).value : [];
+});
+
 // Foreground/background subagents keyed by their spawning tool call id — used by
 // the inline AgentSwarm tool card to stream each subagent's live progress.
-const swarmMembersByToolCallId = computed<Map<string, SwarmMember[]>>(() =>
-  swarmMembersByToolCall(activeAppTasks.value),
+const swarmMembersForSession = createSessionDerivedCache<Map<string, SwarmMember[]>>(
+  (sid) => swarmMembersByToolCall(appTasksForSession(sid).value),
+  SESSION_DERIVED_CACHE_MAX,
 );
+const swarmMembersByToolCallId = computed<Map<string, SwarmMember[]>>(() => {
+  const sid = rawState.activeSessionId;
+  return sid ? swarmMembersForSession(sid).value : new Map();
+});
 
 const goal = computed<AppGoal | null>(() => {
   const sid = rawState.activeSessionId;
@@ -2047,19 +2108,25 @@ const goal = computed<AppGoal | null>(() => {
   return rawState.goalBySession[sid] ?? null;
 });
 
+const todosForSession = createSessionDerivedCache<TodoView[]>(
+  (sid) => latestTodos(rawState.messagesBySession[sid] ?? []),
+  SESSION_DERIVED_CACHE_MAX,
+);
 /** Current todo list of the active session (TodoList tool, latest write wins). */
 const todos = computed<TodoView[]>(() => {
   const sid = rawState.activeSessionId;
-  if (!sid) return [];
-  return latestTodos(rawState.messagesBySession[sid] ?? []);
+  return sid ? todosForSession(sid).value : [];
 });
 
+const todoHistoryForSession = createSessionDerivedCache<TodoView[]>(
+  (sid) => aggregateTodoHistory(rawState.messagesBySession[sid] ?? []),
+  SESSION_DERIVED_CACHE_MAX,
+);
 /** Completed-todo history of the active session — the union of `done` items
  *  across EVERY TodoList write in the transcript (TUI `/todo` parity). */
 const todoHistory = computed<TodoView[]>(() => {
   const sid = rawState.activeSessionId;
-  if (!sid) return [];
-  return aggregateTodoHistory(rawState.messagesBySession[sid] ?? []);
+  return sid ? todoHistoryForSession(sid).value : [];
 });
 
 /** Live compaction state of the active session (present only while running). */

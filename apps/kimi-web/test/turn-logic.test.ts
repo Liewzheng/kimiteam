@@ -1,8 +1,16 @@
 import { describe, expect, it } from 'vitest';
+import { reactive } from 'vue';
 import type { AppMessage, AppMessageContent } from '../src/api/types';
 import { latestTodos, todoHistory } from '../src/composables/latestTodos';
 import { messagesToTurns } from '../src/composables/messagesToTurns';
+import { createSessionDerivedCache } from '../src/composables/sessionDerivedCache';
 import { isPlayableMediaUrl } from '../src/composables/useFilePreview';
+import {
+  estimateTurnHeight,
+  isTurnNearViewport,
+  shouldEagerlyMountTurn,
+} from '../src/lib/turnLazyMount';
+import type { ChatTurn } from '../src/types';
 
 function message(
   id: string,
@@ -1042,5 +1050,144 @@ describe('isPlayableMediaUrl', () => {
   it('rejects other non-loadable inputs', () => {
     expect(isPlayableMediaUrl('/api/v1/files/f_abc')).toBe(false);
     expect(isPlayableMediaUrl('')).toBe(false);
+  });
+});
+
+describe('createSessionDerivedCache (F1: session-switch render lag)', () => {
+  it('returns a stable reference while a session inputs are unchanged', () => {
+    const store = reactive<Record<string, string[]>>({ a: ['m1'], b: ['m2'] });
+    const cache = createSessionDerivedCache<string[]>((sid) => store[sid] ?? []);
+    const a1 = cache('a').value;
+    const a2 = cache('a').value;
+    expect(a2).toBe(a1); // cached identity — Vue skips the subtree re-render
+    expect(a2).toEqual(['m1']);
+  });
+
+  it('reading another session does not invalidate the first (switch-back keeps the same ref)', () => {
+    const store = reactive<Record<string, string[]>>({ a: ['m1'], b: ['m2'] });
+    const cache = createSessionDerivedCache<string[]>((sid) => store[sid] ?? []);
+    const a1 = cache('a').value;
+    void cache('b').value; // simulate switching to b
+    const a2 = cache('a').value; // simulate switching back
+    expect(a2).toBe(a1);
+  });
+
+  it('recomputes (new reference) once the session own inputs change', () => {
+    const store = reactive<Record<string, string[]>>({ a: ['m1'] });
+    const cache = createSessionDerivedCache<string[]>((sid) => store[sid] ?? []);
+    const a1 = cache('a').value;
+    store.a = ['m1', 'm2'];
+    const a2 = cache('a').value;
+    expect(a2).not.toBe(a1);
+    expect(a2).toEqual(['m1', 'm2']);
+  });
+
+  it('does not re-derive an untouched session when another session changes', () => {
+    const store = reactive<Record<string, string[]>>({ a: ['m1'], b: ['m2'] });
+    let deriveB = 0;
+    const cache = createSessionDerivedCache<string[]>((sid) => {
+      if (sid === 'b') deriveB += 1;
+      return store[sid] ?? [];
+    });
+    void cache('a').value;
+    void cache('b').value;
+    const runsBefore = deriveB;
+    store.a = ['m1', 'x'];
+    void cache('a').value;
+    expect(deriveB).toBe(runsBefore);
+  });
+
+  it('evicts least-recently-used entries past the cap and recreates them on demand', () => {
+    const store = reactive<Record<string, string[]>>({ s1: ['1'], s2: ['2'], s3: ['3'] });
+    const cache = createSessionDerivedCache<string[]>((sid) => store[sid] ?? [], 2);
+    const r1 = cache('s1');
+    const r2 = cache('s2');
+    const r3 = cache('s3'); // cap 2 → s1 evicted
+    expect(cache('s1')).not.toBe(r1); // fresh computed after eviction
+    expect(cache('s3')).toBe(r3); // still cached
+    expect(cache('s2')).not.toBe(r2); // s2 evicted when s1 was re-added
+  });
+
+  it('never evicts the most recently touched (active) session', () => {
+    const store = reactive<Record<string, string[]>>({ s1: ['1'], s2: ['2'], s3: ['3'] });
+    const cache = createSessionDerivedCache<string[]>((sid) => store[sid] ?? [], 2);
+    const r1 = cache('s1');
+    const r2 = cache('s2');
+    void cache('s1').value; // s1 is now most recent
+    const r3 = cache('s3'); // order [s2, s1, s3] → evict s2
+    expect(cache('s1')).toBe(r1); // active survives
+    expect(cache('s3')).toBe(r3); // still cached (checked before s2 re-add below)
+    expect(cache('s2')).not.toBe(r2); // evicted (its re-add evicts s3, already asserted above)
+  });
+});
+
+describe('turnLazyMount (F2: off-screen turn lazy-mounting)', () => {
+  const assistantTurn = (over: Partial<ChatTurn> = {}): ChatTurn => ({
+    id: 't',
+    role: 'assistant',
+    no: 1,
+    text: '',
+    ...over,
+  });
+
+  describe('shouldEagerlyMountTurn', () => {
+    it('mounts everything for short transcripts', () => {
+      expect(shouldEagerlyMountTurn(0, 10, null)).toBe(true);
+      expect(shouldEagerlyMountTurn(9, 10, null)).toBe(true);
+    });
+
+    it('mounts the tail turns of a long transcript but defers the middle', () => {
+      expect(shouldEagerlyMountTurn(40, 100, null)).toBe(false);
+      expect(shouldEagerlyMountTurn(97, 100, null)).toBe(true); // tail starts at 97
+      expect(shouldEagerlyMountTurn(99, 100, null)).toBe(true);
+    });
+
+    it('always mounts the streaming turn even when it is not in the tail', () => {
+      expect(shouldEagerlyMountTurn(40, 100, 40)).toBe(true);
+    });
+  });
+
+  describe('isTurnNearViewport', () => {
+    it('mounts when inside or within the buffer', () => {
+      expect(isTurnNearViewport({ top: 100, bottom: 300, width: 200, height: 200 }, 800)).toBe(true);
+      expect(isTurnNearViewport({ top: -479, bottom: 1, width: 200, height: 200 }, 800)).toBe(true);
+      expect(isTurnNearViewport({ top: 1400, bottom: 1600, width: 200, height: 200 }, 800)).toBe(false);
+    });
+
+    it('does not mount an unrendered (display:none / KeepAlive-deactivated) element', () => {
+      expect(isTurnNearViewport({ top: 0, bottom: 0, width: 0, height: 0 }, 800)).toBe(false);
+    });
+  });
+
+  describe('estimateTurnHeight', () => {
+    it('scales with text/tool volume but stays bounded', () => {
+      const small = estimateTurnHeight(assistantTurn({ text: 'hi' }));
+      const big = estimateTurnHeight(
+        assistantTurn({
+          text: 'x'.repeat(10_000),
+          thinking: 'y'.repeat(5_000),
+          tools: Array.from({ length: 20 }, () => ({
+            id: 'tool',
+            name: 'read',
+            arg: '{}',
+            status: 'ok' as const,
+          })),
+        }),
+      );
+      expect(big).toBeGreaterThan(small);
+      expect(big).toBeLessThanOrEqual(56 + 160 + 520 + 20 * 40);
+    });
+
+    it('accounts for user attachments', () => {
+      const withAtt = estimateTurnHeight({
+        id: 'u',
+        role: 'user',
+        no: 1,
+        text: 'look',
+        attachments: [{ kind: 'image', url: 'u' }],
+      });
+      const without = estimateTurnHeight({ id: 'u', role: 'user', no: 1, text: 'look' });
+      expect(withAtt).toBeGreaterThan(without);
+    });
   });
 });
