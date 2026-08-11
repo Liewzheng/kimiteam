@@ -44,6 +44,7 @@ import {
   classifyToolCall,
   LEAD_TURN_TIMEOUT_CANCEL_KIND,
   LEAD_TURN_TIMEOUT_REMINDER_NAME,
+  LEAD_TURN_AUTO_EXTEND_WARNING_NAME,
   LeadTurnTimeoutService,
 } from '#/agent/leadTurnTimeout/leadTurnTimeoutService';
 import {
@@ -664,19 +665,6 @@ describe('LeadTurnTimeoutService (enforce path — code-layer hard block)', () =
     expect(question.requests).toHaveLength(2); // no third ask
   });
 
-  it('does not ask in auto permission mode — blocks silently', async () => {
-    const question = new QuestionStub();
-    const h = makeService({ question, permissionMode: 'auto' });
-    h.bus.publish(userTurnStarted(1));
-    h.bus.publish(toolStarted(1, 'c1', 'Bash'));
-    await vi.advanceTimersByTimeAsync(5000);
-    h.bus.publish(toolResult(1, 'c1')); // lock
-
-    const decision = await fireVeto(h, 1, 'Read', {}, 'tc1');
-    expect(decision?.veto).toBeDefined();
-    expect(question.requests).toHaveLength(0); // no ask in auto mode
-  });
-
   it('warn mode never locks: legacy cancel fires and the veto listener stays inert', async () => {
     const h = makeService({ leadTurnGate: 'warn' });
     h.bus.publish(userTurnStarted(1));
@@ -804,6 +792,109 @@ describe('LeadTurnTimeoutService (enforce path — code-layer hard block)', () =
     h.bus.publish(toolResult(1, 'a1')); // dispatch settles
     await vi.advanceTimersByTimeAsync(1000); // re-armed cap fires
     expect(h.loop.cancels).toEqual([{ turnId: 1, reason: { kind: LEAD_TURN_TIMEOUT_CANCEL_KIND } }]);
+  });
+
+  describe('yolo/auto permission modes — auto-extend instead of block', () => {
+    it('auto-extends on exhaustion: no cancel, no veto, one warning injected', async () => {
+      const h = makeService({ permissionMode: 'yolo' });
+      h.bus.publish(userTurnStarted(1));
+      h.bus.publish(toolStarted(1, 'c1', 'Bash'));
+      await vi.advanceTimersByTimeAsync(5000);
+      h.bus.publish(toolResult(1, 'c1')); // exhausted → auto-extend
+
+      // No cancel, and execution-class calls pass immediately (never locked).
+      expect(h.loop.cancels).toHaveLength(0);
+      expect(await fireVeto(h, 1, 'Read', {}, 'tc-read')).toBeUndefined();
+
+      // One warning through the prompt-inject channel, on this extension.
+      expect(h.prompt.inject).toHaveBeenCalledTimes(1);
+      const message = h.prompt.inject.mock.calls[0]?.[0] as ContextMessage;
+      expect(message.origin).toEqual({ kind: 'system_trigger', name: LEAD_TURN_AUTO_EXTEND_WARNING_NAME });
+      const text = (message.content[0] as { type: 'text'; text: string }).text;
+      expect(text).toContain('5s');
+      expect(text).toContain('auto-extended');
+      expect(text).toContain('dispatch');
+    });
+
+    it('re-arms a fresh window and injects one warning per extension', async () => {
+      const h = makeService({ permissionMode: 'yolo' });
+      h.bus.publish(userTurnStarted(1));
+
+      // 1st extension.
+      h.bus.publish(toolStarted(1, 'c1', 'Bash'));
+      await vi.advanceTimersByTimeAsync(5000);
+      h.bus.publish(toolResult(1, 'c1'));
+      expect(h.prompt.inject).toHaveBeenCalledTimes(1);
+
+      // Fresh window: a short execution call no longer triggers anything.
+      h.bus.publish(toolStarted(1, 'c2', 'Bash'));
+      await vi.advanceTimersByTimeAsync(2000);
+      h.bus.publish(toolResult(1, 'c2')); // 2000 < 5000
+      expect(h.prompt.inject).toHaveBeenCalledTimes(1);
+
+      // 2nd extension: another warning, still no veto / cancel.
+      h.bus.publish(toolStarted(1, 'c3', 'Bash'));
+      await vi.advanceTimersByTimeAsync(5000);
+      h.bus.publish(toolResult(1, 'c3'));
+      expect(h.prompt.inject).toHaveBeenCalledTimes(2);
+      expect(await fireVeto(h, 1, 'Bash', {}, 'tc-bash')).toBeUndefined();
+      expect(h.loop.cancels).toHaveLength(0);
+    });
+
+    it('charges step generation and auto-extends (no cancel) instead of firing', async () => {
+      const h = makeService({ permissionMode: 'yolo' });
+      h.bus.publish(userTurnStarted(1));
+      h.bus.publish(stepCompleted(1, 1, 6000)); // pure generation over budget
+      expect(h.loop.cancels).toHaveLength(0);
+      expect(h.prompt.inject).toHaveBeenCalledTimes(1);
+      expect(await fireVeto(h, 1, 'Read', {}, 'tc1')).toBeUndefined();
+    });
+
+    it('yolo wins over the warn gate too: no legacy cancel, warning instead', async () => {
+      const h = makeService({ permissionMode: 'yolo', leadTurnGate: 'warn' });
+      h.bus.publish(userTurnStarted(1));
+      h.bus.publish(toolStarted(1, 'c1', 'Bash'));
+      await vi.advanceTimersByTimeAsync(5000);
+      h.bus.publish(toolResult(1, 'c1'));
+      expect(h.loop.cancels).toHaveLength(0); // yolo overrides the warn cancel
+      expect(h.prompt.inject).toHaveBeenCalledTimes(1);
+      expect(await fireVeto(h, 1, 'Read', {}, 'tc1')).toBeUndefined();
+    });
+
+    it('auto: auto-extends on exhaustion — no veto, no ask, one warning injected', async () => {
+      const question = new QuestionStub();
+      const h = makeService({ question, permissionMode: 'auto' });
+      h.bus.publish(userTurnStarted(1));
+      h.bus.publish(toolStarted(1, 'c1', 'Bash'));
+      await vi.advanceTimersByTimeAsync(5000);
+      h.bus.publish(toolResult(1, 'c1')); // exhausted → auto-extend
+
+      // No cancel; execution-class calls pass immediately (never locked).
+      expect(h.loop.cancels).toHaveLength(0);
+      expect(await fireVeto(h, 1, 'Read', {}, 'tc-read')).toBeUndefined();
+      // The user re-authorization channel is never engaged in auto mode.
+      expect(question.requests).toHaveLength(0);
+
+      // One warning through the prompt-inject channel, on this extension.
+      expect(h.prompt.inject).toHaveBeenCalledTimes(1);
+      const message = h.prompt.inject.mock.calls[0]?.[0] as ContextMessage;
+      expect(message.origin).toEqual({ kind: 'system_trigger', name: LEAD_TURN_AUTO_EXTEND_WARNING_NAME });
+      const text = (message.content[0] as { type: 'text'; text: string }).text;
+      expect(text).toContain('5s');
+      expect(text).toContain('auto-extended');
+      expect(text).toContain('dispatch');
+    });
+
+    it('manual mode still locks and vetoes on exhaustion (unchanged)', async () => {
+      const h = makeService(); // permissionMode defaults to 'manual', gate enforce
+      h.bus.publish(userTurnStarted(1));
+      h.bus.publish(toolStarted(1, 'c1', 'Bash'));
+      await vi.advanceTimersByTimeAsync(5000);
+      h.bus.publish(toolResult(1, 'c1'));
+      expect(h.loop.cancels).toHaveLength(0); // enforce: no cancel
+      expect((await fireVeto(h, 1, 'Read', {}, 'tc-read'))?.veto).toBeDefined(); // vetoed
+      expect(h.prompt.inject).not.toHaveBeenCalled(); // enforce never injects
+    });
   });
 });
 

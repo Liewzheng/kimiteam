@@ -21,6 +21,14 @@
  *   decline / timeout it stays locked with dispatch / management / wait-user
  *   tools still allowed until the turn ends, and a `lead_turn_lock_cap_ms`
  *   backstop force-cancels a locked turn that runs away.
+ * - **`yolo` / `auto` permission modes (user-trusted, zero friction)**:
+ *   regardless of the gate, budget exhaustion never locks, vetoes, or cancels —
+ *   the turn is re-armed with a fresh window of the same length
+ *   (`lead_turn_timeout_ms`) and a system warning is injected (once per
+ *   extension) telling the model it ran over and should wrap up / dispatch.
+ *   Auto-extensions are unbounded: the per-turn grant cap applies only to the
+ *   user re-authorization channel. Manual mode keeps the warn / enforce
+ *   behavior unchanged.
  *
  * **Budget accounting**: the budget accumulates execution-class tool
  * durations by `toolCallId` — the service self-times each
@@ -96,6 +104,8 @@ import {
 
 /** Reminder origin name — non-user so it bypasses the UserPromptSubmit filter. */
 export const LEAD_TURN_TIMEOUT_REMINDER_NAME = 'lead_turn_timeout_reminder';
+/** Auto-extend (yolo/auto) warning origin name — distinct from the warn reminder. */
+export const LEAD_TURN_AUTO_EXTEND_WARNING_NAME = 'lead_turn_auto_extend_warning';
 /** Loop-cancel reason kind — a plain object so the loop records 'aborted'. */
 export const LEAD_TURN_TIMEOUT_CANCEL_KIND = 'lead_turn_timeout';
 
@@ -144,7 +154,7 @@ interface ArmedTurn {
   locked: boolean;
   /** enforce path: an ask was declined/timed out (or grants are capped) this lock episode. */
   asked: boolean;
-  /** Lock/grant episode counter — bumped on every grant. */
+  /** Lock/grant episode counter — bumped on every grant or yolo auto-extend. */
   epoch: number;
   /** Grants consumed this turn (never resets within a turn). */
   grantsUsed: number;
@@ -301,6 +311,12 @@ export class LeadTurnTimeoutService extends Disposable implements ILeadTurnTimeo
       if (call.turnId !== turnId) continue;
       if (classifyToolCall(call.name, call.args) !== 'execution') return;
     }
+    // yolo/auto (user-trusted, no-friction): never lock / veto / cancel — re-arm
+    // the same window and warn. Only manual keeps the lock/fire path.
+    if (this.permissionMode.mode === 'yolo' || this.permissionMode.mode === 'auto') {
+      this.autoExtend(turnId, state);
+      return;
+    }
     if (resolveLeadTurnGate(this.config) === 'enforce') {
       this.lock(turnId, state);
     } else {
@@ -340,6 +356,22 @@ export class LeadTurnTimeoutService extends Disposable implements ILeadTurnTimeo
     state.epoch += 1;
     state.grantsUsed += 1;
     this.clearLockCap(turnId);
+  }
+
+  /**
+   * yolo/auto path: budget exhausted → re-arm a fresh window of the same length
+   * (`lead_turn_timeout_ms`) and inject a system warning. Never locks / vetoes /
+   * cancels, so execution-class calls keep passing; one warning per extension.
+   * The per-turn grant cap is intentionally not consumed — yolo/auto extend
+   * unbounded (the grant channel is for user re-authorization, not this path).
+   */
+  private autoExtend(turnId: number, state: ArmedTurn): void {
+    state.consumedMs = 0;
+    state.locked = false;
+    state.asked = false;
+    state.epoch += 1;
+    this.clearLockCap(turnId);
+    this.injectBudgetWarning(turnId);
   }
 
   private armLockCap(turnId: number, state: ArmedTurn): void {
@@ -511,6 +543,29 @@ export class LeadTurnTimeoutService extends Disposable implements ILeadTurnTimeo
     void this.prompt
       .inject(message)
       .catch((error) => this.log.warn('lead-turn timeout reminder inject failed', { turnId, error }));
+  }
+
+  /**
+   * yolo/auto auto-extend warning: injected mid-turn through the system prompt
+   * channel (the turn stays active, so the inject merges into it and never
+   * opens a new armed turn). Runs once per auto-extend.
+   */
+  private injectBudgetWarning(turnId: number): void {
+    const seconds = Math.round(resolveLeadTurnTimeoutMs(this.config) / 1000);
+    const message: ContextMessage = {
+      role: 'user',
+      content: [
+        {
+          type: 'text',
+          text: `You exceeded the ${seconds}s turn budget and it was auto-extended by ${seconds}s. Wrap up the current work and dispatch the rest to team members instead of executing it yourself.`,
+        },
+      ],
+      toolCalls: [],
+      origin: { kind: 'system_trigger', name: LEAD_TURN_AUTO_EXTEND_WARNING_NAME },
+    };
+    void this.prompt
+      .inject(message)
+      .catch((error) => this.log.warn('lead-turn yolo budget warning inject failed', { turnId, error }));
   }
 
   private cleanup(turnId: number): void {
