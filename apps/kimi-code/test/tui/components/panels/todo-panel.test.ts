@@ -33,6 +33,33 @@ describe('TodoPanelComponent', () => {
     expect(joined).toMatch(/○ Open PR/);
   });
 
+  it('shows the stable id dimmed between the marker and the title when present', () => {
+    const panel = new TodoPanelComponent();
+    panel.setTodos([
+      { title: 'Fix parser crash', status: 'in_progress', id: 'T228' },
+      { title: 'Add tests', status: 'pending', id: 't1' },
+    ]);
+    const joined = strip(panel.render(80).join('\n'));
+    // Id sits right after the status marker, before the title.
+    expect(joined).toMatch(/● T228 Fix parser crash/);
+    expect(joined).toMatch(/○ t1 Add tests/);
+  });
+
+  it('renders id-less rows normally — no placeholder, layout intact', () => {
+    const panel = new TodoPanelComponent();
+    panel.setTodos([
+      { title: 'Legacy task', status: 'done' },
+      { title: 'Another task', status: 'pending', id: 'T2' },
+    ]);
+    const joined = strip(panel.render(80).join('\n'));
+    // Legacy rows keep their original marker + title shape (no reserved gap).
+    expect(joined).toMatch(/✓ Legacy task/);
+    expect(joined).not.toMatch(/✓ {2,}Legacy/);
+    // An id'd sibling in the same list still renders its id.
+    expect(joined).toMatch(/○ T2 Another task/);
+    expect(joined).not.toContain('undefined');
+  });
+
   it('setTodos replaces the list (not appends)', () => {
     const panel = new TodoPanelComponent();
     panel.setTodos([{ title: 'old', status: 'pending' }]);
