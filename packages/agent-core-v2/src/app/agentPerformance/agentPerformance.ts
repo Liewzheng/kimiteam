@@ -31,9 +31,25 @@ export interface PerformanceShift {
   readonly sessionId?: string;
 }
 
+/** A profile bucket in the raw document — entries + shifts + a persisted byModel cache. */
+export interface PerformanceBucket {
+  entries: PerformanceEntry[];
+  shifts?: PerformanceShift[];
+  /**
+   * Persisted per-model aggregate (count + score average), kept in sync on
+   * every record/recordShift. Carried in the raw document so a reader of
+   * `performance.json` itself (e.g. the main agent checking a member's
+   * per-model breakdown per team-lead-doctrine) sees the same numbers as
+   * `summary()`, which still recomputes from entries/shifts as the source of
+   * truth. Legacy buckets written before this field existed are backfilled
+   * lazily on the next read.
+   */
+  byModel?: Record<string, { count: number; average?: number }>;
+}
+
 /** Raw document shape stored in the atomic-document. */
 export interface PerformanceRaw {
-  [profileName: string]: { entries: PerformanceEntry[]; shifts?: PerformanceShift[] };
+  [profileName: string]: PerformanceBucket;
 }
 
 /** Computed summary for one profile (the public API). */
