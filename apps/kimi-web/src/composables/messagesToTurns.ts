@@ -340,6 +340,7 @@ function buildApprovalBlock(a: AppApprovalRequest): ApprovalBlock {
       return {
         title: typeof it['title'] === 'string' ? it['title'] : '',
         status: typeof it['status'] === 'string' ? it['status'] : 'pending',
+        id: typeof it['id'] === 'string' && it['id'].length > 0 ? it['id'] : undefined,
       };
     });
     return { kind: 'todo', items };

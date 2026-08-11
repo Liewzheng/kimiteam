@@ -72,6 +72,7 @@ function historyKey(td: TodoView, index: number): string {
     <template v-else>
       <div v-for="(td, i) in props.todos" :key="i" class="tc-row" :class="`s-${td.status}`">
         <StatusGlyph :status="glyphStatus(td.status)" />
+        <span v-if="td.id !== undefined && td.id.length > 0" class="tc-id">{{ td.id }}</span>
         <span class="tc-name">{{ td.title }}</span>
       </div>
     </template>
@@ -94,6 +95,15 @@ function historyKey(td: TodoView, index: number): string {
   color: var(--color-text);
 }
 .tc-name { flex: 1; min-width: 0; overflow-wrap: anywhere; line-height: 1.4; }
+/* Live-list stable id: small mono, faint — an identifier, never a row of its
+   own. Rendered only when the engine assigned one; legacy rows without an id
+   keep the exact same baseline (no placeholder, no extra gap). */
+.tc-id {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-text-faint);
+}
 .tc-row.s-in_progress .tc-name { font-weight: var(--weight-medium); }
 .tc-row.s-done .tc-name {
   color: var(--color-text-faint);

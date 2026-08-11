@@ -743,6 +743,36 @@ describe('latestTodos', () => {
       ]),
     ).toEqual([{ title: 'new', status: 'done' }]);
   });
+
+  it('carries the stable id through the live list — the row renders it when present', () => {
+    expect(
+      latestTodos([
+        message('a1', 'assistant', [
+          {
+            type: 'toolUse',
+            toolCallId: 'todo-1',
+            toolName: 'TodoList',
+            input: { todos: [{ title: 'auth', status: 'in_progress', id: 'T228' }] },
+          },
+        ]),
+      ]),
+    ).toEqual([{ title: 'auth', status: 'in_progress', id: 'T228' }]);
+  });
+
+  it('leaves id undefined on legacy items — no placeholder, row layout unchanged', () => {
+    expect(
+      latestTodos([
+        message('a1', 'assistant', [
+          {
+            type: 'toolUse',
+            toolCallId: 'todo-1',
+            toolName: 'TodoList',
+            input: { todos: [{ title: 'legacy', status: 'pending' }] },
+          },
+        ]),
+      ]),
+    ).toEqual([{ title: 'legacy', status: 'pending' }]);
+  });
 });
 
 describe('todoHistory', () => {
