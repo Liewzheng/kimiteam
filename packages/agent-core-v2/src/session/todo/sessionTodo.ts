@@ -35,9 +35,11 @@ export interface ISessionTodoService {
   /** Whether a todo with the given id exists. */
   hasTodo(id: string): boolean;
   /**
-   * Mark the todo with `id` done and record completion details (`whatDone`,
-   * `assignee`, `completedAt`). Returns `false` (no change) when no todo with
-   * that id exists.
+   * Record delivery details for the todo with `id` (`whatDone`, `assignee`,
+   * `completedAt`) and move it from `pending` to `in_progress` — delivered,
+   * awaiting acceptance. Never sets `done`: that status is set only by the
+   * main agent explicitly via TodoList, so a delivered unit stays re-dispatchable.
+   * Returns `false` (no change) when no todo with that id exists.
    */
   setTodoCompleted(id: string, update: TodoCompletionUpdate): boolean;
   readonly onDidChange: Event<readonly TodoItem[]>;

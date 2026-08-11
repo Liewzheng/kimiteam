@@ -437,7 +437,7 @@ function stubTodoService(
     setTodoCompleted: (id: string, update: TodoCompletionUpdate) => {
       if (state[id] === undefined) return false;
       completed.push({ id, whatDone: update.whatDone, assignee: update.assignee });
-      state[id] = 'done';
+      state[id] = 'in_progress'; // delivered, awaiting acceptance — never auto-done
       return true;
     },
     onDidChange: Event.None as ISessionTodoService['onDidChange'],
@@ -1279,6 +1279,39 @@ describe('Agent tool execution contract', () => {
       whatDone: 'child result',
       assignee: 'explore',
     });
+  });
+
+  it('allows re-dispatching the same todo after delivery (in_progress, not done)', async () => {
+    const lifecycle = createAgentLifecycleStub({
+      createAgentIds: ['agent-child', 'agent-child-2'],
+      runCompletion: async () => ({ summary: 'child result' }),
+    });
+    const { service, completed } = stubTodoService({ T1: 'pending' });
+    const context = createAgentToolContext(
+      lifecycle,
+      sessionService(ISessionTodoService, service),
+    );
+
+    // First dispatch delivers the unit: pending → in_progress, never done.
+    const first = await executeAgentTool(context, {
+      prompt: 'Investigate',
+      description: 'Find cause',
+      subagent_type: 'explore',
+      todo_id: 'T1',
+    });
+    expect(first.isError).toBeUndefined();
+    await vi.waitFor(() => expect(completed).toHaveLength(1));
+    expect(service.getTodo('T1')?.status).toBe('in_progress');
+
+    // The delivered (in_progress) todo is re-dispatchable — append / rework.
+    const second = await executeAgentTool(context, {
+      prompt: 'Rework',
+      description: 'Follow-up',
+      subagent_type: 'explore',
+      todo_id: 'T1',
+    });
+    expect(second.isError).toBeUndefined();
+    expect(String(second.output)).not.toContain('already done');
   });
 
   it('injects the spawned profile performance card into the child prompt', async () => {

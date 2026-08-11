@@ -363,7 +363,7 @@ describe('SessionTodoService', () => {
     expect(service.getTodo('T99')).toBeUndefined();
   });
 
-  it('setTodoCompleted marks the todo done and records completion details', () => {
+  it('setTodoCompleted records delivery details and moves pending → in_progress (not done)', () => {
     const main = makeFakeAgent('main');
     const lifecycle = makeLifecycleStub([main.handle]);
     const service = new SessionTodoService(lifecycle.service);
@@ -376,7 +376,8 @@ describe('SessionTodoService', () => {
 
     expect(completed).toBe(true);
     const updated = service.getTodo('T1');
-    expect(updated?.status).toBe('done');
+    // Delivered, awaiting acceptance — never auto-done (done is the lead's call).
+    expect(updated?.status).toBe('in_progress');
     expect(updated?.whatDone).toBe('shipped the fix');
     expect(updated?.assignee).toBe('explore');
     expect(updated?.completedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
@@ -397,7 +398,7 @@ describe('SessionTodoService', () => {
     service.setTodoCompleted('T1', {});
 
     const updated = service.getTodo('T1');
-    expect(updated?.status).toBe('done');
+    expect(updated?.status).toBe('in_progress');
     expect(updated?.whatDone).toBe('old note');
     expect(updated?.completedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
@@ -430,7 +431,7 @@ describe('SessionTodoService', () => {
     expect(value).toHaveLength(1);
     expect(value[0]).toMatchObject({
       title: 'a',
-      status: 'done',
+      status: 'in_progress',
       id: 'T1',
       whatDone: 'done',
     });
