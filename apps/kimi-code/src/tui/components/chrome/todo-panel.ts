@@ -238,7 +238,14 @@ export class TodoPanelComponent implements Component {
 function renderRow(todo: TodoItem, colors: ColorPalette): string {
   const marker = statusMarker(todo.status, colors);
   const titleStyled = styleTitle(todo.title, todo.status, colors);
-  return `  ${marker} ${titleStyled}`;
+  // Stable engine id, dimmed so the marker + title keep visual priority. A
+  // legacy todo without an id leaves no placeholder — the row keeps its
+  // original marker + title shape, so the layout never shifts per-row.
+  const id =
+    todo.id !== undefined && todo.id.length > 0
+      ? `${chalk.hex(colors.textDim)(todo.id)} `
+      : '';
+  return `  ${marker} ${id}${titleStyled}`;
 }
 
 function statusMarker(status: TodoStatus, colors: ColorPalette): string {
