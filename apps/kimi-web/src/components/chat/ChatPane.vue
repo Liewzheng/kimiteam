@@ -1,6 +1,6 @@
 <!-- apps/kimi-web/src/components/chat/ChatPane.vue -->
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, nextTick, onActivated, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import type { ChatTurn, ApprovalBlock, FilePreviewRequest, ToolMedia, QueuedPromptView, TurnAttachment } from '../../types';
 import ToolCall from './ToolCall.vue';
@@ -28,6 +28,12 @@ import {
   turnFinalText,
   turnToMarkdown,
 } from '../chatTurnRendering';
+import {
+  estimateTurnHeight,
+  isTurnNearViewport,
+  LAZY_MOUNT_VIEWPORT_BUFFER,
+  shouldEagerlyMountTurn,
+} from '../../lib/turnLazyMount';
 
 const { t } = useI18n();
 const { confirm } = useConfirmDialog();
@@ -160,10 +166,20 @@ function observeTopSentinel(): void {
   topSentinelObserver.observe(topSentinelRef.value);
 }
 
-onMounted(observeTopSentinel);
+onMounted(() => {
+  observeTopSentinel();
+  refreshTurnObservers();
+});
+onActivated(() => {
+  // A KeepAlive-deactivated pane comes back from display:none; rect checks were
+  // skipped while hidden, so re-run the deterministic mount decision now.
+  refreshTurnObservers();
+});
 onUnmounted(() => {
   topSentinelObserver?.disconnect();
   topSentinelObserver = null;
+  turnVisibilityObserver?.disconnect();
+  turnVisibilityObserver = null;
 });
 watch(
   () => [props.hasMoreMessages, props.loadingMore, props.loadingMoreError],
@@ -175,6 +191,26 @@ watch(
     void nextTick().then(observeTopSentinel);
   },
 );
+watch(
+  () => props.turns,
+  () => {
+    // New turns (history prepend, streaming appends, session switch) land as
+    // placeholders; mount whatever is near the viewport now that the DOM has
+    // settled (flush: 'post').
+    refreshTurnObservers();
+  },
+  { flush: 'post' },
+);
+watch(
+  () => props.turnActive,
+  () => {
+    // A turn starting/ending changes the streaming turn — re-evaluate eager
+    // mounting (the streaming turn is part of the tail anyway; this covers the
+    // case where the tail is a user turn and the streaming turn is above it).
+    refreshTurnObservers();
+  },
+  { flush: 'post' },
+);
 
 // The id of the turn that is actively streaming: the last assistant turn while
 // the main turn is in flight. Its Markdown renders with `streaming`
@@ -184,6 +220,96 @@ const streamingTurnId = computed<string | null>(() => {
   const last = props.turns.at(-1)!;
   return last.role === 'assistant' ? last.id : null;
 });
+
+// ---------------------------------------------------------------------------
+// Off-screen turn lazy-mounting (F2)
+//
+// On a cold open / evicted re-open, mounting EVERY assistant turn's Markdown on
+// the main thread is the seconds-level switch-lag: markstream parses each
+// message and shiki tokenizes each code block even for turns far outside the
+// viewport. content-visibility:auto only skips layout/paint — the parse/mount
+// cost still runs. So turns outside the viewport render as a cheap placeholder
+// (height estimated from content so the scrollbar stays sane) and their real
+// content mounts only when they enter the viewport (IntersectionObserver with a
+// generous rootMargin buffer).
+//
+// We deliberately do NOT use markstream's `defer-nodes-until-visible` here: it
+// was disabled in Markdown.vue because its visibility events were missed during
+// KeepAlive session switches / theme changes and left code blocks blank. Lazy
+// mounting keeps the whole lifecycle under our own observer, re-checked
+// deterministically on activation (rect-based, not IO-timing-based), so the old
+// blank-content regression cannot recur.
+// ---------------------------------------------------------------------------
+
+/** Turn ids whose real content is currently mounted (reactive → re-renders). */
+const mountedTurnIds = reactive(new Set<string>());
+/** turn id → its `.a-msg` wrapper element, for the visibility observer. */
+const turnAnchorEls = new Map<string, HTMLElement>();
+let turnVisibilityObserver: IntersectionObserver | null = null;
+
+function trackTurnAnchor(turnId: string, el: unknown): void {
+  if (el instanceof HTMLElement) turnAnchorEls.set(turnId, el);
+  else turnAnchorEls.delete(turnId);
+}
+
+function onTurnVisibility(entries: IntersectionObserverEntry[]): void {
+  for (const entry of entries) {
+    if (!entry.isIntersecting) continue;
+    const el = entry.target as HTMLElement;
+    const id = el.dataset.turnId;
+    if (id !== undefined) {
+      mountedTurnIds.add(id);
+      turnVisibilityObserver?.unobserve(el);
+    }
+  }
+}
+
+const streamingTurnIndex = computed<number | null>(() => {
+  const sid = streamingTurnId.value;
+  if (sid === null) return null;
+  const idx = props.turns.findIndex((t) => t.id === sid);
+  return idx >= 0 ? idx : null;
+});
+
+/** Mount every near-viewport / eager turn and observe the rest. Safe to call
+ *  repeatedly: mounted turns are skipped, and a KeepAlive-deactivated pane
+ *  (display:none → offsetParent null) is skipped so onActivated can re-check. */
+function refreshTurnObservers(): void {
+  if (typeof window === 'undefined') return;
+  if (turnVisibilityObserver === null && typeof IntersectionObserver !== 'undefined') {
+    turnVisibilityObserver = new IntersectionObserver(onTurnVisibility, {
+      root: null,
+      rootMargin: `${LAZY_MOUNT_VIEWPORT_BUFFER}px 0px ${LAZY_MOUNT_VIEWPORT_BUFFER}px 0px`,
+      threshold: 0,
+    });
+  }
+  turnVisibilityObserver?.disconnect();
+  const count = props.turns.length;
+  for (let i = 0; i < count; i++) {
+    const turn = props.turns[i]!;
+    if (mountedTurnIds.has(turn.id)) continue;
+    if (shouldEagerlyMountTurn(i, count, streamingTurnIndex.value)) {
+      mountedTurnIds.add(turn.id);
+      continue;
+    }
+    const el = turnAnchorEls.get(turn.id);
+    if (!el || el.offsetParent === null) continue;
+    if (isTurnNearViewport(el.getBoundingClientRect(), window.innerHeight)) {
+      mountedTurnIds.add(turn.id);
+      continue;
+    }
+    turnVisibilityObserver?.observe(el);
+  }
+}
+
+/** Template predicate: a turn renders its real content when it is already
+ *  mounted OR must mount eagerly (tail / streaming / short transcript). The
+ *  eager half keeps the first paint identical to the pre-F2 render for every
+ *  turn that would mount immediately anyway — no placeholder flash. */
+function isTurnMounted(turn: ChatTurn, index: number): boolean {
+  if (mountedTurnIds.has(turn.id)) return true;
+  return shouldEagerlyMountTurn(index, props.turns.length, streamingTurnIndex.value);
+}
 
 // Trailing "working" moon: shown while the main conversation has an unfinished
 // prompt. `working` is the union of the optimistic submit window and the main
@@ -658,37 +784,47 @@ function onOpenAgent(toolCallId: string): void {
            a lightweight in-transcript notice rather than a user bubble. -->
       <CronNotice v-else-if="turn.role === 'cron'" :text="turn.text" :cron="turn.cron" :turn-id="turn.id" :created-at="turn.createdAt" />
 
-      <!-- Assistant turn → left-aligned, no name/role label. -->
-      <div v-else class="a-msg turn-anchor" :data-turn-id="turn.id">
-        <template v-for="(blk, bi) in assistantRenderBlocks(turn)" :key="renderBlockKey(blk, bi)">
-          <ThinkingBlock v-if="blk.kind === 'thinking'" :text="blk.thinking" mobile :streaming="isStreamingRenderBlock(turn, blk)" @open="emit('openThinking', { turnId: turn.id, blockIndex: blk.sourceIndex })" />
-          <div v-else-if="blk.kind === 'text' && blk.text" class="msg"><Markdown :text="blk.text" :streaming="isStreamingRenderBlock(turn, blk)" :open-file="onOpenFile" /></div>
-          <ToolGroup
-            v-else-if="blk.kind === 'tool-stack'"
-            :tools="blk.tools"
-            mobile
-            :tool-diff-panel="toolDiffPanel"
-            @open-media="onOpenMedia"
-            @open-file="onOpenFile"
-            @open-tool-diff="onOpenToolDiff"
-            @open-agent="onOpenAgent"
-          />
-          <ToolCall v-else-if="blk.kind === 'tool'" :tool="blk.tool" mobile :tool-diff-panel="toolDiffPanel" @open-media="onOpenMedia" @open-file="onOpenFile" @open-tool-diff="onOpenToolDiff" @open-agent="onOpenAgent" />
+      <!-- Assistant turn → left-aligned, no name/role label. Off-screen turns
+           render as a sized placeholder until they scroll near the viewport
+           (F2 lazy-mounting) — see the refreshTurnObservers comment. -->
+      <div
+        v-else
+        class="a-msg turn-anchor"
+        :data-turn-id="turn.id"
+        :ref="(el) => trackTurnAnchor(turn.id, el)"
+      >
+        <template v-if="isTurnMounted(turn, ti)">
+          <template v-for="(blk, bi) in assistantRenderBlocks(turn)" :key="renderBlockKey(blk, bi)">
+            <ThinkingBlock v-if="blk.kind === 'thinking'" :text="blk.thinking" mobile :streaming="isStreamingRenderBlock(turn, blk)" @open="emit('openThinking', { turnId: turn.id, blockIndex: blk.sourceIndex })" />
+            <div v-else-if="blk.kind === 'text' && blk.text" class="msg"><Markdown :text="blk.text" :streaming="isStreamingRenderBlock(turn, blk)" :open-file="onOpenFile" /></div>
+            <ToolGroup
+              v-else-if="blk.kind === 'tool-stack'"
+              :tools="blk.tools"
+              mobile
+              :tool-diff-panel="toolDiffPanel"
+              @open-media="onOpenMedia"
+              @open-file="onOpenFile"
+              @open-tool-diff="onOpenToolDiff"
+              @open-agent="onOpenAgent"
+            />
+            <ToolCall v-else-if="blk.kind === 'tool'" :tool="blk.tool" mobile :tool-diff-panel="toolDiffPanel" @open-media="onOpenMedia" @open-file="onOpenFile" @open-tool-diff="onOpenToolDiff" @open-agent="onOpenAgent" />
+          </template>
+          <div v-if="turn.id !== streamingTurnId && isAssistantRunEnd(ti) && (assistantRunFinalText(ti).trim().length > 0 || turn.durationMs !== undefined)" class="a-msg-ft">
+            <Tooltip :text="`${turn.durationMs} ms`">
+              <span v-if="turn.durationMs !== undefined" class="a-duration">{{ formatDuration(turn.durationMs) }}</span>
+            </Tooltip>
+            <button
+              v-if="assistantRunFinalText(ti).trim().length > 0"
+              class="a-cpbtn"
+              :aria-label="t('filePreview.copy')"
+              @click="copyAssistantRun(ti)"
+            >
+              <Icon v-if="copiedTurn !== turn.id" name="copy" size="sm" />
+              <Icon v-else name="check" size="sm" />
+            </button>
+          </div>
         </template>
-        <div v-if="turn.id !== streamingTurnId && isAssistantRunEnd(ti) && (assistantRunFinalText(ti).trim().length > 0 || turn.durationMs !== undefined)" class="a-msg-ft">
-          <Tooltip :text="`${turn.durationMs} ms`">
-            <span v-if="turn.durationMs !== undefined" class="a-duration">{{ formatDuration(turn.durationMs) }}</span>
-          </Tooltip>
-          <button
-            v-if="assistantRunFinalText(ti).trim().length > 0"
-            class="a-cpbtn"
-            :aria-label="t('filePreview.copy')"
-            @click="copyAssistantRun(ti)"
-          >
-            <Icon v-if="copiedTurn !== turn.id" name="copy" size="sm" />
-            <Icon v-else name="check" size="sm" />
-          </button>
-        </div>
+        <div v-else class="a-msg-ph" :style="{ height: `${estimateTurnHeight(turn)}px` }" />
       </div>
     </template>
 
@@ -1025,6 +1161,14 @@ function onOpenAgent(toolCallId: string): void {
   align-self: flex-start;
   max-width: 94%;
   width: 94%;
+}
+/* Off-screen turn placeholder (F2 lazy-mounting): a quiet box sized by the
+   content-height estimate so the transcript's scrollbar stays in the right
+   ballpark until the turn mounts near the viewport. */
+.a-msg-ph {
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  opacity: 0.7;
 }
 .a-msg-ft {
   display: flex;

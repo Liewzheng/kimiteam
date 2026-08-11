@@ -1430,9 +1430,10 @@ export function useWorkspaceState(rawState: ExtendedState, deps: UseWorkspaceSta
         const result = await syncSessionFromSnapshot(sessionId);
         if (result === 'not-found') return;
       } else {
-        // Re-open: rebuild from a fresh snapshot rather than resuming from the
-        // tracked cursor — the daemon only replays durable events, so volatile
-        // streamed deltas lost to a WS hiccup would otherwise stay missing.
+        // Re-open: resume the tracked WS cursor when it is still replayable
+        // (reopenSession falls back to a snapshot only on a stale cursor /
+        // unknown epoch / resync — the volatile streamed-delta caveat is
+        // covered by those backstops, see reopenSession in useKimiWebClient).
         const result = await reopenSession(sessionId);
         if (result === 'not-found') return;
       }
