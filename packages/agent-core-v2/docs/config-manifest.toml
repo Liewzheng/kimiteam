@@ -388,6 +388,11 @@ timeout_ms = 7200000
 # team_auto: boolean
 # auto_idle_ms: integer
 # lead_turn_timeout_ms: integer
+# lead_turn_gate: "off" | "warn" | "enforce"
+# lead_turn_grant_ms: integer
+# lead_turn_grant_timeout_ms: integer
+# lead_turn_max_grants: integer
+# lead_turn_lock_cap_ms: integer
 # model_overrides: record<string, string>
 # warm_interval_ms: integer
 # duty_idle_ttl_ms: integer

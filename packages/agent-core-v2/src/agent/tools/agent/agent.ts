@@ -41,7 +41,7 @@ export const SubagentToolInputSchema = z.preprocess(
       .string()
       .optional()
       .describe(
-        'Required: the todo number (create or select one from /todo / TodoList before dispatching) this unit hangs on. The engine rejects a dispatch without it, validates that it exists and is not done, and closes it with whatDone/assignee on completion.',
+        'Required: the todo number (create or select one from /todo / TodoList before dispatching) this unit hangs on. The engine rejects a dispatch without it, validates that it exists and is not done, and on completion moves it to in_progress writing back whatDone/assignee — it never sets done, which the lead sets explicitly via TodoList after acceptance.',
       ),
     subagent_type: z
       .string()
