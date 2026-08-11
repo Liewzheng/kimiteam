@@ -10,9 +10,9 @@
  * = enforce` it replaces the interrupt with a code-layer hard block: the turn
  * is locked, execution-class tools are vetoed at the executor, and the lead
  * can only continue by dispatching / managing or by the user granting a fresh
- * budget window. Under `yolo` permission mode the exhaustion response is
- * neither — the turn is re-armed with a fresh window of the same length and a
- * system warning is injected, so execution is never blocked. The pure decision
+ * budget window. Under `yolo` / `auto` permission modes the exhaustion response
+ * is neither — the turn is re-armed with a fresh window of the same length and
+ * a system warning is injected, so execution is never blocked. The pure decision
  * helpers here are the mechanical core of that block, kept side-effect free
  * for direct testing.
  */

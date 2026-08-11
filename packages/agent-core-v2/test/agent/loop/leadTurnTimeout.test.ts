@@ -44,7 +44,7 @@ import {
   classifyToolCall,
   LEAD_TURN_TIMEOUT_CANCEL_KIND,
   LEAD_TURN_TIMEOUT_REMINDER_NAME,
-  LEAD_TURN_YOLO_WARNING_NAME,
+  LEAD_TURN_AUTO_EXTEND_WARNING_NAME,
   LeadTurnTimeoutService,
 } from '#/agent/leadTurnTimeout/leadTurnTimeoutService';
 import {
@@ -665,19 +665,6 @@ describe('LeadTurnTimeoutService (enforce path — code-layer hard block)', () =
     expect(question.requests).toHaveLength(2); // no third ask
   });
 
-  it('does not ask in auto permission mode — blocks silently', async () => {
-    const question = new QuestionStub();
-    const h = makeService({ question, permissionMode: 'auto' });
-    h.bus.publish(userTurnStarted(1));
-    h.bus.publish(toolStarted(1, 'c1', 'Bash'));
-    await vi.advanceTimersByTimeAsync(5000);
-    h.bus.publish(toolResult(1, 'c1')); // lock
-
-    const decision = await fireVeto(h, 1, 'Read', {}, 'tc1');
-    expect(decision?.veto).toBeDefined();
-    expect(question.requests).toHaveLength(0); // no ask in auto mode
-  });
-
   it('warn mode never locks: legacy cancel fires and the veto listener stays inert', async () => {
     const h = makeService({ leadTurnGate: 'warn' });
     h.bus.publish(userTurnStarted(1));
@@ -807,7 +794,7 @@ describe('LeadTurnTimeoutService (enforce path — code-layer hard block)', () =
     expect(h.loop.cancels).toEqual([{ turnId: 1, reason: { kind: LEAD_TURN_TIMEOUT_CANCEL_KIND } }]);
   });
 
-  describe('yolo permission mode — auto-extend instead of block', () => {
+  describe('yolo/auto permission modes — auto-extend instead of block', () => {
     it('auto-extends on exhaustion: no cancel, no veto, one warning injected', async () => {
       const h = makeService({ permissionMode: 'yolo' });
       h.bus.publish(userTurnStarted(1));
@@ -822,7 +809,7 @@ describe('LeadTurnTimeoutService (enforce path — code-layer hard block)', () =
       // One warning through the prompt-inject channel, on this extension.
       expect(h.prompt.inject).toHaveBeenCalledTimes(1);
       const message = h.prompt.inject.mock.calls[0]?.[0] as ContextMessage;
-      expect(message.origin).toEqual({ kind: 'system_trigger', name: LEAD_TURN_YOLO_WARNING_NAME });
+      expect(message.origin).toEqual({ kind: 'system_trigger', name: LEAD_TURN_AUTO_EXTEND_WARNING_NAME });
       const text = (message.content[0] as { type: 'text'; text: string }).text;
       expect(text).toContain('5s');
       expect(text).toContain('auto-extended');
@@ -874,7 +861,31 @@ describe('LeadTurnTimeoutService (enforce path — code-layer hard block)', () =
       expect(await fireVeto(h, 1, 'Read', {}, 'tc1')).toBeUndefined();
     });
 
-    it('non-yolo modes still lock and veto on exhaustion (manual default unchanged)', async () => {
+    it('auto: auto-extends on exhaustion — no veto, no ask, one warning injected', async () => {
+      const question = new QuestionStub();
+      const h = makeService({ question, permissionMode: 'auto' });
+      h.bus.publish(userTurnStarted(1));
+      h.bus.publish(toolStarted(1, 'c1', 'Bash'));
+      await vi.advanceTimersByTimeAsync(5000);
+      h.bus.publish(toolResult(1, 'c1')); // exhausted → auto-extend
+
+      // No cancel; execution-class calls pass immediately (never locked).
+      expect(h.loop.cancels).toHaveLength(0);
+      expect(await fireVeto(h, 1, 'Read', {}, 'tc-read')).toBeUndefined();
+      // The user re-authorization channel is never engaged in auto mode.
+      expect(question.requests).toHaveLength(0);
+
+      // One warning through the prompt-inject channel, on this extension.
+      expect(h.prompt.inject).toHaveBeenCalledTimes(1);
+      const message = h.prompt.inject.mock.calls[0]?.[0] as ContextMessage;
+      expect(message.origin).toEqual({ kind: 'system_trigger', name: LEAD_TURN_AUTO_EXTEND_WARNING_NAME });
+      const text = (message.content[0] as { type: 'text'; text: string }).text;
+      expect(text).toContain('5s');
+      expect(text).toContain('auto-extended');
+      expect(text).toContain('dispatch');
+    });
+
+    it('manual mode still locks and vetoes on exhaustion (unchanged)', async () => {
       const h = makeService(); // permissionMode defaults to 'manual', gate enforce
       h.bus.publish(userTurnStarted(1));
       h.bus.publish(toolStarted(1, 'c1', 'Bash'));
