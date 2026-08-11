@@ -5,7 +5,7 @@
  * validates the TeamScoreToolInputSchema zod boundary at runtime.
  */
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { DisposableStore } from '#/_base/di/lifecycle';
 import { JsonAtomicDocumentStore } from '#/persistence/backends/node-fs/atomicDocumentStore';
@@ -424,6 +424,115 @@ describe('AgentPerformanceServiceImpl', () => {
     expect(raw.tester.shifts[0].concurrency).toBe(3);
     expect(raw.tester.shifts[0].agentId).toBe('agent_xyz');
     expect(raw.tester.shifts[0].sessionId).toBe('sess_001');
+  });
+
+  // ---------------------------------------------------------------------------
+  // byModel persistence — the raw document itself carries the per-model
+  // aggregate (kept in sync on every record/recordShift), so a direct reader of
+  // `performance.json` (the main agent per team-lead-doctrine, or a supervisor
+  // review) sees the same breakdown as summary() without recomputing.
+  // ---------------------------------------------------------------------------
+
+  it('persists byModel in raw storage after record', async () => {
+    const storage2 = new InMemoryStorageService();
+    const docStore2 = new JsonAtomicDocumentStore(storage2);
+    const logStub2: any = { error: () => {}, warn: () => {}, info: () => {}, debug: () => {},
+      child: () => logStub2, setLevel: () => {}, level: 'debug' as const, flush: async () => {}, _serviceBrand: undefined };
+    const svc = new AgentPerformanceServiceImpl(docStore2, logStub2);
+
+    await svc.record({ ts: '2025-01-01T00:00:00.0Z', score: 80, note: 'a', profileName: 'p', model: 'gpt-4' });
+    await svc.record({ ts: '2025-01-02T00:00:00.0Z', score: 90, note: 'b', profileName: 'p', model: 'gpt-4' });
+
+    const raw = JSON.parse(new TextDecoder().decode(await storage2.read('agents', 'performance.json')!));
+    expect(raw.p.byModel).toEqual({ 'gpt-4': { count: 2, average: 85 } });
+    // entries/shifts structure untouched
+    expect(raw.p.entries).toHaveLength(2);
+  });
+
+  it('aggregates interleaved models correctly and persists the same byModel', async () => {
+    const storage2 = new InMemoryStorageService();
+    const docStore2 = new JsonAtomicDocumentStore(storage2);
+    const logStub2: any = { error: () => {}, warn: () => {}, info: () => {}, debug: () => {},
+      child: () => logStub2, setLevel: () => {}, level: 'debug' as const, flush: async () => {}, _serviceBrand: undefined };
+    const svc = new AgentPerformanceServiceImpl(docStore2, logStub2);
+
+    await svc.record({ ts: '2025-01-01T00:00:00.0Z', score: 80, note: 'a', profileName: 'p', model: 'gpt-4' });
+    await svc.record({ ts: '2025-01-02T00:00:00.0Z', score: 90, note: 'b', profileName: 'p', model: 'claude-3' });
+    await svc.record({ ts: '2025-01-03T00:00:00.0Z', score: 70, note: 'c', profileName: 'p', model: 'gpt-4' });
+    await svc.recordShift('p', {
+      startedAt: 'a', endedAt: 'b', durationMs: 1000, workSummary: 'x', model: 'claude-3',
+    });
+
+    const sum = await svc.summary('p');
+    expect(sum.byModel).toEqual({
+      'gpt-4': { count: 2, average: 75 },
+      'claude-3': { count: 2, average: 90 },
+    });
+    const raw = JSON.parse(new TextDecoder().decode(await storage2.read('agents', 'performance.json')!));
+    expect(raw.p.byModel).toEqual(sum.byModel);
+  });
+
+  it('keeps persisted byModel consistent after the FIFO 50 trim', async () => {
+    const storage2 = new InMemoryStorageService();
+    const docStore2 = new JsonAtomicDocumentStore(storage2);
+    const logStub2: any = { error: () => {}, warn: () => {}, info: () => {}, debug: () => {},
+      child: () => logStub2, setLevel: () => {}, level: 'debug' as const, flush: async () => {}, _serviceBrand: undefined };
+    const svc = new AgentPerformanceServiceImpl(docStore2, logStub2);
+
+    for (let i = 0; i < 60; i++) {
+      await svc.record({ ts: `2025-01-01T${String(i).padStart(2, '0')}:00:00.0Z`, score: i, note: `${i}`, profileName: 'p', model: 'gpt-4' });
+    }
+
+    const sum = await svc.summary('p');
+    expect(sum.count).toBe(50);
+    // Retained scores are 10..59 → average (10+59)/2 = 34.5
+    expect(sum.byModel).toEqual({ 'gpt-4': { count: 50, average: 34.5 } });
+
+    const raw = JSON.parse(new TextDecoder().decode(await storage2.read('agents', 'performance.json')!));
+    expect(raw.p.byModel).toEqual({ 'gpt-4': { count: 50, average: 34.5 } });
+    expect(raw.p.entries).toHaveLength(50);
+  });
+
+  it('backfills byModel for legacy buckets (missing or stale-empty) on read without losing history', async () => {
+    const storage = new InMemoryStorageService();
+    const docStore = new JsonAtomicDocumentStore(storage);
+    const logStub: any = { error: () => {}, warn: () => {}, info: () => {}, debug: () => {},
+      child: () => logStub, setLevel: () => {}, level: 'debug' as const, flush: async () => {}, _serviceBrand: undefined };
+    const svc = new AgentPerformanceServiceImpl(docStore, logStub);
+
+    // Legacy doc: entries carry model but no persisted byModel, plus one bucket
+    // with the P0 symptom — `byModel: {}` while its entries have models.
+    await storage.write('agents', 'performance.json', new TextEncoder().encode(JSON.stringify({
+      'missing': { entries: [
+        { profileName: 'missing', ts: '2025-01-01T00:00:00.0Z', score: 80, note: 'a', model: 'gpt-4' },
+        { profileName: 'missing', ts: '2025-01-02T00:00:00.0Z', score: 60, note: 'b', model: 'gpt-4' },
+      ] },
+      'stale-empty': { entries: [
+        { profileName: 'stale-empty', ts: '2025-01-01T00:00:00.0Z', score: 90, note: 'c', model: 'claude-3' },
+      ], byModel: {} },
+    })));
+
+    const setSpy = vi.spyOn(docStore, 'set');
+
+    const sumMissing = await svc.summary('missing');
+    expect(sumMissing.byModel).toEqual({ 'gpt-4': { count: 2, average: 70 } });
+
+    const sumStale = await svc.summary('stale-empty');
+    expect(sumStale.byModel).toEqual({ 'claude-3': { count: 1, average: 90 } });
+
+    // The one-time backfill persisted the aggregate into the raw document.
+    const raw = JSON.parse(new TextDecoder().decode(await storage.read('agents', 'performance.json')!));
+    expect(raw.missing.byModel).toEqual({ 'gpt-4': { count: 2, average: 70 } });
+    expect(raw['stale-empty'].byModel).toEqual({ 'claude-3': { count: 1, average: 90 } });
+    // History preserved: entries untouched.
+    expect(raw.missing.entries).toHaveLength(2);
+    expect(raw['stale-empty'].entries).toHaveLength(1);
+
+    // Idempotent: a further read must not rewrite (byModel already correct).
+    const writesAfterBackfill = setSpy.mock.calls.length;
+    await svc.summary('missing');
+    await svc.summary('stale-empty');
+    expect(setSpy.mock.calls.length).toBe(writesAfterBackfill);
   });
 
   // ---------------------------------------------------------------------------

@@ -44,7 +44,7 @@ export class AgentPerformanceServiceImpl implements IAgentPerformanceService {
   }
 
   private async _record(entry: PerformanceEntry): Promise<void> {
-    const raw = (await this._readOrCreate()) as PerformanceRaw;
+    const raw = (await this._readRaw()) as PerformanceRaw;
     const bucketKey = entry.profileName;
     if (!raw[bucketKey]) {
       raw[bucketKey] = { entries: [] };
@@ -54,6 +54,10 @@ export class AgentPerformanceServiceImpl implements IAgentPerformanceService {
     while (raw[bucketKey].entries.length > MAX_ENTRIES_PER_PROFILE) {
       raw[bucketKey].entries.shift();
     }
+    // Keep the persisted per-model aggregate in sync — recomputed from the
+    // whole (already-trimmed) bucket, so existing entries with a model are
+    // backfilled too and history is never lost.
+    raw[bucketKey].byModel = this._computeByModel(raw[bucketKey].entries, raw[bucketKey].shifts);
     await this.store.set<PerformanceRaw>(STORAGE_SCOPE, STORAGE_KEY, raw);
   }
 
@@ -64,7 +68,7 @@ export class AgentPerformanceServiceImpl implements IAgentPerformanceService {
   }
 
   private async _recordShift(profileName: string, shift: PerformanceShift): Promise<void> {
-    const raw = (await this._readOrCreate()) as PerformanceRaw;
+    const raw = (await this._readRaw()) as PerformanceRaw;
     if (!raw[profileName]) {
       raw[profileName] = { entries: [], shifts: [shift] };
     } else {
@@ -76,11 +80,14 @@ export class AgentPerformanceServiceImpl implements IAgentPerformanceService {
         raw[profileName].shifts!.shift();
       }
     }
+    // Same sync rule as `_record`: shift-only models surface in byModel with a
+    // count and no score average; existing model-bearing entries backfill in.
+    raw[profileName].byModel = this._computeByModel(raw[profileName].entries, raw[profileName].shifts);
     await this.store.set<PerformanceRaw>(STORAGE_SCOPE, STORAGE_KEY, raw);
   }
 
   async summary(profileName: string): Promise<PerformanceSummary> {
-    const raw = (await this._readOrCreate()) as PerformanceRaw;
+    const raw = await this._readWithBackfill();
     const bucket = raw[profileName];
     if (bucket === undefined) {
       return { count: 0 };
@@ -89,14 +96,14 @@ export class AgentPerformanceServiceImpl implements IAgentPerformanceService {
   }
 
   async recentScores(profileName: string, limit: number): Promise<number[]> {
-    const raw = (await this._readOrCreate()) as PerformanceRaw;
+    const raw = await this._readWithBackfill();
     const bucket = raw[profileName];
     if (bucket === undefined) return [];
     return bucket.entries.slice(-limit).map((entry) => entry.score);
   }
 
   async recentShiftDurationMs(profileName: string): Promise<number | undefined> {
-    const raw = (await this._readOrCreate()) as PerformanceRaw;
+    const raw = await this._readWithBackfill();
     const shifts = raw[profileName]?.shifts;
     if (shifts === undefined || shifts.length === 0) return undefined;
     // FIFO trim pushes newest to the tail, so the last shift is the most recent.
@@ -104,7 +111,7 @@ export class AgentPerformanceServiceImpl implements IAgentPerformanceService {
   }
 
   async list(): Promise<ProfilePerformanceEntry[]> {
-    const raw = (await this._readOrCreate()) as PerformanceRaw;
+    const raw = await this._readWithBackfill();
     const keys = Object.keys(raw);
     return Promise.all(
       keys.map(async (profileName) => ({
@@ -114,7 +121,7 @@ export class AgentPerformanceServiceImpl implements IAgentPerformanceService {
     );
   }
 
-  private async _readOrCreate(): Promise<PerformanceRaw> {
+  private async _readRaw(): Promise<PerformanceRaw> {
     const raw = await this.store.get<PerformanceRaw>(STORAGE_SCOPE, STORAGE_KEY);
     if (raw === undefined) {
       return {};
@@ -135,18 +142,80 @@ export class AgentPerformanceServiceImpl implements IAgentPerformanceService {
     return safeRaw;
   }
 
-  private _computeSummary(entries: PerformanceEntry[], shifts?: PerformanceShift[]): PerformanceSummary {
-    // Shift-derived aggregates are computed even without any scores — a member
-    // can have worked shifts before receiving its first score.
-    let avgDurationMs: number | undefined;
-    if (shifts && shifts.length > 0) {
-      const total = shifts.reduce((a, b) => a + b.durationMs, 0);
-      avgDurationMs = Number((total / shifts.length).toFixed(1));
-    }
+  /**
+   * Read path: acquire the document through the serialization queue so a
+   * one-time byModel backfill can never race a concurrent
+   * record()/recordShift() read-modify-write (which would otherwise risk
+   * losing an entry). The persist is best-effort — a failed cache write must
+   * not fail the read, since summary() recomputes byModel from entries/shifts
+   * as the source of truth.
+   */
+  private _readWithBackfill(): Promise<PerformanceRaw> {
+    const run = this._queue.then(async () => {
+      const raw = await this._readRaw();
+      if (this._backfillInto(raw)) {
+        try {
+          await this.store.set<PerformanceRaw>(STORAGE_SCOPE, STORAGE_KEY, raw);
+        } catch (err) {
+          this.log.warn('agent-performance: byModel backfill write failed', { error: String(err) });
+        }
+      }
+      return raw;
+    });
+    // Keep the chain typed as Promise<void> (the queue only serializes).
+    this._queue = run.then(() => {}, () => {});
+    return run;
+  }
 
-    // byModel aggregation — merge entries with model + shifts with model.
-    // `average` is only present when the model actually has scored entries.
-    let byModel: Record<string, { count: number; average?: number }> | undefined;
+  /**
+   * One-time lazy migration for legacy buckets whose persisted byModel is
+   * missing or stale (e.g. written before byModel was persisted, or an empty
+   * `{}` left by the old writer while entries carry models). Recomputes from
+   * entries + shifts and rewrites only on a real diff. Entries/shifts
+   * themselves are never touched — history is preserved.
+   */
+  private _backfillInto(raw: PerformanceRaw): boolean {
+    let dirty = false;
+    for (const bucket of Object.values(raw)) {
+      const byModel = this._computeByModel(bucket.entries, bucket.shifts);
+      if (byModel === undefined) continue; // no model attribution → nothing to backfill
+      if (!this._byModelEquals(bucket.byModel, byModel)) {
+        bucket.byModel = byModel;
+        dirty = true;
+      }
+    }
+    return dirty;
+  }
+
+  /** Structural equality for persisted byModel — key order irrelevant. */
+  private _byModelEquals(
+    a: Record<string, { count: number; average?: number }> | undefined,
+    b: Record<string, { count: number; average?: number }> | undefined,
+  ): boolean {
+    if (a === undefined || b === undefined) return a === b;
+    const aKeys = Object.keys(a);
+    const bKeys = Object.keys(b);
+    if (aKeys.length !== bKeys.length) return false;
+    for (const key of aKeys) {
+      const av = a[key];
+      const bv = b[key];
+      if (av === undefined || bv === undefined) return false;
+      if (av.count !== bv.count || av.average !== bv.average) return false;
+    }
+    return true;
+  }
+
+  /**
+   * Per-model aggregate from raw entries + shifts: `count` merges score entries
+   * and shift records, `average` covers only score entries (rounded to 1
+   * decimal). Returns `undefined` when no entry/shift carries a model. This is
+   * the single aggregation point shared by `summary()` (recomputed) and the
+   * persisted cache (written on record/recordShift, backfilled on read).
+   */
+  private _computeByModel(
+    entries: PerformanceEntry[],
+    shifts?: PerformanceShift[],
+  ): Record<string, { count: number; average?: number }> | undefined {
     const modelMap = new Map<string, { scoreSum: number; scoreCount: number; shiftCount: number }>();
     for (const e of entries) {
       if (e.model) {
@@ -165,15 +234,29 @@ export class AgentPerformanceServiceImpl implements IAgentPerformanceService {
         }
       }
     }
-    if (modelMap.size > 0) {
-      byModel = {};
-      for (const [model, data] of modelMap) {
-        byModel[model] = {
-          count: data.scoreCount + data.shiftCount,
-          average: data.scoreCount > 0 ? Number((data.scoreSum / data.scoreCount).toFixed(1)) : undefined,
-        };
-      }
+    if (modelMap.size === 0) return undefined;
+    const byModel: Record<string, { count: number; average?: number }> = {};
+    for (const [model, data] of modelMap) {
+      byModel[model] = {
+        count: data.scoreCount + data.shiftCount,
+        average: data.scoreCount > 0 ? Number((data.scoreSum / data.scoreCount).toFixed(1)) : undefined,
+      };
     }
+    return byModel;
+  }
+
+  private _computeSummary(entries: PerformanceEntry[], shifts?: PerformanceShift[]): PerformanceSummary {
+    // Shift-derived aggregates are computed even without any scores — a member
+    // can have worked shifts before receiving its first score.
+    let avgDurationMs: number | undefined;
+    if (shifts && shifts.length > 0) {
+      const total = shifts.reduce((a, b) => a + b.durationMs, 0);
+      avgDurationMs = Number((total / shifts.length).toFixed(1));
+    }
+
+    // byModel aggregation — recomputed from entries + shifts as the source of
+    // truth, never trusting the persisted cache in the raw doc.
+    const byModel = this._computeByModel(entries, shifts);
 
     const scores = entries.map((e) => e.score);
     if (scores.length === 0) return { count: 0, avgDurationMs, byModel };
