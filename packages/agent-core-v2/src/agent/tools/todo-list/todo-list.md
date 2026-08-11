@@ -20,6 +20,7 @@ Use this tool to maintain a structured TODO list as you work through a multi-ste
 
 **How to use:**
 - Call with `todos: [...]` to replace the full list. Statuses: pending / in_progress / done.
+- Each rendered todo carries its stable id (e.g. `T1`) in the output; echo it back unchanged via `id` when updating an existing todo, and pass it as `todo_id` when dispatching.
 - Call with no `todos` argument to retrieve the current list without changing it.
 - Call with `todos: []` to clear the list.
 - Keep titles short and actionable (e.g. "Read session-control.ts", "Add planMode flag to TurnManager").

@@ -271,6 +271,69 @@ describe('TodoListTool', () => {
     expect(getTodos()).toEqual([{ title: 'blank-id', status: 'pending', id: 'T1' }]);
   });
 
+  it('echoes the assigned id in the update output so the dispatch gate can accept it', async () => {
+    const { tool, getTodos, issued } = makeTool();
+
+    const result = await executeTool(tool, {
+      turnId: 1,
+      toolCallId: 'call_1',
+      args: { todos: [{ title: 'dispatch target', status: 'pending' }] },
+      signal,
+    });
+
+    expect(result).toMatchObject({ isError: false });
+    expect(result.output).toContain('T1 [pending] dispatch target');
+    expect(issued).toEqual(['T1']);
+    // The dispatch gate (Agent/AgentSwarm assertDispatchTodo) resolves todo_id
+    // by exact id lookup (getTodo) — the echoed id must round-trip into it.
+    expect(getTodos().find((t) => t.id === 'T1')).toEqual({
+      title: 'dispatch target',
+      status: 'pending',
+      id: 'T1',
+    });
+  });
+
+  it('query mode echoes the assigned ids back after a write', async () => {
+    const { tool } = makeTool();
+
+    await executeTool(tool, {
+      turnId: 1,
+      toolCallId: 'call_write',
+      args: {
+        todos: [
+          { title: 'a', status: 'pending' },
+          { title: 'b', status: 'in_progress' },
+        ],
+      },
+      signal,
+    });
+    const query = await executeTool(tool, {
+      turnId: 2,
+      toolCallId: 'call_query',
+      args: {},
+      signal,
+    });
+
+    expect(query).toMatchObject({ isError: false });
+    expect(query.output).toContain('T1 [pending] a');
+    expect(query.output).toContain('T2 [in_progress] b');
+  });
+
+  it('echoes an explicit id back unchanged in the update output', async () => {
+    const { tool, issued } = makeTool();
+
+    const result = await executeTool(tool, {
+      turnId: 1,
+      toolCallId: 'call_1',
+      args: { todos: [{ title: 'explicit', status: 'done', id: 't42' }] },
+      signal,
+    });
+
+    expect(result).toMatchObject({ isError: false });
+    expect(issued).toEqual([]); // no counter allocation for an explicit id
+    expect(result.output).toContain('t42 [done] explicit');
+  });
+
   it('rejects a non-main (subagent) caller with a synthetic tool error before execution', async () => {
     const { tool, getTodos, issued } = makeTool(
       [{ title: 'existing', status: 'in_progress' }],

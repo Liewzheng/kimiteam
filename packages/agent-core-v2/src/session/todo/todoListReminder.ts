@@ -108,5 +108,13 @@ function renderTodoListReminder(todos: readonly TodoItem[]): string {
 }
 
 function renderTodoItems(todos: readonly TodoItem[]): string {
-  return todos.map((todo, index) => `${index + 1}. [${todo.status}] ${todo.title}`).join('\n');
+  // Render the stable id (never a positional index — a "1. / 2." number is
+  // not a dispatch handle and invites a bogus todo_id guess). Legacy items
+  // without an id render bare and gain an id on the next full-list write.
+  return todos
+    .map((todo) => {
+      const id = todo.id !== undefined && todo.id.length > 0 ? `${todo.id} ` : '';
+      return `${id}[${todo.status}] ${todo.title}`;
+    })
+    .join('\n');
 }
