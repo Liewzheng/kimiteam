@@ -77,6 +77,7 @@ import {
 } from '#/app/agentPerformance/agentPerformance';
 import { IAgentLifecycleService } from '#/session/agentLifecycle/agentLifecycle';
 import { isSubagentMeta, subagentLabels, subagentParentAgentId } from '#/session/agentLifecycle/subagentMetadata';
+import { materializeOwnedSubagent } from '#/session/agentLifecycle/subagentReuse';
 import { IDutySchedulerService } from '#/session/duty/duty';
 import { ISessionProcessRunner } from '#/session/process/processRunner';
 import { ISessionMetadata } from '#/session/sessionMetadata/sessionMetadata';
@@ -417,11 +418,23 @@ export class SubagentTool implements ISubagentTool {
     let profileName: string;
     let promptText = args.prompt;
     if (isResume) {
-      const target = this.lifecycle.get(resumeAgentId);
+      let target = this.lifecycle.get(resumeAgentId);
       if (target === undefined) {
-        throw new Error2(ErrorCodes.AGENT_NOT_FOUND, `Agent instance "${resumeAgentId}" does not exist`, {
-          details: { agentId: resumeAgentId },
+        // Cold recovery: after a CLI restart only main is rebuilt — a lost
+        // owned subagent is recoverable from the persisted session metadata
+        // (wire.jsonl + state.json). Validate before materializing; a typo or
+        // another parent's agent must not be resurrected out of thin air.
+        target = await materializeOwnedSubagent({
+          lifecycle: this.lifecycle,
+          metadata: this.sessionMetadata,
+          callerAgentId: this.callerAgentId,
+          agentId: resumeAgentId,
         });
+        if (target === undefined) {
+          throw new Error2(ErrorCodes.AGENT_NOT_FOUND, `Agent instance "${resumeAgentId}" does not exist`, {
+            details: { agentId: resumeAgentId },
+          });
+        }
       }
       await this.ensureOwnedIdleSubagent(resumeAgentId, target);
       agentId = target.id;

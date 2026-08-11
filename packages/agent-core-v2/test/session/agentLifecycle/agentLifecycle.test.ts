@@ -539,6 +539,48 @@ describe('AgentLifecycleService', () => {
     });
   });
 
+  it('re-materializing an existing agent preserves persisted labels/parent/forkedFrom', async () => {
+    ix.stub(ISessionMetadata, {
+      _serviceBrand: undefined,
+      ready: Promise.resolve(),
+      onDidChangeMetadata: () => ({ dispose: () => {} }),
+      read: () =>
+        Promise.resolve({
+          id: 'sess_test',
+          createdAt: 0,
+          updatedAt: 0,
+          archived: false,
+          agents: {
+            'agent-lost': {
+              homedir: '/tmp/kimi-agentLifecycle-test/agents/agent-lost',
+              type: 'sub',
+              parentAgentId: 'main',
+              forkedFrom: 'main',
+              labels: { parentAgentId: 'main', profileName: 'coder', swarmItem: 'swarm-1' },
+            },
+          },
+        }),
+      update: () => Promise.resolve(),
+      setTitle: () => Promise.resolve(),
+      setArchived: () => Promise.resolve(),
+      registerAgent,
+    });
+    const svc = ix.get(IAgentLifecycleService);
+
+    // Re-materialize the lost agent with no new binding/labels — doCreate must
+    // merge the persisted provenance instead of clobbering it with defaults.
+    const restored = await svc.create({ agentId: 'agent-lost' });
+
+    expect(restored.id).toBe('agent-lost');
+    expect(registerAgent).toHaveBeenCalledWith('agent-lost', {
+      homedir: '/tmp/kimi-agentLifecycle-home/sessions/ws_test/sess_test/agents/agent-lost',
+      type: 'sub',
+      parentAgentId: 'main',
+      forkedFrom: 'main',
+      labels: { parentAgentId: 'main', profileName: 'coder', swarmItem: 'swarm-1' },
+    });
+  });
+
   it('seals a fresh wire log with the metadata envelope as the first record', async () => {
     const log = recordingAppendLog();
     ix.stub(IAppendLogStore, log.store);

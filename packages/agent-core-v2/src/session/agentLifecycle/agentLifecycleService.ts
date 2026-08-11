@@ -164,12 +164,18 @@ export class AgentLifecycleService extends Disposable implements IAgentLifecycle
     try {
       const wire = handle.accessor.get(IWireService);
       await wire.seal();
+      // Re-materializing an existing agent (cold resume) must not clobber the
+      // persisted provenance: reuse its parent/forkedFrom/labels when the
+      // caller passed none (a fresh spawn/fork with explicit values still
+      // overwrites). The read is a point-in-time snapshot of the in-memory
+      // document; registerAgent's own update queue serializes the actual write.
+      const persisted = (await this.sessionMetadata.read()).agents?.[agentId];
       await this.sessionMetadata.registerAgent(agentId, {
         homedir: agentHomedir,
         type: agentId === 'main' ? 'main' : 'sub',
-        parentAgentId: agentId === 'main' ? undefined : 'main',
-        forkedFrom: opts.forkedFrom,
-        labels: opts.labels,
+        parentAgentId: persisted?.parentAgentId ?? (agentId === 'main' ? undefined : 'main'),
+        forkedFrom: opts.forkedFrom ?? persisted?.forkedFrom,
+        labels: opts.labels ?? persisted?.labels,
       });
       this.onDidCreateEmitter.fire(handle);
       await wire.restore();
