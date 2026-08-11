@@ -19,6 +19,12 @@ export type TodoStatus = 'pending' | 'in_progress' | 'done';
 export interface TodoItem {
   readonly title: string;
   readonly status: TodoStatus;
+  /**
+   * Stable engine-assigned id (`T1`/`T42`), the dispatch handle referenced by
+   * the lead. Absent on legacy sessions written before ids existed — such items
+   * read fine and are assigned an id on the next full-list write.
+   */
+  readonly id?: string;
 }
 
 export interface TranscriptTodo {

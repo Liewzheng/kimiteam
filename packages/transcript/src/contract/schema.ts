@@ -362,6 +362,8 @@ export const attachmentSchema = z.object({
 export const todoItemSchema = z.object({
   title: z.string(),
   status: z.enum(['pending', 'in_progress', 'done']),
+  // Legacy items written before ids existed carry no id (absent, not empty).
+  id: z.string().optional(),
 });
 
 export const todoSchema = z.object({

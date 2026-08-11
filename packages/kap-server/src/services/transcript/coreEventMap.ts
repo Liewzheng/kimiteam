@@ -1495,13 +1495,24 @@ const TODO_ENTITY_ID = 'todo';
 function todoWriteItems(input: unknown): TranscriptTodo['items'] | undefined {
   const todos = (input as { todos?: unknown } | undefined)?.todos;
   if (!Array.isArray(todos)) return undefined;
-  const items: { title: string; status: 'pending' | 'in_progress' | 'done' }[] = [];
+  const items: {
+    title: string;
+    status: 'pending' | 'in_progress' | 'done';
+    id?: string;
+  }[] = [];
   for (const entry of todos) {
     const title = (entry as { title?: unknown } | undefined)?.title;
     const status = (entry as { status?: unknown } | undefined)?.status;
+    const id = (entry as { id?: unknown } | undefined)?.id;
     if (typeof title !== 'string') return undefined;
     if (status !== 'pending' && status !== 'in_progress' && status !== 'done') return undefined;
-    items.push({ title, status });
+    // Legacy args written before ids existed carry no id — keep it absent, not
+    // empty (mirrors the engine's `sanitizeTodoItem`).
+    items.push({
+      title,
+      status,
+      id: typeof id === 'string' && id.length > 0 ? id : undefined,
+    });
   }
   return items;
 }
