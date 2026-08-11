@@ -222,16 +222,25 @@ function payloadOf(record: HistoryWireRecord): Record<string, unknown> {
   return payload;
 }
 
-/** Mirror of the engine's `readTodoItems`: keep only well-formed entries. */
+/**
+ * Mirror of the engine's `readTodoItems`: keep only well-formed entries. The
+ * stable `id` is carried through when present (legacy items omit it — absent,
+ * not empty), matching the engine's `sanitizeTodoItem`.
+ */
 function readTodoItems(raw: unknown): TodoItem[] {
   if (!Array.isArray(raw)) return [];
   const items: TodoItem[] = [];
   for (const entry of raw) {
     const title = (entry as { title?: unknown } | undefined)?.title;
     const status = (entry as { status?: unknown } | undefined)?.status;
+    const id = (entry as { id?: unknown } | undefined)?.id;
     if (typeof title !== 'string') continue;
     if (status !== 'pending' && status !== 'in_progress' && status !== 'done') continue;
-    items.push({ title, status });
+    items.push({
+      title,
+      status,
+      id: typeof id === 'string' && id.length > 0 ? id : undefined,
+    });
   }
   return items;
 }

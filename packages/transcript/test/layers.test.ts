@@ -678,9 +678,13 @@ describe('foldWireRecordFacts (cold facts)', () => {
           type: 'tools.update_store',
           key: 'todo',
           value: [
-            { title: 'write tests', status: 'in_progress' },
-            { title: 'ship', status: 'pending' },
+            { title: 'write tests', status: 'in_progress', id: 'T1' },
+            // Legacy item written before ids existed — no id, must stay absent.
+            { title: 'legacy', status: 'pending' },
+            { title: 'ship', status: 'pending', id: 'T2' },
             { title: 'malformed' },
+            // An empty id is not a real id — folded as absent, never empty.
+            { title: 'empty id', status: 'done', id: '' },
           ],
           time: 3000,
         },
@@ -691,8 +695,10 @@ describe('foldWireRecordFacts (cold facts)', () => {
       {
         todoId: 'todo',
         items: [
-          { title: 'write tests', status: 'in_progress' },
-          { title: 'ship', status: 'pending' },
+          { title: 'write tests', status: 'in_progress', id: 'T1' },
+          { title: 'legacy', status: 'pending' },
+          { title: 'ship', status: 'pending', id: 'T2' },
+          { title: 'empty id', status: 'done' },
         ],
         updatedAt: new Date(3000).toISOString(),
       },

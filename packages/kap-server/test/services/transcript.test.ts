@@ -1335,7 +1335,14 @@ describe('AgentTranscriptProjector', () => {
         turnId: 1,
         toolCallId: 'call_write',
         name: 'TodoList',
-        args: { todos: [{ title: 'write tests', status: 'in_progress' }, { title: 'ship', status: 'pending' }] },
+        args: {
+          todos: [
+            { title: 'write tests', status: 'in_progress', id: 'T1' },
+            // Legacy arg written before ids existed — no id, must stay absent.
+            { title: 'legacy', status: 'pending' },
+            { title: 'ship', status: 'pending', id: 'T2' },
+          ],
+        },
       }),
     );
     const writeFrame = turnOps('t1', tx.getItems()).steps[0]!.frames.find(
@@ -1345,8 +1352,9 @@ describe('AgentTranscriptProjector', () => {
 
     feed(ev({ type: 'tool.result', toolCallId: 'call_write', output: 'updated' }));
     expect(tx.getTodo('todo')?.items).toEqual([
-      { title: 'write tests', status: 'in_progress' },
-      { title: 'ship', status: 'pending' },
+      { title: 'write tests', status: 'in_progress', id: 'T1' },
+      { title: 'legacy', status: 'pending' },
+      { title: 'ship', status: 'pending', id: 'T2' },
     ]);
 
     // A failed write must not clobber the document.
@@ -1360,7 +1368,7 @@ describe('AgentTranscriptProjector', () => {
       }),
     );
     feed(ev({ type: 'tool.result', toolCallId: 'call_fail', output: 'boom', isError: true }));
-    expect(tx.getTodo('todo')?.items).toHaveLength(2);
+    expect(tx.getTodo('todo')?.items).toHaveLength(3);
   });
 
   it('emits an unanchored entity when the payload has no toolCallId', () => {
