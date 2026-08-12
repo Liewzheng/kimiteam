@@ -916,6 +916,25 @@ watch(
 // restoring a scrolled-up position.
 const scrollStateBySession = new Map<string, { top: number; following: boolean }>();
 
+/** Re-run ChatPane's visible-range computation against the CURRENT geometry.
+ *  Called after a scroll restore / bottom-follow in this pane. ChatPane's own
+ *  rect checks (flush:'post' turns watcher, KeepAlive onActivated) run before
+ *  the parent restores scrollTop here, so turns at the restored position were
+ *  only observed. One more pass (post-nextTick + rAF, so the final scrollTop /
+ *  layout is in effect) mounts them deterministically instead of betting on
+ *  IntersectionObserver delivery — which streaming turn churn can starve (see
+ *  the incremental-reconcile fix in ChatPane). A second rAF pass catches the
+ *  turns that become near-viewport after the first pass swaps placeholders for
+ *  real content (heights shift). */
+function mountChatPaneVisibility(): void {
+  void nextTick().then(() => {
+    raf(() => {
+      chatPaneRef.value?.mountVisibleTurns();
+      raf(() => chatPaneRef.value?.mountVisibleTurns());
+    });
+  });
+}
+
 watch(
   () => props.fileReloadKey,
   async (newKey, oldKey) => {
@@ -941,11 +960,26 @@ watch(
         scheduleStableFollow();
       }
     } else {
+      // No saved scroll state — a session opened for the first time (or a
+      // brand-new session). Start pinned at the bottom, but skip the bottom
+      // scroll + stable-follow while the turns are still empty (cold snapshot
+      // fetch / brand-new session): writing lastScrollTop/following against an
+      // empty pane would consume the scroll state before the real content
+      // lands. The sessionLoading watcher (or the scrollKey watcher once turns
+      // arrive) takes over the bottom-follow from there.
       following.value = true;
       lastScrollTop = 0;
-      scrollToBottom(false);
-      scheduleStableFollow();
+      if (props.turns.length > 0) {
+        scrollToBottom(false);
+        scheduleStableFollow();
+      }
     }
+    // ChatPane's own rect checks ran against the PRE-restore scrollTop (its
+    // flush:'post' turns watcher / KeepAlive onActivated beat the restore
+    // above). Re-run the visible-range computation on the FINAL geometry so
+    // restored-position turns mount deterministically instead of waiting on
+    // IntersectionObserver delivery.
+    mountChatPaneVisibility();
     updateActiveTocQuery();
   },
 );
@@ -957,6 +991,10 @@ watch(
     following.value = true;
     await nextTick();
     scheduleStableFollow();
+    // First open of a long session: the turns just landed, so mount the
+    // bottom / near-viewport turns against the settled geometry (see
+    // mountChatPaneVisibility).
+    mountChatPaneVisibility();
     updateActiveTocQuery();
   },
 );
