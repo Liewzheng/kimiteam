@@ -76,6 +76,7 @@ import '#/session/subagent/configSection';
 import {
   DEFAULT_SUBAGENT_DUTY_IDLE_TTL_MS,
   DEFAULT_SUBAGENT_MAX_STANDBY,
+  DEFAULT_SUBAGENT_RUN_ALERT_MS,
   DEFAULT_SUBAGENT_STANDBY_KEEPALIVE_MS,
   DEFAULT_SUBAGENT_TIMEOUT_MS,
   DEFAULT_SUBAGENT_WARM_INTERVAL_MS,
@@ -83,10 +84,12 @@ import {
   resolveSubagentBinding,
   resolveSubagentDutyIdleTtlMs,
   resolveSubagentMaxStandby,
+  resolveSubagentRunAlertMs,
   resolveSubagentStandbyKeepaliveMs,
   resolveSubagentTimeoutMs,
   resolveTeamMode,
   resolveSubagentWarmIntervalMs,
+  SUBAGENT_RUN_ALERT_ENV,
   SUBAGENT_SECTION,
   SUBAGENT_TIMEOUT_ENV,
   SubagentConfigSchema,
@@ -1747,6 +1750,53 @@ describe('subagent config section', () => {
 
     env[SUBAGENT_TIMEOUT_ENV] = '7000';
     expect(resolveSubagentTimeoutMs(config)).toBe(7000);
+
+    disposables.dispose();
+  });
+
+  it('defaults the run alert to 15 minutes and honours the env override', async () => {
+    const env: Record<string, string> = {};
+    const { config, disposables } = await createConfig(env);
+
+    expect(resolveSubagentRunAlertMs(config)).toBe(DEFAULT_SUBAGENT_RUN_ALERT_MS);
+
+    // An unparseable env value degrades to the default, like the timeout env.
+    env[SUBAGENT_RUN_ALERT_ENV] = 'abc';
+    expect(resolveSubagentRunAlertMs(config)).toBe(DEFAULT_SUBAGENT_RUN_ALERT_MS);
+
+    env[SUBAGENT_RUN_ALERT_ENV] = '600000';
+    expect(resolveSubagentRunAlertMs(config)).toBe(600_000);
+
+    disposables.dispose();
+  });
+
+  it('lets run_alert_ms = 0 disable the alert (env and config alike)', async () => {
+    const env: Record<string, string> = {};
+    const { config, disposables } = await createConfig(env);
+
+    // `0` is a valid "disabled" value for the run alert — unlike the timeout
+    // env, whose parse floor is `>= 1`.
+    env[SUBAGENT_RUN_ALERT_ENV] = '0';
+    expect(resolveSubagentRunAlertMs(config)).toBe(0);
+
+    // An explicit config `0` also disables, beating the env's absence.
+    const disabled = await createConfig({}, '[subagent]\nrun_alert_ms = 0\n');
+    expect(resolveSubagentRunAlertMs(disabled.config)).toBe(0);
+    disabled.disposables.dispose();
+
+    disposables.dispose();
+  });
+
+  it('reads run_alert_ms from config.toml and lets the env var win', async () => {
+    const env: Record<string, string> = {};
+    const { config, disposables } = await createConfig(
+      env,
+      '[subagent]\nrun_alert_ms = 120000\n',
+    );
+    expect(resolveSubagentRunAlertMs(config)).toBe(120_000);
+
+    env[SUBAGENT_RUN_ALERT_ENV] = '180000';
+    expect(resolveSubagentRunAlertMs(config)).toBe(180_000);
 
     disposables.dispose();
   });

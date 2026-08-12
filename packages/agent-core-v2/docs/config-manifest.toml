@@ -378,6 +378,7 @@ merge_all_available_skills = true
 #   hooks: stripEnv
 #   env:
 #     timeout_ms <- KIMI_SUBAGENT_TIMEOUT_MS (custom parse)
+#     run_alert_ms <- KIMI_SUBAGENT_RUN_ALERT_MS (custom parse)
 # ##########################################################################
 
 [subagent]
@@ -399,6 +400,7 @@ timeout_ms = 7200000
 # max_standby: integer
 # standby_keepalive_ms: integer
 # score_gate: "off" | "warn" | "enforce"
+# run_alert_ms: integer
 
 # ##########################################################################
 # task

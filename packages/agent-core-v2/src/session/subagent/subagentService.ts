@@ -6,7 +6,11 @@
  * `onWillStartAgentTask` hook slot and the `onDidStopAgentTask` event fired
  * around each mirrored run. The service resolves the target agent from the
  * lifecycle registry and picks its summary policy from the profile catalog;
- * turn driving itself is delegated to a pure helper. Bound at Session scope.
+ * turn driving itself is delegated to a pure helper. It also owns team-mode
+ * run-duration alerts: a timer chain per supervised run injects a
+ * `system_trigger` message into the main agent's next turn once the run
+ * exceeds `[subagent] run_alert_ms` (default 15 min) and again every 30 min.
+ * Bound at Session scope.
  */
 
 import { Disposable, type IDisposable } from '#/_base/di/lifecycle';
@@ -19,6 +23,7 @@ import {
 } from '#/_base/di/scope';
 import { Emitter } from '#/_base/event';
 import { ILogService } from '#/_base/log/log';
+import { setClampedTimeout } from '#/_base/utils/timer';
 import type { AgentProfileSummaryPolicy } from '#/app/agentProfileCatalog/agentProfileCatalog';
 import { IAgentPerformanceService, type PerformanceShift } from '#/app/agentPerformance/agentPerformance';
 import { IRuntimeStatusService } from '#/app/runtimeStatus/runtimeStatus';
@@ -43,7 +48,13 @@ import {
   type RunSettledContext,
 } from './subagent';
 import { ISubagentPoolService } from '../subagentPool/subagentPool';
-import { resolveRecordedModelId, resolveSubagentIdleTtlMs, resolveTeamMode } from './configSection';
+import {
+  resolveRecordedModelId,
+  resolveSubagentIdleTtlMs,
+  resolveSubagentRunAlertMs,
+  resolveTeamMode,
+  SUBAGENT_RUN_ALERT_INTERVAL_MS,
+} from './configSection';
 import { runAgentTurn } from './runAgentTurn';
 import {
   SubagentIdleReaper,
@@ -105,6 +116,13 @@ export class SessionSubagentService extends Disposable implements ISessionSubage
    * `team_auto` is on; cold resume re-hangs it via `reconcile`.
    */
   private readonly autoInitiative: AutoInitiativeService;
+  /**
+   * Per-agent run-duration alert timer (agentId → the latest chain handle).
+   * One chain per agent's current run: armed at run start, cleared when the
+   * run settles (success / failure / cancellation) and on service disposal —
+   * the timer must never outlive the run it watches.
+   */
+  private readonly runAlertTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   get onDidStopAgentTask() {
     return this.onDidStopAgentTaskEmitter.event;
@@ -226,6 +244,16 @@ export class SessionSubagentService extends Disposable implements ISessionSubage
     const recordShift = teamMode && profileName !== undefined;
     const startedAt = recordShift ? new Date() : undefined;
     const sid = recordShift ? this.sessionContext.sessionId : undefined;
+
+    // Run-duration alerts (supervised team-mode dispatches): arm a timer chain
+    // that injects a system message into the main agent's next turn once the
+    // run exceeds `run_alert_ms` (default 15 min) and again every 30 min —
+    // the lead is nudged to review long-running work instead of waiting blind
+    // for the 2h hard timeout. Duty members (no hard timeout) are covered too.
+    // `0` disables. The chain dies with the run (settle / cancel clears it).
+    if (supervised) {
+      this.armRunDurationAlert(agentId, profileName!, run.completion);
+    }
 
     // Baseline TeamScore count for this dispatch, captured after the turn
     // started (so a score from a prior dispatch that settled during the pool
@@ -379,6 +407,91 @@ export class SessionSubagentService extends Disposable implements ISessionSubage
     }
   }
 
+  /**
+   * Arm the run-duration alert chain for a supervised dispatch. The chain
+   * injects a system message into the main agent's next turn once the run has
+   * been running for `run_alert_ms` (default 15 min) and again every
+   * {@link SUBAGENT_RUN_ALERT_INTERVAL_MS}; `0` disables. The chain is stored
+   * per agent in `runAlertTimers` and dies with the run — a settle (success,
+   * failure or cancellation) clears the handle and suppresses any queued tick,
+   * so a timer never outlives the run it watches (also cleared on dispose).
+   */
+  private armRunDurationAlert(
+    agentId: string,
+    profileName: string,
+    completion: Promise<unknown>,
+  ): void {
+    const firstDelayMs = resolveSubagentRunAlertMs(this.config);
+    if (firstDelayMs <= 0) return; // `0` disables the alert
+    let settled = false;
+    // Cumulative elapsed at each tick — the message reports how long the run
+    // has been going (15 / 45 / 75 …), not the interval since the last alert.
+    let elapsedMs = firstDelayMs;
+    const stop = (): void => {
+      settled = true;
+      const handle = this.runAlertTimers.get(agentId);
+      if (handle !== undefined) {
+        clearTimeout(handle);
+        this.runAlertTimers.delete(agentId);
+      }
+    };
+    const arm = (delay: number): void => {
+      const handle = setClampedTimeout(() => {
+        if (this.runAlertTimers.get(agentId) === handle) this.runAlertTimers.delete(agentId);
+        if (settled) return; // the run settled before this tick — suppress
+        void this.alertRunDuration(agentId, profileName, elapsedMs).catch(() => {
+          /* swallow — an alert must never break the run */
+        });
+        elapsedMs += SUBAGENT_RUN_ALERT_INTERVAL_MS;
+        arm(SUBAGENT_RUN_ALERT_INTERVAL_MS);
+      }, delay);
+      this.runAlertTimers.set(agentId, handle);
+    };
+    arm(firstDelayMs);
+    void completion.then(stop, stop).catch(() => {
+      /* swallow — alert teardown must never produce an unhandled rejection */
+    });
+  }
+
+  /**
+   * Run-duration alert: inject a non-user `system_trigger` message into the
+   * main agent's next turn — the same steer path as the team-score reminder —
+   * so the lead notices a long-running dispatch. It rides the natural turn
+   * flow (never cancels or preempts the current turn; a `system_trigger`
+   * steer is exempt from the lead-turn user budget). Fire-and-forget: an
+   * inject failure must never break the run.
+   */
+  private async alertRunDuration(
+    agentId: string,
+    profileName: string,
+    elapsedMs: number,
+  ): Promise<void> {
+    const mainHandle = this.agentLifecycle.get(MAIN_AGENT_ID);
+    if (mainHandle === undefined) return; // main not materialized — nothing to steer into
+    const minutes = Math.max(1, Math.round(elapsedMs / 60_000));
+    const origin: SystemTriggerOrigin = {
+      kind: 'system_trigger',
+      name: 'subagent_run_alert',
+    };
+    const message: ContextMessage = {
+      role: 'user',
+      content: [
+        {
+          type: 'text',
+          text: `Member ${agentId} (${profileName}) has been running for ${minutes} minute${minutes === 1 ? '' : 's'}.`,
+        },
+      ],
+      toolCalls: [],
+      origin,
+    };
+    try {
+      const promptService = mainHandle.accessor.get(IAgentPromptService);
+      await promptService.inject(message);
+    } catch {
+      // swallow — an alert must never break the run
+    }
+  }
+
   notifyAgentTaskStopped(context: AgentTaskStopHookContext): void {
     this.onDidStopAgentTaskEmitter.fire(context);
   }
@@ -387,6 +500,15 @@ export class SessionSubagentService extends Disposable implements ISessionSubage
     const profileName = handle.accessor.get(IAgentProfileService).data().profileName;
     if (profileName === undefined) return undefined;
     return this.catalog.get(profileName)?.summaryPolicy;
+  }
+
+  override dispose(): void {
+    // A run still in flight at session close must not leave its alert timer
+    // ticking on a dead service — clear every chain before the registered
+    // children (reaper / warmer) are disposed.
+    for (const handle of this.runAlertTimers.values()) clearTimeout(handle);
+    this.runAlertTimers.clear();
+    super.dispose();
   }
 }
 

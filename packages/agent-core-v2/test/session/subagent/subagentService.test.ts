@@ -152,6 +152,8 @@ function buildStubs(options: {
   warmIntervalMs?: number;
   /** `[subagent] duty_idle_ttl_ms`, when set; drives the duty-member idle TTL. */
   dutyIdleTtlMs?: number;
+  /** `[subagent] run_alert_ms`, when set; drives the run-duration alert chain (0 disables). */
+  runAlertMs?: number;
   /** Whether `profileName` is an on-duty member (`duty: true` in its agent file). */
   duty?: boolean;
   /** `[secondary_model]` config, when present; drives derived-secondary binding. */
@@ -165,6 +167,7 @@ function buildStubs(options: {
   const idleTtlMs = options.idleTtlMs;
   const warmIntervalMs = options.warmIntervalMs;
   const dutyIdleTtlMs = options.dutyIdleTtlMs;
+  const runAlertMs = options.runAlertMs;
   const duty = options.duty ?? false;
   const profileName = 'profileName' in options ? options.profileName : PROFILE_NAME;
   const modelAlias = options.modelAlias ?? MODEL_ALIAS;
@@ -271,6 +274,7 @@ function buildStubs(options: {
             ...(idleTtlMs !== undefined ? { idleTtlMs } : {}),
             ...(warmIntervalMs !== undefined ? { warmIntervalMs } : {}),
             ...(dutyIdleTtlMs !== undefined ? { dutyIdleTtlMs } : {}),
+            ...(runAlertMs !== undefined ? { runAlertMs } : {}),
           }
         : section === SECONDARY_MODEL_SECTION
           ? secondaryModel
@@ -1734,3 +1738,204 @@ describe('AutoInitiativeService', () => {
     expect(resolveTeamAutoIdleMs(set)).toBe(60_000);
   });
 });
+
+describe('SessionSubagentService — run-duration alerts', () => {
+  const defaultRequest: AgentRunRequest = { kind: 'prompt', prompt: 'do something' };
+  const defaultOpts: RunAgentOptions = {
+    signal: new AbortController().signal,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function mockedRun(completion: Promise<{ summary: string }>, agentId: string = AGENT_ID) {
+    mockRunAgentTurn.mockResolvedValue({
+      agentId,
+      turn: {} as never,
+      completion,
+    });
+  }
+
+  /**
+   * Texts of the run-duration-alert injects only. The score reminder shares
+   * the same inject path, so assertions filter by the alert's origin name.
+   */
+  function runAlertTexts(inject: Mock): string[] {
+    return (inject as Mock).mock.calls
+      .map(
+        ([message]) =>
+          message as
+            | { origin?: { name?: string }; content?: Array<{ text?: string }> }
+            | undefined,
+      )
+      .filter((message) => message?.origin?.name === 'subagent_run_alert')
+      .map((message) => message?.content?.[0]?.text ?? '');
+  }
+
+  it('injects the first alert at the 15-minute default and repeats every 30 minutes', async () => {
+    const stubs = buildStubs({ teamMode: true, mainMaterialized: true });
+    const service = buildService(stubs);
+    const deferred = deferredCompletion();
+    mockedRun(deferred.promise);
+
+    await service.run(AGENT_ID, defaultRequest, defaultOpts);
+
+    await vi.advanceTimersByTimeAsync(15 * 60 * 1000 - 1);
+    expect(runAlertTexts(stubs.mainPromptService.inject)).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(runAlertTexts(stubs.mainPromptService.inject)).toHaveLength(1);
+    expect(runAlertTexts(stubs.mainPromptService.inject)[0]).toBe(
+      'Member agent-1 (test-coder) has been running for 15 minutes.',
+    );
+
+    // Repeat cadence: 45 min, then 75 min (15/45/75 gradient).
+    await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+    expect(runAlertTexts(stubs.mainPromptService.inject)).toHaveLength(2);
+    expect(runAlertTexts(stubs.mainPromptService.inject)[1]).toBe(
+      'Member agent-1 (test-coder) has been running for 45 minutes.',
+    );
+    await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+    expect(runAlertTexts(stubs.mainPromptService.inject)).toHaveLength(3);
+    expect(runAlertTexts(stubs.mainPromptService.inject)[2]).toBe(
+      'Member agent-1 (test-coder) has been running for 75 minutes.',
+    );
+
+    deferred.resolve({ summary: 'done' });
+    await handleCompletion(stubs, deferred, service);
+  });
+
+  it('honours a configured run_alert_ms threshold', async () => {
+    const stubs = buildStubs({ teamMode: true, mainMaterialized: true, runAlertMs: 1_000 });
+    const service = buildService(stubs);
+    const deferred = deferredCompletion();
+    mockedRun(deferred.promise);
+
+    await service.run(AGENT_ID, defaultRequest, defaultOpts);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(runAlertTexts(stubs.mainPromptService.inject)).toHaveLength(1);
+    expect(runAlertTexts(stubs.mainPromptService.inject)[0]).toBe(
+      'Member agent-1 (test-coder) has been running for 1 minute.',
+    );
+
+    deferred.resolve({ summary: 'done' });
+    await handleCompletion(stubs, deferred, service);
+  });
+
+  it('clears the timer when the run settles — no alert after completion', async () => {
+    const stubs = buildStubs({ teamMode: true, mainMaterialized: true });
+    const service = buildService(stubs);
+    const deferred = deferredCompletion();
+    mockedRun(deferred.promise);
+
+    await service.run(AGENT_ID, defaultRequest, defaultOpts);
+    deferred.resolve({ summary: 'done' });
+    await vi.advanceTimersByTimeAsync(0); // settle → stop() clears the chain
+
+    await vi.advanceTimersByTimeAsync(2 * 60 * 60 * 1000);
+    expect(runAlertTexts(stubs.mainPromptService.inject)).toHaveLength(0);
+    await handleCompletion(stubs, deferred, service);
+  });
+
+  it('suppresses a tick that fires at the settle boundary', async () => {
+    const stubs = buildStubs({ teamMode: true, mainMaterialized: true, runAlertMs: 1_000 });
+    const service = buildService(stubs);
+    const deferred = deferredCompletion();
+    mockedRun(deferred.promise);
+
+    await service.run(AGENT_ID, defaultRequest, defaultOpts);
+    // The run settles in the same tick the first alert would fire — the
+    // queued macrotask must be suppressed by the settle flag.
+    deferred.resolve({ summary: 'done' });
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(runAlertTexts(stubs.mainPromptService.inject)).toHaveLength(0);
+    await handleCompletion(stubs, deferred, service);
+  });
+
+  it('disables the alert entirely with run_alert_ms = 0', async () => {
+    const stubs = buildStubs({ teamMode: true, mainMaterialized: true, runAlertMs: 0 });
+    const service = buildService(stubs);
+    const deferred = deferredCompletion();
+    mockedRun(deferred.promise);
+
+    await service.run(AGENT_ID, defaultRequest, defaultOpts);
+    await vi.advanceTimersByTimeAsync(2 * 60 * 60 * 1000);
+    expect(runAlertTexts(stubs.mainPromptService.inject)).toHaveLength(0);
+
+    deferred.resolve({ summary: 'done' });
+    await handleCompletion(stubs, deferred, service);
+  });
+
+  it('arms nothing when team mode is off', async () => {
+    const stubs = buildStubs({ teamMode: false, mainMaterialized: true });
+    const service = buildService(stubs);
+    const deferred = deferredCompletion();
+    mockedRun(deferred.promise);
+
+    await service.run(AGENT_ID, defaultRequest, defaultOpts);
+    await vi.advanceTimersByTimeAsync(15 * 60 * 1000);
+    expect(runAlertTexts(stubs.mainPromptService.inject)).toHaveLength(0);
+
+    deferred.resolve({ summary: 'done' });
+    await handleCompletion(stubs, deferred, service);
+  });
+
+  it('arms nothing for the main agent itself', async () => {
+    const stubs = buildStubs({ teamMode: true, mainMaterialized: true, agentId: MAIN_AGENT_ID });
+    const service = buildService(stubs);
+    const deferred = deferredCompletion();
+    mockedRun(deferred.promise, MAIN_AGENT_ID);
+
+    await service.run(MAIN_AGENT_ID, defaultRequest, defaultOpts);
+    await vi.advanceTimersByTimeAsync(15 * 60 * 1000);
+    expect(runAlertTexts(stubs.mainPromptService.inject)).toHaveLength(0);
+
+    deferred.resolve({ summary: 'done' });
+    await handleCompletion(stubs, deferred, service);
+  });
+
+  it('swallows an inject failure — the run still completes', async () => {
+    const stubs = buildStubs({ teamMode: true, mainMaterialized: true });
+    (stubs.mainPromptService.inject as Mock).mockRejectedValue(new Error('boom'));
+    const service = buildService(stubs);
+    const deferred = deferredCompletion();
+    mockedRun(deferred.promise);
+
+    const handle = await service.run(AGENT_ID, defaultRequest, defaultOpts);
+    await vi.advanceTimersByTimeAsync(15 * 60 * 1000);
+    await vi.advanceTimersByTimeAsync(0);
+
+    deferred.resolve({ summary: 'done' });
+    await expect(handle.completion).resolves.toEqual({ summary: 'done' });
+  });
+
+  it('clears the alert chain on service disposal while the run is in flight', async () => {
+    const stubs = buildStubs({ teamMode: true, mainMaterialized: true });
+    const service = buildService(stubs);
+    const deferred = deferredCompletion();
+    mockedRun(deferred.promise);
+
+    await service.run(AGENT_ID, defaultRequest, defaultOpts);
+    service.dispose(); // session close mid-run → alert chain cleared
+
+    await vi.advanceTimersByTimeAsync(15 * 60 * 1000);
+    expect(runAlertTexts(stubs.mainPromptService.inject)).toHaveLength(0);
+    deferred.resolve({ summary: 'done' });
+  });
+});
+
+/** Resolve the run completion and flush the settle bookkeeping microtasks. */
+async function handleCompletion(
+  stubs: ServiceStubs,
+  deferred: ReturnType<typeof deferredCompletion>,
+  service: SessionSubagentService,
+): Promise<void> {
+  await deferred.promise.catch(() => {});
+  await vi.advanceTimersByTimeAsync(0);
+  service.dispose();
+}
