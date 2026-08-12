@@ -201,9 +201,9 @@ onUnmounted(() => {
                 <tr><td class="tk">--color-success</td><td class="val"><span class="swatch" style="background:#0e7a38"></span>#0e7a38</td><td class="val"><span class="swatch" style="background:#3fb950"></span>#3fb950</td><td>Success / pass</td></tr>
                 <tr><td class="tk">--color-warning</td><td class="val"><span class="swatch" style="background:#a9610a"></span>#a9610a</td><td class="val"><span class="swatch" style="background:#d29922"></span>#d29922</td><td>Warning / pending</td></tr>
                 <tr><td class="tk">--color-danger</td><td class="val"><span class="swatch" style="background:#c0392b"></span>#c0392b</td><td class="val"><span class="swatch" style="background:#f85149"></span>#f85149</td><td>Danger / error / abort</td></tr>
-                <tr><td class="tk">--color-team-working</td><td class="val"><span class="swatch" style="background:#e6e6e6"></span>#e6e6e6</td><td class="val"><span class="swatch" style="background:#3d444d"></span>#3d444d</td><td>Team member-card bg — working tier (pure grey, darkest)</td></tr>
+                <tr><td class="tk">--color-team-working</td><td class="val"><span class="swatch" style="background:#fafafa"></span>#fafafa</td><td class="val"><span class="swatch" style="background:#161b22"></span>#161b22</td><td>Team member-card bg — working tier (pure grey, lightest / most subtle)</td></tr>
                 <tr><td class="tk">--color-team-resting</td><td class="val"><span class="swatch" style="background:#f0f0f0"></span>#f0f0f0</td><td class="val"><span class="swatch" style="background:#1c2128"></span>#1c2128</td><td>Team member-card bg — resting tier (pure grey, middle)</td></tr>
-                <tr><td class="tk">--color-team-off-duty</td><td class="val"><span class="swatch" style="background:#fafafa"></span>#fafafa</td><td class="val"><span class="swatch" style="background:#161b22"></span>#161b22</td><td>Team member-card bg — off-duty tier (pure grey, lightest / most subtle)</td></tr>
+                <tr><td class="tk">--color-team-off-duty</td><td class="val"><span class="swatch" style="background:#e6e6e6"></span>#e6e6e6</td><td class="val"><span class="swatch" style="background:#3d444d"></span>#3d444d</td><td>Team member-card bg — off-duty tier (pure grey, darkest)</td></tr>
               </tbody>
             </table>
 
