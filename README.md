@@ -3,9 +3,9 @@
 在官方 [Kimi Code CLI](https://github.com/MoonshotAI/kimi-code) 基础上增加了 Subagent 团队化能力。每个 Subagent 有独立角色/模型/上下文，主模型派工默认后台并行，你可以通过 `/team` 面板管理团队。
 
 > [!IMPORTANT]
-> **仓库迁移 · 新章（Repository migration · a new chapter）**：kimiteam 是当前**活跃维护**的社区发行版（v0.33.0 起，基于官方 Kimi Code 0.33 基线）。旧仓 Liewzheng/kimi-code 已归档停维，后续版本与维护全部转移至此。
+> **仓库迁移 · 新章（Repository migration · a new chapter）**：kimiteam 是当前**活跃维护**的社区发行版（v0.33.0 起，基于官方 Kimi Code 0.33 基线），以**滚动开发版（Rolling dev build）**方式持续发布——不再按固定版本号发布，每次合并后由 CI 自动构建并刷新 GitHub Release `kimiteam-dev`，重复运行安装命令即可升级到最新（见下方「升级」）。旧仓 Liewzheng/kimi-code 已归档停维，后续版本与维护全部转移至此。
 > - 与官方的关系如实说明：官方推荐并采纳了社区另一方案（MoonshotAI/kimi-code PR #2633 `tower` 命令，作者 tpoisonooo）；我们自己的 subagent-team 方案从未提交官方 PR，官方未看到、也未推荐我们的工作，本方案因此独立发展。官方 Web 界面已闭源（code-app 私有仓库），本仓库保留 dist-web bundle。
-> - 本仓库由社区持续维护：安装、升级、使用与 issue 反馈均在本仓库进行，欢迎使用与贡献。感谢所有使用者。
+> - 本仓库由社区持续维护：安装、升级、使用与 issue 反馈均在本仓库进行，欢迎使用与贡献；当前滚动版可正常安装、使用与 fork，也欢迎自行 fork 继续维护。感谢所有使用者。
 
 ## 快速安装
 
@@ -16,6 +16,8 @@ curl -fsSL https://raw.githubusercontent.com/Liewzheng/kimiteam/main/scripts/ins
 ```
 
 脚本从 GitHub Release `kimiteam-dev` 下载分发文件到 `~/.kimi-code/lib/kimi/`，写 `~/.kimi-code/bin/kimiteam` 启动器。幂等可重复跑，自动备份旧版即升级。
+
+启动器安装到 `~/.kimi-code/bin/kimiteam`。若该目录不在 PATH 中，安装器会打印 NOTE 提示；按提示将 `~/.kimi-code/bin` 加入 shell profile（如 `export PATH="${HOME}/.kimi-code/bin:${PATH}"`）后，即可直接运行 `kimiteam`。
 
 ## 基本用法
 

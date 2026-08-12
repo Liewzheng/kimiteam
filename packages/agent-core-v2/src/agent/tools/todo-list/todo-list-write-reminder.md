@@ -1,1 +1,1 @@
-Ensure that you continue to use the todo list to track progress. Mark tasks done immediately after finishing them, and keep exactly one task in_progress when work is underway.
+Ensure that you continue to use the todo list to track progress. Dispatched todos stay in_progress until the tech-lead marks them done after acceptance review and scoring; mark non-dispatched work done as soon as it finishes. Keep exactly one task in_progress when work is underway.
