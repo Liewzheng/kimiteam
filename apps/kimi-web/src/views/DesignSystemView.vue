@@ -423,7 +423,7 @@ onUnmounted(() => {
               <tbody>
                 <tr><td class="tk">--p-sidebar-w</td><td class="val">264px</td><td>left session sidebar width</td></tr>
                 <tr><td class="tk">--p-content-max</td><td class="val">760px</td><td>chat reading-column max width (regular chat prose)</td></tr>
-                <tr><td class="tk">--p-content-wide</td><td class="val">920px</td><td>wide content (settings / panel)</td></tr>
+                <tr><td class="tk">--p-content-wide</td><td class="val">1200px</td><td>wide content (settings / panel)</td></tr>
                 <tr><td class="tk">--p-table-max</td><td class="val">1040px</td><td>desktop wide-table max width (see §04)</td></tr>
                 <tr><td class="tk">--p-table-cell-max</td><td class="val">700px</td><td>max width of a single table column; longer cell content wraps (see §04)</td></tr>
                 <tr><td class="tk">--p-bp-sm</td><td class="val">640px</td><td>mobile / desktop boundary</td></tr>
