@@ -3,9 +3,9 @@
 在官方 [Kimi Code CLI](https://github.com/MoonshotAI/kimi-code) 基础上增加了 Subagent 团队化能力。每个 Subagent 有独立角色/模型/上下文，主模型派工默认后台并行，你可以通过 `/team` 面板管理团队。
 
 > [!IMPORTANT]
-> **最后维护版本（Last maintained release）**：kimiteam 是本系列**最后维护的开源版本**（v0.33.0，基于官方 Kimi Code 0.33 基线），此后不再继续维护。
-> - 原因如实说明：官方推荐并采纳了社区另一方案（MoonshotAI/kimi-code PR #2633 `tower` 命令，作者 tpoisonooo）；我们自己的 subagent-team 方案从未提交官方 PR，官方未看到、也未推荐我们的工作。官方 Web 界面也已闭源（code-app 私有仓库，本仓库仅保留 dist-web bundle）。
-> - 本版本仍可正常安装、使用与 fork，欢迎自行 fork 继续维护。感谢所有使用者与贡献者。
+> **仓库迁移 · 新章（Repository migration · a new chapter）**：kimiteam 是当前**活跃维护**的社区发行版（v0.33.0 起，基于官方 Kimi Code 0.33 基线）。旧仓 Liewzheng/kimi-code 已归档停维，后续版本与维护全部转移至此。
+> - 与官方的关系如实说明：官方推荐并采纳了社区另一方案（MoonshotAI/kimi-code PR #2633 `tower` 命令，作者 tpoisonooo）；我们自己的 subagent-team 方案从未提交官方 PR，官方未看到、也未推荐我们的工作，本方案因此独立发展。官方 Web 界面已闭源（code-app 私有仓库），本仓库保留 dist-web bundle。
+> - 本仓库由社区持续维护：安装、升级、使用与 issue 反馈均在本仓库进行，欢迎使用与贡献。感谢所有使用者。
 
 ## 快速安装
 
@@ -50,10 +50,8 @@ kimiteam                    # 启动交互式会话（与官方 kimi 参数兼�
 - **原生 PowerShell 一键安装(首选)**:免下载,短链脚本为 ASCII-only,安全经 `irm|iex` 管道执行:
 
   ```powershell
-  irm https://liewzheng.github.io/kimi-code/install.ps1 | iex
+  irm https://liewzheng.github.io/kimiteam/install.ps1 | iex
   ```
-
-  <!-- TODO(kimiteam 迁移):kimiteam 仓库 Pages 尚未启用(gh-pages 分支仍在 Liewzheng/kimi-code,旧短链仍 200 服务中),短链暂保持 liewzheng.github.io/kimi-code;待 Liewzheng/kimiteam 启用 Pages 后切换为 liewzheng.github.io/kimiteam/install.ps1,并删除本注释。 -->
 
   若公司/系统限制 `irm|iex`,可下载脚本后用 `-File` 方式执行(仓库内中文版):
 
@@ -88,7 +86,7 @@ kimiteam                    # 启动交互式会话（与官方 kimi 参数兼�
 ## 与官方 kimi 的关系
 
 - **`kimi`** — 官方 CLI，保持不变
-- **`kimiteam`** — 本分支产物，两套命令共存于同一系统
+- **`kimiteam`** — 本仓库产物，两套命令共存于同一系统
 - 共享 `~/.kimi-code` 下的配置、会话和 agents 数据目录
 
 ## 上游
