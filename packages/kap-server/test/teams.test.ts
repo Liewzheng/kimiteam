@@ -618,7 +618,7 @@ describe('server-v2 /api/v1/teams/{session_id}', () => {
     expect(scored.body.warning).toBeUndefined(); // n < 5 — ramp-up, no inflation
   });
 
-  it('returns an inflation warning once five recent scores are all >= 90', async () => {
+  it('returns an inflation warning once five recent scores are all >= 75', async () => {
     const id = await createSession();
     await teamFetch(`/api/v1/teams/${id}/members`, {
       method: 'POST',

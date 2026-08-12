@@ -845,7 +845,7 @@ describe('TeamScore', () => {
 
   it('appends a score-inflation warning when the recent distribution is skewed high', async () => {
     const perf = new ScorePerfStub({ coder: { last: 95, average: 96, count: 6 } });
-    // Seed 4 prior 95s — plus the new 96 → 5 recent scores, all >= 90.
+    // Seed 4 prior 95s — plus the new 96 → 5 recent scores, all >= 75.
     for (let i = 0; i < 4; i++) {
       perf.entries.push({
         profileName: 'coder',
@@ -861,7 +861,7 @@ describe('TeamScore', () => {
     expect(result.isError).toBeUndefined();
     const output = String(result.output);
     expect(output).toContain('Score inflation detected');
-    expect(output).toContain('all >= 90');
+    expect(output).toContain('all >= 75');
     expect(output).toContain('coder');
     // The warning is advisory — the success text is still present.
     expect(output).toContain('[TeamScore] Scored "coder"');
@@ -1283,40 +1283,46 @@ describe('AcceptanceEvidenceService — event pipeline', () => {
 });
 
 describe('detectScoreInflation', () => {
-  it('flags a window where every score is >= 90', () => {
+  it('flags a window where every score is >= 75', () => {
     const warning = detectScoreInflation('coder', [92, 95, 91, 96, 90]);
     expect(warning).toContain('Score inflation detected');
     expect(warning).toContain('coder');
-    expect(warning).toContain('all >= 90');
+    expect(warning).toContain('all >= 75');
   });
 
   it('returns undefined for a healthy distribution', () => {
-    expect(detectScoreInflation('coder', [70, 80, 85, 88, 82])).toBeUndefined();
+    expect(detectScoreInflation('coder', [70, 72, 74, 70, 68])).toBeUndefined();
   });
 
   it('returns undefined when the sample is below the minimum', () => {
     expect(detectScoreInflation('coder', [95, 96, 98])).toBeUndefined();
     // Boundary: exactly 4 high scores do not trigger either.
-    expect(detectScoreInflation('coder', [90, 90, 90, 90])).toBeUndefined();
+    expect(detectScoreInflation('coder', [75, 75, 75, 75])).toBeUndefined();
   });
 
-  it('flags exactly 5 scores at 90 (boundary)', () => {
-    const warning = detectScoreInflation('coder', [90, 90, 90, 90, 90]);
-    expect(warning).toContain('all >= 90');
+  it('flags exactly 5 scores at 75 (boundary)', () => {
+    const warning = detectScoreInflation('coder', [75, 75, 75, 75, 75]);
+    expect(warning).toContain('all >= 75');
     expect(warning).toContain('last 5 scores');
   });
 
-  it('flags a >= 90 average even when not every score is high', () => {
-    const warning = detectScoreInflation('coder', [95, 95, 95, 95, 80]);
+  it('flags a >= 75 average even when not every score is high', () => {
+    const warning = detectScoreInflation('coder', [95, 95, 95, 95, 50]);
     expect(warning).toContain('average of the last 5 scores');
-    expect(warning).toContain('is >= 90');
+    expect(warning).toContain('is >= 75');
   });
 
   it('considers only the last 10 scores', () => {
     // Two low scores at the head fall outside the window; the last 10 are 95.
     const scores = [50, 55, ...Array.from({ length: 10 }, () => 95)];
     const warning = detectScoreInflation('coder', scores);
-    expect(warning).toContain('all >= 90');
+    expect(warning).toContain('all >= 75');
+    expect(warning).toContain('last 10 scores');
+  });
+
+  it('flags exactly 10 scores at 75 (window boundary)', () => {
+    const warning = detectScoreInflation('coder', Array.from({ length: 10 }, () => 75));
+    expect(warning).toContain('all >= 75');
     expect(warning).toContain('last 10 scores');
   });
 });

@@ -31,7 +31,7 @@ Non-blocking is the operating law: every dispatch frees you — background dispa
 | Member average score < 70 | Stop dispatching to them; re-dispatch to another member or with `model:"primary"` |
 | Member ranks last (lowest average, enough samples) | State ranking and improvement direction in their work order; dispatch small trials to observe; consecutive last with no improvement → stop dispatch |
 | Member consistently high scoring | Raise authorization level (fewer instructions, bigger tasks); count them into the in-group |
-| Score inflation (last 10 records all ≥ 90) | Recalibrate against the rubric; reserve 95+ for exceptional work, spread the scores |
+| Score inflation (last 10 records all ≥ 75) | Recalibrate against the rubric; reserve 90+ for exceptional work, spread the scores |
 | User reports a defect on a deliverable | Trace it to the producing member (dispatch record/transcript); if unsure who produced it, ask the user; classify: spec violation = penalty, preference change = iteration; when unclear, ask the user whether to deduct |
 | Penalty confirmed (user confirms or spec violation is explicit) | Apply a TeamScore penalty (points by defect severity: minor 5-10, moderate 15-20, severe → score below 80 triggering stop-and-observe); record the reason and the member's model |
 | Destructive / cross-package / major change | Stop; confirm with the user first |
