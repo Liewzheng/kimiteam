@@ -108,13 +108,13 @@
 - **模块**:安装; **优先级**:P1
 - **前置条件**:Windows PowerShell(5.1+),Node.js ≥ 24
 - **步骤**:
-  1. 执行 `irm https://liewzheng.github.io/kimi-code/install.ps1 | iex`
+  1. 执行 `irm https://liewzheng.github.io/kimiteam/install.ps1 | iex`
   2. 或下载后 `powershell -ExecutionPolicy Bypass -File scripts/install-kimiteam.ps1`
   3. 安装后运行 `& ~\.kimi-code\bin\kimiteam.ps1 --version`
 - **预期结果**:安装 `~\.kimi-code\lib\kimi\main-team.cjs` + `bin\kimiteam.ps1`;sha256 校验通过;`--version` 输出 `0.31.1`;官方 `bin\kimi` / `lib\kimi\main.cjs` 未被触碰。
 - **实际结果**:——
 - **状态**:需人工(本机无 Windows / 无 pwsh,无法实跑)
-- **证据**:`scripts/install-kimiteam.ps1` 静态审阅通过(纯 ASCII launcher、TLS 1.2 抬高、Get-FileHash 校验);README 短链 `liewzheng.github.io/kimi-code/install.ps1` 在仓库内不存在(外部发布物,需联网人工核)
+- **证据**:`scripts/install-kimiteam.ps1` 静态审阅通过(纯 ASCII launcher、TLS 1.2 抬高、Get-FileHash 校验);README 短链 `liewzheng.github.io/kimiteam/install.ps1` 在仓库内不存在(外部发布物,需联网人工核)
 - **关联特性**:`.changeset/kimiteam-windows-installer.md`、`README.md`「Windows 支持」
 
 #### TC-INSTALL-003 — WSL 安装
@@ -560,7 +560,7 @@
 - **前置条件**:仓库 README.md
 - **步骤**:对照 README「快速安装 / Windows 支持」与 `scripts/install-kimiteam.sh`、`scripts/install-kimiteam.ps1`。
 - **预期结果**:bash 安装命令指向 `scripts/install-kimiteam.sh`,仓库内脚本存在;Windows 两条路径(`-File scripts/install-kimiteam.ps1` 与 irm|iex 短链)与安装物一致。
-- **实际结果**:通过(部分)。bash 路径与脚本一致;Windows 短链 `https://liewzheng.github.io/kimi-code/install.ps1` 在仓库内**不存在**(外部发布物,需联网人工核内容)。
+- **实际结果**:通过(部分)。bash 路径与脚本一致;Windows 短链 `https://liewzheng.github.io/kimiteam/install.ps1` 在仓库内**不存在**(外部发布物,需联网人工核内容)。
 - **状态**:需人工(短链部分)
 - **证据**:`README.md:10/48/54/57`;`ls scripts/install-kimiteam.{sh,ps1}`
 - **关联特性**:`.changeset/kimiteam-windows-installer.md`
