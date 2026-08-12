@@ -3,7 +3,7 @@ name: kimiteam build
 on:
   push:
     branches:
-      - feat/subagent-team
+      - main
   workflow_dispatch:
 
 permissions:
@@ -59,7 +59,7 @@ jobs:
         run: |
           gh release create kimiteam-dev \
             --title "kimiteam-dev" \
-            --notes "Rolling dev build of kimiteam (main-team.cjs + dist-web.zip). Updated on every push to feat/subagent-team." \
+            --notes "Rolling dev build of kimiteam (main-team.cjs + dist-web.zip). Updated on every push to main." \
             --latest=false \
             --prerelease 2>/dev/null || true
 
