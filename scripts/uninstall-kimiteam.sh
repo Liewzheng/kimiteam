@@ -18,7 +18,7 @@
 #   bash scripts/uninstall-kimiteam.sh
 #
 # Remote (curl-to-bash, symmetric with install):
-#   bash <(curl -fsSL https://raw.githubusercontent.com/Liewzheng/kimi-code/feat/subagent-team/scripts/uninstall-kimiteam.sh)
+#   bash <(curl -fsSL https://raw.githubusercontent.com/Liewzheng/kimiteam/main/scripts/uninstall-kimiteam.sh)
 
 set -eu
 

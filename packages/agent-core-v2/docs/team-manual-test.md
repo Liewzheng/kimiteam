@@ -93,7 +93,7 @@
 - **模块**:安装; **优先级**:P0
 - **前置条件**:本机已装 Node.js ≥ 24、curl;`~/.kimi-code/bin/` 存在(或脚本自建)
 - **步骤**:
-  1. 执行 `curl -fsSL https://raw.githubusercontent.com/Liewzheng/kimi-code/feat/subagent-team/scripts/install-kimiteam.sh | bash`(或 `bash scripts/install-kimiteam.sh`)
+  1. 执行 `curl -fsSL https://raw.githubusercontent.com/Liewzheng/kimiteam/main/scripts/install-kimiteam.sh | bash`(或 `bash scripts/install-kimiteam.sh`)
   2. 观察输出:预检 node/curl → 备份旧 bundle(若存在)→ 下载 `main-team.cjs` + `main-team.cjs.sha256` → sha256 校验 → 写 launcher `~/.kimi-code/bin/kimiteam`
   3. 运行 `kimiteam --version`
 - **预期结果**:输出 `0.31.1`;launcher 存在且可执行;官方 `~/.kimi-code/bin/kimi` 与 `~/.kimi-code/lib/kimi/main.cjs` 未被触碰(RED LINE);`main-team.cjs` sha256 与发布文件一致。

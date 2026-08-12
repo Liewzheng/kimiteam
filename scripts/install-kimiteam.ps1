@@ -25,7 +25,7 @@ $ErrorActionPreference = 'Stop'
 #   $HOME\.kimi-code\lib\kimi\main.cjs
 # ---------------------------------------------------------------------------
 
-$Repo = 'Liewzheng/kimi-code'
+$Repo = 'Liewzheng/kimiteam'
 $Release = 'kimiteam-dev'
 $BaseUrl = "https://github.com/${Repo}/releases/download/${Release}"
 

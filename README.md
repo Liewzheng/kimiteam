@@ -12,7 +12,7 @@
 前提：**Node.js >= 24**（安装脚本会检查，不满足则退出）。
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Liewzheng/kimi-code/feat/subagent-team/scripts/install-kimiteam.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Liewzheng/kimiteam/main/scripts/install-kimiteam.sh | bash
 ```
 
 脚本从 GitHub Release `kimiteam-dev` 下载分发文件到 `~/.kimi-code/lib/kimi/`，写 `~/.kimi-code/bin/kimiteam` 启动器。幂等可重复跑，自动备份旧版即升级。
@@ -53,13 +53,15 @@ kimiteam                    # 启动交互式会话（与官方 kimi 参数兼�
   irm https://liewzheng.github.io/kimi-code/install.ps1 | iex
   ```
 
+  <!-- TODO(kimiteam 迁移):kimiteam 仓库 Pages 尚未启用(gh-pages 分支仍在 Liewzheng/kimi-code,旧短链仍 200 服务中),短链暂保持 liewzheng.github.io/kimi-code;待 Liewzheng/kimiteam 启用 Pages 后切换为 liewzheng.github.io/kimiteam/install.ps1,并删除本注释。 -->
+
   若公司/系统限制 `irm|iex`,可下载脚本后用 `-File` 方式执行(仓库内中文版):
 
   ```powershell
   powershell -ExecutionPolicy Bypass -File scripts/install-kimiteam.ps1
   ```
 
-  (原始 raw 长链备选:`irm https://raw.githubusercontent.com/Liewzheng/kimi-code/feat/subagent-team/scripts/install-kimiteam.ps1 | iex`。)`-ExecutionPolicy Bypass` 只对本条命令生效,无需改动系统策略。安装后启动器位于 `~\.kimi-code\bin\kimiteam.ps1`,在 PowerShell 中运行:
+  (原始 raw 长链备选:`irm https://raw.githubusercontent.com/Liewzheng/kimiteam/main/scripts/install-kimiteam.ps1 | iex`。)`-ExecutionPolicy Bypass` 只对本条命令生效,无需改动系统策略。安装后启动器位于 `~\.kimi-code\bin\kimiteam.ps1`,在 PowerShell 中运行:
 
   ```powershell
   & ~\.kimi-code\bin\kimiteam.ps1
@@ -78,7 +80,7 @@ kimiteam                    # 启动交互式会话（与官方 kimi 参数兼�
 - **WSL(完整交互推荐)**:原生 Windows 的 TUI 交互(流式刷新、Ctrl+C 中断等)尚未实测;若在意完整交互体验或遇到交互异常,建议优先使用 WSL(或 Git Bash)。安装 WSL 后,在 WSL 终端里执行与 Linux 相同的安装命令:
 
   ```sh
-  curl -fsSL https://raw.githubusercontent.com/Liewzheng/kimi-code/feat/subagent-team/scripts/install-kimiteam.sh | bash
+  curl -fsSL https://raw.githubusercontent.com/Liewzheng/kimiteam/main/scripts/install-kimiteam.sh | bash
   ```
 
   之后用 `kimiteam` 启动,行为与 Linux 一致。

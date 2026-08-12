@@ -27,7 +27,7 @@ set -eu
 #   ~/.kimi-code/lib/kimi/main.cjs
 # ---------------------------------------------------------------------------
 
-REPO="Liewzheng/kimi-code"
+REPO="Liewzheng/kimiteam"
 RELEASE="kimiteam-dev"
 BASE_URL="https://github.com/${REPO}/releases/download/${RELEASE}"
 
