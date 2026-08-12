@@ -17,6 +17,11 @@
  * (delete from `claimInto`) once the run has started or failed to start; from
  * then on the instance's own `running` loop state excludes it from reuse.
  *
+ * Same-profile serialization: `findBusyOwnedSubagent` surfaces an owned
+ * same-profile instance that is running (or reserved for reuse by the batch)
+ * so the duty pick can return it as `busy` — the caller waits for its run to
+ * settle and reuses the SAME instance instead of creating a parallel one.
+ *
  * After a process restart the registry no longer holds the session's parked
  * instances, so a cold fallback re-materializes a resting subagent from the
  * persisted session metadata + runtime-status table (`create` is create-or-get
@@ -87,6 +92,39 @@ export async function listIdleOwnedSubagents(
     });
   }
   return candidates;
+}
+
+/**
+ * Find an owned subagent of `profileName` that is currently busy: its loop is
+ * running, or it is claimed into `claimInto` (a batch sibling is about to run
+ * it). Returns the highest-`agent-<n>` busy instance, or `undefined` when the
+ * profile has no in-flight instance (free to spawn fresh or reuse an idle
+ * candidate). The caller of a `busy` result waits for the instance to settle
+ * and then reuses the SAME instance — the same-profile serialization invariant.
+ */
+export async function findBusyOwnedSubagent(
+  input: FindIdleOwnedSubagentInput,
+): Promise<string | undefined> {
+  const { lifecycle, metadata, callerAgentId, profileName, claimInto } = input;
+  const agents = (await metadata.read()).agents ?? {};
+  let best: string | undefined;
+  let bestOrdinal = Number.NEGATIVE_INFINITY;
+  for (const handle of lifecycle.list()) {
+    const agentMeta = agents[handle.id];
+    if (!isSubagentMeta(agentMeta)) continue;
+    if (subagentParentAgentId(agentMeta) !== callerAgentId) continue;
+    if (handle.accessor.get(IAgentProfileService).data().profileName !== profileName) continue;
+    const busy =
+      handle.accessor.get(IAgentLoopService).status().state === 'running' ||
+      claimInto?.has(handle.id) === true;
+    if (!busy) continue;
+    const ordinal = agentOrdinal(handle.id);
+    if (ordinal > bestOrdinal) {
+      best = handle.id;
+      bestOrdinal = ordinal;
+    }
+  }
+  return best;
 }
 
 /**

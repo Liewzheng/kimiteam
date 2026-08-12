@@ -28,7 +28,13 @@ const T0 = new Date('2024-01-01T00:00:00.000Z');
 function makeHandle(
   agentId: string,
   profileName: string,
-  options: { readonly model?: string; readonly parentAgentId?: string; readonly running?: boolean } = {},
+  options: {
+    readonly model?: string;
+    readonly parentAgentId?: string;
+    readonly running?: boolean;
+    /** Mutable running state — the test flips it to simulate a run settling. */
+    readonly runningRef?: { value: boolean };
+  } = {},
 ): IAgentScopeHandle {
   const parentAgentId = options.parentAgentId ?? 'main';
   const handle = {
@@ -37,7 +43,11 @@ function makeHandle(
     accessor: {
       get: (id: unknown) => {
         if (id === IAgentLoopService) {
-          return { status: () => ({ state: options.running === true ? 'running' : 'idle' }) };
+          const state =
+            options.runningRef !== undefined
+              ? options.runningRef.value
+              : options.running === true;
+          return { status: () => ({ state: state ? 'running' : 'idle' }) };
         }
         if (id === IAgentProfileService) {
           return { data: () => ({ profileName, modelAlias: options.model }) };
@@ -107,35 +117,56 @@ describe('DutySchedulerService.pick', () => {
     vi.restoreAllMocks();
   });
 
-  it('returns undefined when team mode is off', async () => {
+  it('returns none when team mode is off', async () => {
     const { scheduler } = makeScheduler({ teamMode: false, candidates: [coder('agent-1'), coder('agent-2')] });
-    await expect(scheduler.pick({ callerAgentId: 'main', profileName: 'coder' })).resolves.toBeUndefined();
+    await expect(scheduler.pick({ callerAgentId: 'main', profileName: 'coder' })).resolves.toEqual({ kind: 'none' });
   });
 
   it('falls back to the highest agent-<n> ordinal when no data and nothing was picked yet', async () => {
     const { scheduler } = makeScheduler({ candidates: [coder('agent-1'), coder('agent-2'), coder('agent-5')] });
-    await expect(scheduler.pick({ callerAgentId: 'main', profileName: 'coder' })).resolves.toBe('agent-5');
+    await expect(scheduler.pick({ callerAgentId: 'main', profileName: 'coder' })).resolves.toEqual({
+      kind: 'reuse',
+      agentId: 'agent-5',
+    });
   });
 
   it('rotates LRU-first: a just-picked member loses to a never-picked one', async () => {
     const { scheduler } = makeScheduler({ candidates: [coder('agent-1'), coder('agent-2')] });
     // First pick: both never picked → tie → highest ordinal.
-    await expect(scheduler.pick({ callerAgentId: 'main', profileName: 'coder' })).resolves.toBe('agent-2');
+    await expect(scheduler.pick({ callerAgentId: 'main', profileName: 'coder' })).resolves.toEqual({
+      kind: 'reuse',
+      agentId: 'agent-2',
+    });
     vi.setSystemTime(new Date(T0.getTime() + 60_000));
     // Second pick: agent-2 was just picked → agent-1 (never picked) wins.
-    await expect(scheduler.pick({ callerAgentId: 'main', profileName: 'coder' })).resolves.toBe('agent-1');
+    await expect(scheduler.pick({ callerAgentId: 'main', profileName: 'coder' })).resolves.toEqual({
+      kind: 'reuse',
+      agentId: 'agent-1',
+    });
   });
 
   it('prefers the least recently used member among previously picked ones', async () => {
     const { scheduler } = makeScheduler({ candidates: [coder('agent-1'), coder('agent-2'), coder('agent-3')] });
-    await expect(scheduler.pick({ callerAgentId: 'main', profileName: 'coder' })).resolves.toBe('agent-3');
+    await expect(scheduler.pick({ callerAgentId: 'main', profileName: 'coder' })).resolves.toEqual({
+      kind: 'reuse',
+      agentId: 'agent-3',
+    });
     vi.setSystemTime(new Date(T0.getTime() + 60_000));
-    await expect(scheduler.pick({ callerAgentId: 'main', profileName: 'coder' })).resolves.toBe('agent-2');
+    await expect(scheduler.pick({ callerAgentId: 'main', profileName: 'coder' })).resolves.toEqual({
+      kind: 'reuse',
+      agentId: 'agent-2',
+    });
     vi.setSystemTime(new Date(T0.getTime() + 120_000));
-    await expect(scheduler.pick({ callerAgentId: 'main', profileName: 'coder' })).resolves.toBe('agent-1');
+    await expect(scheduler.pick({ callerAgentId: 'main', profileName: 'coder' })).resolves.toEqual({
+      kind: 'reuse',
+      agentId: 'agent-1',
+    });
     vi.setSystemTime(new Date(T0.getTime() + 180_000));
     // All picked once; the least recently used is agent-3 (picked at t0).
-    await expect(scheduler.pick({ callerAgentId: 'main', profileName: 'coder' })).resolves.toBe('agent-3');
+    await expect(scheduler.pick({ callerAgentId: 'main', profileName: 'coder' })).resolves.toEqual({
+      kind: 'reuse',
+      agentId: 'agent-3',
+    });
   });
 
   it('weights by the member model score when recency ties', async () => {
@@ -156,14 +187,20 @@ describe('DutySchedulerService.pick', () => {
       },
     });
     // Both never picked (recency tie): higher byModel score wins over ordinal.
-    await expect(scheduler.pick({ callerAgentId: 'main', profileName: 'coder' })).resolves.toBe('agent-1');
+    await expect(scheduler.pick({ callerAgentId: 'main', profileName: 'coder' })).resolves.toEqual({
+      kind: 'reuse',
+      agentId: 'agent-1',
+    });
   });
 
-  it('skips claimInto entries and claims the winner atomically', async () => {
+  it('claims the winner atomically into claimInto (anti double-claim)', async () => {
     const { scheduler } = makeScheduler({ candidates: [coder('agent-1'), coder('agent-2')] });
-    const claimInto = new Set<string>(['agent-2']);
-    await expect(scheduler.pick({ callerAgentId: 'main', profileName: 'coder', claimInto })).resolves.toBe('agent-1');
-    expect(claimInto.has('agent-1')).toBe(true);
+    const claimInto = new Set<string>();
+    await expect(scheduler.pick({ callerAgentId: 'main', profileName: 'coder', claimInto })).resolves.toEqual({
+      kind: 'reuse',
+      agentId: 'agent-2',
+    });
+    expect(claimInto.has('agent-2')).toBe(true);
   });
 
   it('never returns a member owned by another parent', async () => {
@@ -173,29 +210,140 @@ describe('DutySchedulerService.pick', () => {
         coder('agent-2', { parentAgentId: 'other' }),
       ],
     });
-    await expect(scheduler.pick({ callerAgentId: 'main', profileName: 'coder' })).resolves.toBe('agent-1');
+    await expect(scheduler.pick({ callerAgentId: 'main', profileName: 'coder' })).resolves.toEqual({
+      kind: 'reuse',
+      agentId: 'agent-1',
+    });
   });
 
   it('never returns a member whose profile differs', async () => {
     const { scheduler } = makeScheduler({
       candidates: [makeHandle('agent-1', 'coder'), makeHandle('agent-2', 'explore')],
     });
-    await expect(scheduler.pick({ callerAgentId: 'main', profileName: 'coder' })).resolves.toBe('agent-1');
+    await expect(scheduler.pick({ callerAgentId: 'main', profileName: 'coder' })).resolves.toEqual({
+      kind: 'reuse',
+      agentId: 'agent-1',
+    });
   });
 
-  it('never returns a running member', async () => {
+  it('returns busy for a running same-profile instance instead of an idle candidate (serialization)', async () => {
     const { scheduler } = makeScheduler({
       candidates: [coder('agent-1', { running: true }), coder('agent-2')],
     });
-    await expect(scheduler.pick({ callerAgentId: 'main', profileName: 'coder' })).resolves.toBe('agent-2');
+    // The running member blocks the whole profile: the idle agent-2 must NOT
+    // start while agent-1 is active (one active instance per profile).
+    await expect(scheduler.pick({ callerAgentId: 'main', profileName: 'coder' })).resolves.toEqual({
+      kind: 'busy',
+      agentId: 'agent-1',
+    });
+  });
+
+  it('returns busy for a claimed member (batch sibling about to run it)', async () => {
+    const { scheduler } = makeScheduler({ candidates: [coder('agent-1'), coder('agent-2')] });
+    const claimInto = new Set<string>(['agent-1']);
+    await expect(scheduler.pick({ callerAgentId: 'main', profileName: 'coder', claimInto })).resolves.toEqual({
+      kind: 'busy',
+      agentId: 'agent-1',
+    });
+  });
+
+  it('returns busy for a running member even when another profile instance is idle (serialization)', async () => {
+    const { scheduler } = makeScheduler({
+      candidates: [coder('agent-1', { running: true }), makeHandle('agent-2', 'explore')],
+    });
+    await expect(scheduler.pick({ callerAgentId: 'main', profileName: 'coder' })).resolves.toEqual({
+      kind: 'busy',
+      agentId: 'agent-1',
+    });
+  });
+
+  it('returns none when no member exists at all', async () => {
+    const { scheduler } = makeScheduler({ candidates: [] });
+    await expect(scheduler.pick({ callerAgentId: 'main', profileName: 'coder' })).resolves.toEqual({ kind: 'none' });
   });
 
   it('enterStandby does not reset an existing lastPickedAt (LRU preserved)', async () => {
     const { scheduler } = makeScheduler({ candidates: [coder('agent-1'), coder('agent-2')] });
-    await expect(scheduler.pick({ callerAgentId: 'main', profileName: 'coder' })).resolves.toBe('agent-2');
+    await expect(scheduler.pick({ callerAgentId: 'main', profileName: 'coder' })).resolves.toEqual({
+      kind: 'reuse',
+      agentId: 'agent-2',
+    });
     vi.setSystemTime(new Date(T0.getTime() + 60_000));
     // Re-settle agent-2 as standby — must NOT forget it was just picked.
     scheduler.enterStandby({ agentId: 'agent-2', profileName: 'coder', parentAgentId: 'main' });
-    await expect(scheduler.pick({ callerAgentId: 'main', profileName: 'coder' })).resolves.toBe('agent-1');
+    await expect(scheduler.pick({ callerAgentId: 'main', profileName: 'coder' })).resolves.toEqual({
+      kind: 'reuse',
+      agentId: 'agent-1',
+    });
   });
 });
+
+describe('DutySchedulerService.waitForSettle', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('resolves immediately for an idle member', async () => {
+    const { scheduler } = makeScheduler({ candidates: [coder('agent-1')] });
+    await expect(
+      scheduler.waitForSettle('agent-1', new AbortController().signal),
+    ).resolves.toBeUndefined();
+  });
+
+  it('resolves immediately for a member that no longer exists', async () => {
+    const { scheduler } = makeScheduler({ candidates: [] });
+    await expect(
+      scheduler.waitForSettle('agent-gone', new AbortController().signal),
+    ).resolves.toBeUndefined();
+  });
+
+  it('resolves once the running member settles (success, failure or cancel alike)', async () => {
+    const runningRef = { value: true };
+    const { scheduler } = makeScheduler({ candidates: [coder('agent-1', { runningRef })] });
+    const completion = deferred<{ summary: string }>();
+    scheduler.observeSettle('agent-1', 'coder', 'main', completion.promise);
+
+    const waited = scheduler.waitForSettle('agent-1', new AbortController().signal);
+    let settled = false;
+    void waited.then(() => { settled = true; });
+    await vi.waitFor(() => expect(settled).toBe(false)); // still waiting
+
+    // The run settles: the loop state flips to idle and the settle promise
+    // resolves — the waiter proceeds either way.
+    runningRef.value = false;
+    completion.resolve({ summary: 'done' });
+    await expect(waited).resolves.toBeUndefined();
+  });
+
+  it('rejects on abort while waiting', async () => {
+    const { scheduler } = makeScheduler({ candidates: [coder('agent-1', { running: true })] });
+    const completion = new Promise<{ summary: string }>(() => {});
+    scheduler.observeSettle('agent-1', 'coder', 'main', completion);
+    const controller = new AbortController();
+    const waited = scheduler.waitForSettle('agent-1', controller.signal);
+    let settled = false;
+    void waited.catch(() => { settled = true; });
+    await vi.waitFor(() => expect(settled).toBe(false));
+    controller.abort();
+    await expect(waited).rejects.toBeDefined();
+  });
+
+  it('waits while a batch sibling holds the reuse claim, even if not running yet', async () => {
+    const { scheduler } = makeScheduler({ candidates: [coder('agent-1')] });
+    const claimInto = new Set<string>(['agent-1']);
+    const waited = scheduler.waitForSettle('agent-1', new AbortController().signal, claimInto);
+    let settled = false;
+    void waited.then(() => { settled = true; });
+    await vi.waitFor(() => expect(settled).toBe(false));
+    claimInto.delete('agent-1'); // sibling released the claim at run start
+    await expect(waited).resolves.toBeUndefined();
+  });
+});
+
+function deferred<T>(): { readonly promise: Promise<T>; resolve: (v: T) => void; reject: (e: unknown) => void } {
+  let resolve!: (v: T) => void;
+  let reject!: (e: unknown) => void;
+  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
+}

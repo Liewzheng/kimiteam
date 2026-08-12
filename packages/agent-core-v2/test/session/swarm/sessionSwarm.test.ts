@@ -949,15 +949,45 @@ describe('SessionSwarmService metadata compatibility', () => {
       list: async () => ({}),
     });
     ix.stub(ILogService, stubLog());
-    // Standby scheduler stub that mirrors the pre-DutyScheduler reuse scan:
-    // picks the highest-`agent-<n>` idle owned subagent of the profile and
-    // claims it atomically — keeps the team-mode reuse tests meaningful now
-    // that the swarm service routes the pick through IDutySchedulerService.
+    // Standby scheduler stub that mirrors the pre-DutyScheduler reuse scan
+    // under the new same-profile serialization contract: a running OR claimed
+    // same-profile owned instance is `busy` (the profile is occupied — wait for
+    // it instead of spawning a parallel one); otherwise pick the highest
+    // `agent-<n>` idle owned subagent of the profile and claim it atomically.
+    // `waitForSettle` polls the loop state until the member is idle.
     ix.stub(IDutySchedulerService, {
       _serviceBrand: undefined,
       enterStandby: () => {},
       observeSettle: () => {},
       pick: async ({ callerAgentId, profileName, claimInto }) => {
+        const ordinalOf = (id: string): number => {
+          const match = /^agent-(\d+)$/.exec(id);
+          return match === null ? -1 : Number(match[1]);
+        };
+        // busy-first: any running or claimed same-profile owned instance blocks
+        // the whole profile (one active instance per profile).
+        let busy: string | undefined;
+        let busyOrdinal = Number.NEGATIVE_INFINITY;
+        for (const handle of lifecycle.list()) {
+          const meta = agents[handle.id];
+          if (meta === undefined) continue;
+          const parent = meta.labels?.['parentAgentId'] ?? meta.parentAgentId;
+          if (parent !== callerAgentId) continue;
+          if (handle.accessor.get(IAgentProfileService).data().profileName !== profileName) {
+            continue;
+          }
+          const busyNow =
+            handle.accessor.get(IAgentLoopService).status().state === 'running' ||
+            claimInto?.has(handle.id) === true;
+          if (!busyNow) continue;
+          const ordinal = ordinalOf(handle.id);
+          if (ordinal > busyOrdinal) {
+            busy = handle.id;
+            busyOrdinal = ordinal;
+          }
+        }
+        if (busy !== undefined) return { kind: 'busy', agentId: busy };
+
         let best: string | undefined;
         let bestOrdinal = Number.NEGATIVE_INFINITY;
         for (const handle of lifecycle.list()) {
@@ -971,15 +1001,27 @@ describe('SessionSwarmService metadata compatibility', () => {
           if (handle.accessor.get(IAgentProfileService).data().profileName !== profileName) {
             continue;
           }
-          const match = /^agent-(\d+)$/.exec(handle.id);
-          const ordinal = match === null ? -1 : Number(match[1]);
+          const ordinal = ordinalOf(handle.id);
           if (ordinal > bestOrdinal) {
             best = handle.id;
             bestOrdinal = ordinal;
           }
         }
         if (best !== undefined) claimInto?.add(best);
-        return best;
+        return best === undefined ? { kind: 'none' } : { kind: 'reuse', agentId: best };
+      },
+      waitForSettle: async (agentId, signal, claimInto) => {
+        for (;;) {
+          signal.throwIfAborted();
+          if (claimInto?.has(agentId) === true) {
+            await new Promise((resolve) => setTimeout(resolve, 1));
+            continue;
+          }
+          const handle = lifecycle.get(agentId);
+          if (handle === undefined) return;
+          if (handle.accessor.get(IAgentLoopService).status().state !== 'running') return;
+          await new Promise((resolve) => setTimeout(resolve, 1));
+        }
       },
     });
     ix.stub(IModelCatalog, {
@@ -1392,7 +1434,8 @@ describe('SessionSwarmService metadata compatibility', () => {
     );
   });
 
-  it('does not reuse a running instance — creates a fresh one (team mode)', async () => {
+  it('waits for a running same-profile instance and reuses it once it settles (team mode)', async () => {
+    const runningRef = { value: true };
     agents['agent-1'] = { labels: { parentAgentId: 'main' } };
     handles.set(
       'agent-1',
@@ -1401,7 +1444,12 @@ describe('SessionSwarmService metadata compatibility', () => {
           IAgentLoopService,
           {
             _serviceBrand: undefined,
-            status: () => ({ state: 'running', activeTurnId: 1, pendingTurnIds: [], hasPendingRequests: true }),
+            status: () => ({
+              state: runningRef.value ? 'running' : 'idle',
+              activeTurnId: 1,
+              pendingTurnIds: [],
+              hasPendingRequests: true,
+            }),
           },
         ],
       ])),
@@ -1409,26 +1457,35 @@ describe('SessionSwarmService metadata compatibility', () => {
     config.setTeamMode(true);
     const service = ix.get(ISessionSwarmService);
 
-    await expect(
-      service.run({
-        callerAgentId: 'main',
-        tasks: [spawnSessionTask()],
-      }),
-    ).resolves.toMatchObject([{ status: 'completed', agentId: 'agent-new' }]);
+    const running = service.run({
+      callerAgentId: 'main',
+      tasks: [spawnSessionTask()],
+    });
+    let settled = false;
+    void running.finally(() => { settled = true; });
 
-    expect(createAgent).toHaveBeenCalledWith(
-      expect.objectContaining({ binding: expect.objectContaining({ profile: 'coder' }) }),
-    );
-    expect(runAgent).not.toHaveBeenCalledWith(
+    // Same-profile serialization: the spawn waits for the running instance
+    // instead of creating a parallel one.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(settled).toBe(false);
+    expect(createAgent).not.toHaveBeenCalled();
+    expect(runAgent).not.toHaveBeenCalled();
+
+    // The running instance settles → the SAME instance is reused.
+    runningRef.value = false;
+    await expect(running).resolves.toMatchObject([{ status: 'completed', agentId: 'agent-1' }]);
+    expect(createAgent).not.toHaveBeenCalled();
+    expect(runAgent).toHaveBeenCalledWith(
       'agent-1',
-      expect.anything(),
+      expect.objectContaining({ kind: 'prompt' }),
       expect.anything(),
     );
   });
 
-  it('two spawn items of the same profile never claim the same parked instance (team mode)', async () => {
+  it('serializes two spawn items of the same profile on one instance (team mode)', async () => {
     // One idle instance, two spawn items of the same profile: the first item
-    // reuses it, the second must not double-claim it and falls back to create.
+    // reuses it, the second must not double-claim it or spawn a parallel one —
+    // it waits and reuses the SAME instance (serialization).
     agents['agent-1'] = { labels: { parentAgentId: 'main' } };
     handles.set('agent-1', agentHandle('agent-1', lifecycle, eventBus, { profileName: 'coder' }));
     config.setTeamMode(true);
@@ -1443,17 +1500,15 @@ describe('SessionSwarmService metadata compatibility', () => {
       { status: 'completed' },
       { status: 'completed' },
     ]);
-    // Exactly one reuse of the parked instance and exactly one fresh create —
-    // no double claim of 'agent-1'.
-    expect(createAgent).toHaveBeenCalledTimes(1);
+    // Both items run on the SAME parked instance one after the other — no
+    // fresh create, no parallel second instance.
+    expect(createAgent).not.toHaveBeenCalled();
     expect(
       runAgent.mock.calls.filter(([agentId]) => agentId === 'agent-1'),
-    ).toHaveLength(1);
-    const runAgentIds = runAgent.mock.calls.map(([agentId]) => agentId);
-    expect(new Set(runAgentIds)).toEqual(new Set(['agent-1', 'agent-new']));
+    ).toHaveLength(2);
   });
 
-  it('distributes multiple spawn items across multiple parked instances without creating (team mode)', async () => {
+  it('serializes multiple spawn items of the same profile on one instance without creating (team mode)', async () => {
     agents['agent-1'] = { labels: { parentAgentId: 'main' } };
     agents['agent-2'] = { labels: { parentAgentId: 'main' } };
     handles.set('agent-1', agentHandle('agent-1', lifecycle, eventBus, { profileName: 'coder' }));
@@ -1470,10 +1525,13 @@ describe('SessionSwarmService metadata compatibility', () => {
       { status: 'completed' },
       { status: 'completed' },
     ]);
+    // One active instance per profile: item 1 reuses the best idle member, item
+    // 2 waits for it and reuses the SAME member — the other parked instance is
+    // left untouched (no parallel active instance, no fresh create).
     expect(createAgent).not.toHaveBeenCalled();
     const runAgentIds = runAgent.mock.calls.map(([agentId]) => agentId);
-    expect(new Set(runAgentIds)).toEqual(new Set(['agent-1', 'agent-2']));
     expect(runAgentIds).toHaveLength(2);
+    expect(new Set(runAgentIds).size).toBe(1);
   });
 
   it('does not reuse a parked member whose model differs from the requested binding — forces a fresh spawn (team mode)', async () => {

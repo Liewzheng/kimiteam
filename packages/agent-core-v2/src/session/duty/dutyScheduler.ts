@@ -10,15 +10,19 @@
  * pool entries can never win a pick.
  *
  * Picking (team mode only):
- *  1. enumerate idle owned candidates via `listIdleOwnedSubagents`;
- *  2. rank by a weighted score — LRU recency dominates (never-picked ranks
+ *  1. same-profile serialization: an owned instance that is running — or
+ *     claimed by this batch for reuse — is returned as `busy`; the caller
+ *     waits for its settle and reuses the SAME instance (one active instance
+ *     per profile, dispatches queue behind it);
+ *  2. enumerate idle owned candidates via `listIdleOwnedSubagents`;
+ *  3. rank by a weighted score — LRU recency dominates (never-picked ranks
  *     highest, then oldest `lastPickedAt`), weighted by the member's per-model
  *     score (performance byModel) and load (recent shift duration + pool
  *     occupancy); ties fall back to the highest `agent-<n>` ordinal;
- *  3. when no in-registry candidate exists, fall back to the existing cold
+ *  4. when no in-registry candidate exists, fall back to the existing cold
  *     restart path (`findIdleOwnedSubagent` — best by ordinal, materialized
  *     from persisted metadata + runtime status);
- *  4. the winner is claimed atomically into `claimInto` (anti double-claim).
+ *  5. the winner is claimed atomically into `claimInto` (anti double-claim).
  * Bound at Session scope.
  */
 
@@ -27,7 +31,10 @@ import { IConfigService } from '#/app/config/config';
 import { IAgentPerformanceService, type PerformanceSummary } from '#/app/agentPerformance/agentPerformance';
 import { IRuntimeStatusService } from '#/app/runtimeStatus/runtimeStatus';
 import { IAgentLifecycleService } from '#/session/agentLifecycle/agentLifecycle';
+import { IAgentLoopService } from '#/agent/loop/loop';
+import { abortable } from '#/_base/utils/abort';
 import {
+  findBusyOwnedSubagent,
   findIdleOwnedSubagent,
   listIdleOwnedSubagents,
   type IdleOwnedSubagentCandidate,
@@ -36,10 +43,12 @@ import { ISessionMetadata } from '#/session/sessionMetadata/sessionMetadata';
 import { ISessionContext } from '#/session/sessionContext/sessionContext';
 import { ISubagentPoolService } from '#/session/subagentPool/subagentPool';
 import { resolveTeamMode } from '#/session/subagent/configSection';
+import { sleepForRetry } from '#/_base/utils/retry';
 
 import {
   IDutySchedulerService,
   type DutyPickInput,
+  type DutyPickResult,
   type StandbyEntry,
 } from './duty';
 
@@ -64,6 +73,12 @@ export class DutySchedulerService implements IDutySchedulerService {
 
   /** agentId → standby metadata (LRU key = lastPickedAt). */
   private readonly standby = new Map<string, StandbyEntry>();
+  /**
+   * agentId → settle promise of the CURRENT run (from {@link observeSettle}).
+   * A run's settle — success, failure or cancellation — frees the member for
+   * the next same-profile dispatch (serialization waiters await this).
+   */
+  private readonly settles = new Map<string, Promise<void>>();
 
   constructor(
     @IAgentLifecycleService private readonly lifecycle: IAgentLifecycleService,
@@ -97,16 +112,39 @@ export class DutySchedulerService implements IDutySchedulerService {
   ): void {
     if (!resolveTeamMode(this.config)) return;
     // Settle covers success, failure and cancellation alike — after any of
-    // them the instance is idle again and becomes a dispatch candidate.
-    void completion.then(
+    // them the instance is idle again and becomes a dispatch candidate. The
+    // settle promise also releases same-profile serialization waiters.
+    const settle = completion.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.settles.set(agentId, settle);
+    void settle.then(
       () => this.enterStandby({ agentId, profileName, parentAgentId }),
       () => this.enterStandby({ agentId, profileName, parentAgentId }),
     );
   }
 
-  async pick(input: DutyPickInput): Promise<string | undefined> {
-    if (!resolveTeamMode(this.config)) return undefined;
+  async pick(input: DutyPickInput): Promise<DutyPickResult> {
+    if (!resolveTeamMode(this.config)) return { kind: 'none' };
     const { callerAgentId, profileName, claimInto } = input;
+
+    // 0) Same-profile serialization: if an owned instance of this profile is
+    // already running — or claimed by this batch for reuse (about to run) —
+    // the profile is busy. Return it so the caller waits for its settle and
+    // then reuses the SAME instance instead of creating a parallel one. This
+    // check runs FIRST: an idle candidate of the same profile must not start
+    // while another instance is running (one active instance per profile).
+    const busyId = await findBusyOwnedSubagent({
+      lifecycle: this.lifecycle,
+      metadata: this.metadata,
+      runtimeStatus: this.runtimeStatus,
+      sessionId: this.sessionContext.sessionId,
+      callerAgentId,
+      profileName,
+      claimInto,
+    });
+    if (busyId !== undefined) return { kind: 'busy', agentId: busyId };
 
     // 1) In-registry idle owned candidates, ranked by LRU + score/load.
     const candidates = await listIdleOwnedSubagents({
@@ -123,7 +161,7 @@ export class DutySchedulerService implements IDutySchedulerService {
       if (winner !== undefined) {
         claimInto?.add(winner.agentId);
         this.touch(winner.agentId, callerAgentId, profileName);
-        return winner.agentId;
+        return { kind: 'reuse', agentId: winner.agentId };
       }
     }
 
@@ -138,7 +176,38 @@ export class DutySchedulerService implements IDutySchedulerService {
       claimInto,
     });
     if (coldId !== undefined) this.touch(coldId, callerAgentId, profileName);
-    return coldId;
+    return coldId === undefined ? { kind: 'none' } : { kind: 'reuse', agentId: coldId };
+  }
+
+  async waitForSettle(
+    agentId: string,
+    signal: AbortSignal,
+    claimInto?: ReadonlySet<string>,
+  ): Promise<void> {
+    for (;;) {
+      signal.throwIfAborted();
+      // A batch sibling holds the reuse claim but has not started the run yet
+      // (it is between pick and `subagents.run`). Back off and re-check — the
+      // claim is released at run start, and only one item may run the member.
+      if (claimInto?.has(agentId) === true) {
+        await sleepForRetry(25, signal);
+        continue;
+      }
+      const handle = this.lifecycle.get(agentId);
+      if (handle === undefined) return; // member gone — nothing to wait for
+      if (handle.accessor.get(IAgentLoopService).status().state !== 'running') return;
+      const settle = this.settles.get(agentId);
+      if (settle === undefined) {
+        // Run just started — the settle registration (`observeSettle`) lands in
+        // the same tick as the run start; back off briefly and re-check.
+        await sleepForRetry(10, signal);
+        continue;
+      }
+      // Wait for the current run to settle (abortably), then loop back: the
+      // member may have been re-run by another waiter, in which case we wait
+      // for the new run.
+      await abortable(settle, signal);
+    }
   }
 
   private async rankBest(
