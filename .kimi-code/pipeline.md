@@ -56,6 +56,7 @@
 ## 团队协作:全面 worktree 工作流(2026-08-07 用户拍板)
 
 - **背景**:多名队员并发派工时同改一个工作树(`feat/subagent-team` 主树),存在文件区冲突与互相踩踏风险;已完成的工作与进行中的工作混在同一棵树里,验收/回滚粒度粗。
+- **同 profile 串行约束(2026-08-12 用户拍板,待代码落实)**:设计意图=**同一 profile 同一时刻只允许一个活跃实例(时序阻塞,任务排队等它完成),不同 profile 之间才并行**;禁止同 profile 复制多实例并行(如 swarm 渐被滥用成「十个顾晚晴同时工作」);目的=保留实例上下文、让成员专注在细分领域;UI 一 profile 一卡片(已实现)。**当前引擎允许同 profile 多实例并行(如 lu-yao 曾 agent-155+agent-176 双实例),需代码层落实串行化约束**(T39)。
 - **决策**:全面转向 worktree 工作流——**一个成员(一次派工)一个 git worktree**,在独立 worktree 内完成工作;完工后**由其他员工收尾合并**回主树,**同时清理临时 worktree**。主树只接受经收尾验证的合并,安装构建(全局 pipeline #6)仍只从主树出。
 - **落地规程(2026-08-07 已产出)**:设计稿 `.tmp/team-worktree-design-20260807.md`(杜衡,评 95)——分类闸(只读免树)、主管建树、队员树内完工、严戈按退出码机械收尾(merge --no-ff/clean/reap,冲突 exit 3 打回原作者)、`.tmp/team-worktrees.json` JSONL 注册表;手册 `.agents/skills/team-worktree/SKILL.md` 与脚本 `scripts/team-worktree.sh` 均已落地(韩述,评 94,沙箱全链路实测);**install 探针实测 8s**(2026-08-07,pnpm 硬链接 store,远低于 2min 阈值)→ `create` 默认开 install,仅 ≤2 文件微改用 `--no-install`。
 - **触发规则(已转强制,2026-08-12 用户拍板)**:触发:派工前 → 动作:分类闸——只读/探索/评审类免树,写代码/写文档/changeset 类主管先跑 `sh scripts/team-worktree.sh create <member> <slug>` 并把输出的「工作树段」一字不改粘进派工单首段;完工后主管在树内验收(diff+重跑测试),通过计分后派严戈 merge/clean/reap 按退出码机械分流(exit 3 原样上报、打回原作者 rebase) → 验收:合并 commit 在主树、`git worktree list` 无残留、主树 status 干净、注册表状态一致。**试点状态(2026-08-12 查实)**:08-07 即满 5 单真实任务+2 探针、08-11 又 10 单,试点早已超额;本会话(08-12)写代码派工未建树属执行疏漏——自本日起**写代码类派工一律强制建树**,机械细节查 `.agents/skills/team-worktree/SKILL.md`。
