@@ -15,6 +15,7 @@ export default {
   modelCount: '{count} 个模型',
   confirmDelete: '确认删除？',
   edit: '编辑',
+  editTitle: '编辑提供商',
   save: '保存',
   refresh: '刷新',
   delete: '删除',
