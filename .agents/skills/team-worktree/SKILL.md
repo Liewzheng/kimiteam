@@ -31,14 +31,14 @@ description: Use when dispatching tasks in the kimi-code team session and the te
 返工:验收不过 → 主管 `resume` 原队员在**同一 worktree** 继续改(worktree 存续期 = 派工到验收通过)。验收(主管,合并前,在 worktree 内):
 
 ```sh
-git -C <worktree> diff main...HEAD   # 读全量 diff
+git -C <worktree> diff feat/subagent-team...HEAD   # 读全量 diff
 ```
 
 读全量 diff、按前科抽查、已 install 则重跑关键测试 → 通过则同 turn 计分;不过则 resume 返工。
 
 ## 五子命令(`scripts/team-worktree.sh`)
 
-统一前置(脚本内):解析 `MAIN_ROOT=$(git worktree list --porcelain | head -1 | cut -d' ' -f2)`;**断言主树当前分支是 `main`**,否则中止(防在错误基线操作)。
+统一前置(脚本内):解析 `MAIN_ROOT=$(git worktree list --porcelain | head -1 | cut -d' ' -f2)`;**断言主树当前分支是 `feat/subagent-team`**,否则中止(防在错误基线操作)。
 
 ### `create <member> <slug> [--no-install]` —— 建树(主管,派工前)
 
@@ -103,7 +103,7 @@ merge/clean/reap 三者按退出码的动作表:
 ### exit 3 打回话术模板(严戈零判断,原样上报)
 
 > 【merge 冲突打回】`scripts/team-worktree.sh merge <name>` 退出码 3,脚本已自动 `git merge --abort`,冲突文件:<脚本打印的清单原样列出>。
-> 处理:请主管 resume 原队员 <member> 在其 worktree 内 `git rebase main` 解冲突(谁写的谁解),重新交付后轻量复验、重走 merge。收尾不解冲突。
+> 处理:请主管 resume 原队员 <member> 在其 worktree 内 `git rebase feat/subagent-team` 解冲突(谁写的谁解),重新交付后轻量复验、重走 merge。收尾不解冲突。
 
 ## 派工单「工作树段」模板
 

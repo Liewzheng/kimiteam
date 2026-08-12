@@ -1,6 +1,6 @@
 # kimiteam ↔ kimi 嵌入（耦合）情况
 
-> 分支 `main` · 记录日期 2026-08-06
+> 分支 `feat/subagent-team` · 记录日期 2026-08-06
 > 依据：墨轩启动提示词盘点（`.tmp/startup-prompt-inventory.md`）+ 路遥插件系统调研 + 主管提示词优化收口（`ff7b11ec4`）
 > 目的：明确 kimiteam 各能力与官方 kimi 引擎的耦合层级，评估「剥离成独立包 / 上架 /plugins」的可行性边界。
 

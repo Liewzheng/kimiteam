@@ -19,7 +19,7 @@
 
 1. 触发:对 kimiteam 产品做架构升级 → 动作:放弃旧 V1 web 架构,全面升级到官方 0.33 基线,团队特性(Clerical / TeamStatus / TodoList / TeamMessage / 配置化等)随基线迁移、不丢 → 验收:基线与官方 0.33 对齐且团队特性可用。
 2. 触发:官方 web 侧闭源(待确认)→ 动作:自建开源 bundle `open-kimiteam`(Apache 2.0,README 对比官方闭源差异),发布到 github.com/Liewzheng → 验收:开源 bundle 可独立构建发布,README 含对比表。
-3. **仓库维护模式(2026-08-12 用户拍板)**:以后**只维护 kimiteam 仓库**(`Liewzheng/kimiteam` main + 开发分支),官方 `MoonshotAI/kimi-code` 仅为上游只读参考;官方更新按需评估吸收(评估流程:读官方 CHANGELOG → 判断价值/冲突 → 需要则对照代码吸收),不主动跟随官方基线。背景:kimiteam 是做给自己用的,官方可能更新有用内容。待确认:官方 0.34.0+ 的哪些更新值得吸收(见 T28 卷启评估报告)。
+3. **仓库维护模式(2026-08-12 用户拍板,2026-08-12 再确认)**:以后**只维护 kimiteam 仓库**(`Liewzheng/kimiteam` main + 开发分支)——**已放弃维护 kimi-code 仓库**(含官方 `MoonshotAI/kimi-code` 与 fork `Liewzheng/kimi-code`):官方仅为上游只读参考(官方更新按需评估吸收:读 CHANGELOG → 判断价值/冲突 → 需要则对照代码吸收),`Liewzheng/kimi-code` 冻结为历史/迁移源(kimiteam-dev Release 停更,新安装/CI/发布全部指向 `Liewzheng/kimiteam`)。背景:kimiteam 是做给自己用的,官方可能更新有用内容。待确认:官方 0.34.0+ 的哪些更新值得吸收(见 T28 卷启评估报告)。
 
 ## 团队状态语义(2026-08-07 拍板)
 
@@ -55,7 +55,7 @@
 
 ## 团队协作:全面 worktree 工作流(2026-08-07 用户拍板)
 
-- **背景**:多名队员并发派工时同改一个工作树(`main` 主树),存在文件区冲突与互相踩踏风险;已完成的工作与进行中的工作混在同一棵树里,验收/回滚粒度粗。
+- **背景**:多名队员并发派工时同改一个工作树(`feat/subagent-team` 主树（本地开发分支）),存在文件区冲突与互相踩踏风险;已完成的工作与进行中的工作混在同一棵树里,验收/回滚粒度粗。
 - **同 profile 串行约束(2026-08-12 用户拍板,待代码落实)**:设计意图=**同一 profile 同一时刻只允许一个活跃实例(时序阻塞,任务排队等它完成),不同 profile 之间才并行**;禁止同 profile 复制多实例并行(如 swarm 渐被滥用成「十个顾晚晴同时工作」);目的=保留实例上下文、让成员专注在细分领域;UI 一 profile 一卡片(已实现)。**当前引擎允许同 profile 多实例并行(如 lu-yao 曾 agent-155+agent-176 双实例),需代码层落实串行化约束**(T39)。
 - **决策**:全面转向 worktree 工作流——**一个成员(一次派工)一个 git worktree**,在独立 worktree 内完成工作;完工后**由其他员工收尾合并**回主树,**同时清理临时 worktree**。主树只接受经收尾验证的合并,安装构建(全局 pipeline #6)仍只从主树出。
 - **落地规程(2026-08-07 已产出)**:设计稿 `.tmp/team-worktree-design-20260807.md`(杜衡,评 95)——分类闸(只读免树)、主管建树、队员树内完工、严戈按退出码机械收尾(merge --no-ff/clean/reap,冲突 exit 3 打回原作者)、`.tmp/team-worktrees.json` JSONL 注册表;手册 `.agents/skills/team-worktree/SKILL.md` 与脚本 `scripts/team-worktree.sh` 均已落地(韩述,评 94,沙箱全链路实测);**install 探针实测 8s**(2026-08-07,pnpm 硬链接 store,远低于 2min 阈值)→ `create` 默认开 install,仅 ≤2 文件微改用 `--no-install`。
