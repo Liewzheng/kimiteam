@@ -8,7 +8,10 @@
  * params, then drives a bounded request chain through the `ModelRequester`
  * resolved from `IModelCatalog`: one primary `requester.request(input, signal,
  * params)` attempt plus projection rebuilds for request structure or media
- * compatibility. Before each request the projected messages pass through `media`'s
+ * compatibility. A model declared without image, video, or audio input starts
+ * on the media-stripped projection (omitting only the modalities it lacks), so
+ * unsupported media parts never reach the provider. Before each request the
+ * projected messages pass through `media`'s
  * video resolver, which rewrites every `kimi-file://` prompt-video reference
  * to a provider-acceptable part (uploaded `ms://`, inline base64, or a
  * `<video path>` tag) so the internal reference never reaches the wire. When a
@@ -35,6 +38,7 @@ import { defineState } from '#/_base/state/stateRegistry';
 import { IAgentContextMemoryService } from '#/agent/contextMemory/contextMemory';
 import {
   IAgentContextProjectorService,
+  type MediaStripModalities,
   type MediaStripSnapshot,
 } from '#/agent/contextProjector/contextProjector';
 import { IAgentTokenCountingService } from '#/agent/tokenCounting/tokenCounting';
@@ -46,6 +50,7 @@ import { IAgentVideoResolverService } from '#/agent/media/videoResolver';
 import { IAgentUsageService } from '#/agent/usage/usage';
 import { IConfigService } from '#/app/config/config';
 import { IEventBus } from '#/app/event/eventBus';
+import { isUnknownCapability } from '#/kosong/contract/capability';
 import {
   APIRequestTooLargeError,
   APIStatusError,
@@ -332,6 +337,20 @@ export class AgentLLMRequesterService implements IAgentLLMRequesterService {
     onRequestTrace: (traceId: string | undefined) => void,
   ): Promise<AgentLLMRequestFinish> {
     const shaped = this.toolSelect.shapeHistory(request.messages);
+    const capability = request.model.capabilities;
+    const mediaStrippedByCapability =
+      !isUnknownCapability(capability) &&
+      (capability.image_in === false ||
+        capability.video_in === false ||
+        capability.audio_in === false);
+    const mediaStrippedModalities: MediaStripModalities | undefined =
+      mediaStrippedByCapability
+        ? {
+            image_url: capability.image_in === false,
+            video_url: capability.video_in === false,
+            audio_url: capability.audio_in === false,
+          }
+        : undefined;
     let mediaStripSnapshot = this.mediaStripSnapshotForTurn(request.source);
     const requestInput = (projection: RequestProjection) => {
       return {
@@ -347,6 +366,7 @@ export class AgentLLMRequesterService implements IAgentLLMRequesterService {
                     shaped,
                     (mediaStripSnapshot ??=
                       this.projector.captureMediaStripSnapshot(shaped)),
+                    mediaStrippedModalities,
                   )
                 : this.projector.project(shaped),
       };
@@ -446,11 +466,13 @@ export class AgentLLMRequesterService implements IAgentLLMRequesterService {
       };
     };
 
-    const initialProjection: RequestProjection = mediaStripSnapshot !== undefined
+    const initialProjection: RequestProjection = mediaStrippedByCapability
       ? 'media-stripped'
-      : this.isRecoveryTurn(this.mediaDegradedTurns, request.source)
-        ? 'media-degraded'
-        : 'normal';
+      : mediaStripSnapshot !== undefined
+        ? 'media-stripped'
+        : this.isRecoveryTurn(this.mediaDegradedTurns, request.source)
+          ? 'media-degraded'
+          : 'normal';
     let projection: RequestProjection = initialProjection;
     for (;;) {
       try {

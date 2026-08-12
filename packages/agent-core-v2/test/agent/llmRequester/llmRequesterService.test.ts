@@ -45,7 +45,10 @@ import {
 import { emptyUsage, type TokenUsage } from '#/kosong/contract/usage';
 import type { Message } from '#/kosong/contract/message';
 import type { ThinkingEffort } from '#/kosong/contract/provider';
-import type { ModelCapability } from '#/kosong/contract/capability';
+import {
+  UNKNOWN_CAPABILITY,
+  type ModelCapability,
+} from '#/kosong/contract/capability';
 import { IModelCatalog, type Model } from '#/kosong/model/catalog';
 import { IModelService } from '#/kosong/model/model';
 import {
@@ -62,10 +65,13 @@ import { recordingTelemetry, type TelemetryRecord } from '../../app/telemetry/st
 
 import { recordingWireLog, registerTestAgentWire } from '../../wire/stubs';
 
+// Shared full-capability model for the error-recovery chains: every media
+// modality is supported, so the capability media gate leaves them on the
+// normal projection and the recovery paths stay reachable.
 const capabilities: ModelCapability = {
-  image_in: false,
-  video_in: false,
-  audio_in: false,
+  image_in: true,
+  video_in: true,
+  audio_in: true,
   thinking: false,
   tool_use: false,
   max_context_tokens: 1000,
@@ -80,6 +86,7 @@ function createRequester(
   firstCallError?: Error | null,
   subsequentCallErrors: readonly Error[] = [],
   capturedInputs?: ModelRequestInput[],
+  modelCapabilities: ModelCapability = capabilities,
 ): ModelRequester {
   const model: Model = {
     id: 'm',
@@ -88,7 +95,7 @@ function createRequester(
     protocol: 'anthropic',
     baseUrl: 'https://example.test',
     headers: {},
-    capabilities,
+    capabilities: modelCapabilities,
     maxContextSize: 1000,
     alwaysThinking: false,
     providerName: 'p',
@@ -141,6 +148,8 @@ function createService(
     | undefined,
   options: {
     readonly thinkingLevel?: ThinkingEffort;
+    /** Context-memory history returned by the stubbed `IAgentContextMemoryService.get()`. */
+    readonly history?: Message[];
   } = {},
 ) {
   const ix = disposables.add(new TestInstantiationService());
@@ -173,7 +182,7 @@ function createService(
     },
   };
   const usage = { record: () => undefined, status: () => ({}) };
-  const context = { get: () => history };
+  const context = { get: () => options.history ?? history };
   const tools = { list: () => [] };
   const config: Partial<IConfigService> = {
     get: (() => undefined) as IConfigService['get'],
@@ -425,6 +434,270 @@ describe('AgentLLMRequesterService media-stripped resend', () => {
     await expect(service.request()).rejects.toMatchObject({ statusCode: 400 });
     expect(calls.value).toBe(1);
     expect(strippedCalls).toBe(0);
+  });
+});
+
+describe('AgentLLMRequesterService capability media gate', () => {
+  const NO_VISION_CAPABILITIES: ModelCapability = {
+    image_in: false,
+    video_in: false,
+    audio_in: false,
+    thinking: true,
+    tool_use: true,
+    max_context_tokens: 64_000,
+  };
+  const VISION_NO_VIDEO_CAPABILITIES: ModelCapability = {
+    image_in: true,
+    video_in: false,
+    audio_in: false,
+    thinking: true,
+    tool_use: true,
+    max_context_tokens: 64_000,
+  };
+  const VISION_CAPABILITIES: ModelCapability = {
+    image_in: true,
+    video_in: true,
+    audio_in: true,
+    thinking: true,
+    tool_use: true,
+    max_context_tokens: 64_000,
+  };
+  const VISION_NO_AUDIO_CAPABILITIES: ModelCapability = {
+    image_in: true,
+    video_in: true,
+    audio_in: false,
+    thinking: true,
+    tool_use: true,
+    max_context_tokens: 64_000,
+  };
+  const AUDIO_URL = 'data:audio/mp3;base64,AU';
+  const IMAGE_URL = 'data:image/png;base64,SWEET';
+  const VIDEO_URL = 'data:video/mp4;base64,VID';
+
+  function mediaProjectionCounter() {
+    const counters = { projectCalls: 0, strippedCalls: 0 };
+    return {
+      counters,
+      projector: {
+        project: (messages: readonly ContextMessage[]) => {
+          counters.projectCalls += 1;
+          return messages;
+        },
+        projectStrict: (messages: readonly ContextMessage[]) => messages,
+        projectMediaStripped: (messages: readonly ContextMessage[]) => {
+          counters.strippedCalls += 1;
+          return messages;
+        },
+      },
+    };
+  }
+
+  it('starts on the media-stripped projection for a model without image or video input', async () => {
+    const calls = { value: 0 };
+    const { counters, projector } = mediaProjectionCounter();
+    const { service, wire, records } = createService(
+      createRequester(calls, null, [], undefined, NO_VISION_CAPABILITIES),
+      projector,
+    );
+
+    const result = await service.request();
+
+    expect(result.message.content).toEqual([{ type: 'text', text: 'ok' }]);
+    expect(calls.value).toBe(1);
+    expect(counters.projectCalls).toBe(0);
+    expect(counters.strippedCalls).toBe(1);
+    await wire.flush();
+    expect(
+      records
+        .filter((record) => record.type === 'llm.request')
+        .map((record) => record['projection']),
+    ).toEqual(['media-stripped']);
+  });
+
+  it('keeps later steps of the same turn on the capability-stripped projection', async () => {
+    const calls = { value: 0 };
+    const { counters, projector } = mediaProjectionCounter();
+    const { service } = createService(
+      createRequester(calls, null, [], undefined, NO_VISION_CAPABILITIES),
+      projector,
+    );
+
+    await service.request({ source: { type: 'turn', turnId: 1, step: 1 } });
+    await service.request({ source: { type: 'turn', turnId: 1, step: 2 } });
+
+    expect(calls.value).toBe(2);
+    expect(counters.projectCalls).toBe(0);
+    expect(counters.strippedCalls).toBe(2);
+  });
+
+  it('starts on the media-stripped projection for a vision model without video input', async () => {
+    const calls = { value: 0 };
+    const { counters, projector } = mediaProjectionCounter();
+    const { service } = createService(
+      createRequester(calls, null, [], undefined, VISION_NO_VIDEO_CAPABILITIES),
+      projector,
+    );
+
+    const result = await service.request();
+
+    expect(result.message.content).toEqual([{ type: 'text', text: 'ok' }]);
+    expect(calls.value).toBe(1);
+    expect(counters.projectCalls).toBe(0);
+    expect(counters.strippedCalls).toBe(1);
+  });
+
+  it('keeps the normal projection when capabilities are unknown', async () => {
+    const calls = { value: 0 };
+    const { counters, projector } = mediaProjectionCounter();
+    const { service } = createService(
+      createRequester(calls, null, [], undefined, UNKNOWN_CAPABILITY),
+      projector,
+    );
+
+    await service.request();
+
+    expect(calls.value).toBe(1);
+    expect(counters.projectCalls).toBe(1);
+    expect(counters.strippedCalls).toBe(0);
+  });
+
+  it('recomputes per step when the model switches no-vision → vision → no-vision, keeping context memory intact', async () => {
+    // Context memory holds a text+image user message; the gate must only
+    // project it (read-side), never write back or mutate the stored history.
+    const imageHistory: Message[] = [
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'look at this' },
+          { type: 'image_url', imageUrl: { url: IMAGE_URL, id: 'img-1' } },
+        ],
+        toolCalls: [],
+      },
+    ];
+    const storedBefore = JSON.stringify(imageHistory);
+    const calls = { value: 0 };
+    const capturedInputs: ModelRequestInput[] = [];
+    // Real AgentContextProjectorService (projector === undefined) so the wire
+    // messages show the actual stripping, not the harness counter stub.
+    const requester = createRequester(calls, null, [], capturedInputs, NO_VISION_CAPABILITIES);
+    const { service, wire, records } = createService(requester, undefined, {
+      history: imageHistory,
+    });
+    const switchCapabilities = (capabilities: ModelCapability) => {
+      Object.defineProperty(requester.model, 'capabilities', {
+        value: capabilities,
+        configurable: true,
+      });
+    };
+
+    await service.request({ source: { type: 'turn', turnId: 1, step: 1 } });
+    switchCapabilities(VISION_CAPABILITIES);
+    await service.request({ source: { type: 'turn', turnId: 2, step: 1 } });
+    switchCapabilities(NO_VISION_CAPABILITIES);
+    await service.request({ source: { type: 'turn', turnId: 2, step: 2 } });
+
+    expect(calls.value).toBe(3);
+    const [noVisionWire, visionWire, noVisionAgainWire] = capturedInputs;
+    const parts = (input: ModelRequestInput) => input.messages.flatMap((message) => message.content);
+    // ① the no-vision turns project differently from the vision turn.
+    expect(parts(noVisionWire!).some((part) => part.type === 'image_url')).toBe(false);
+    expect(
+      parts(noVisionWire!).some(
+        (part) =>
+          part.type === 'text' &&
+          part.text.includes('omitted for provider compatibility') &&
+          part.text.includes('image'),
+      ),
+    ).toBe(true);
+    expect(parts(visionWire!).some((part) => part.type === 'image_url')).toBe(true);
+    expect(parts(noVisionAgainWire!).some((part) => part.type === 'image_url')).toBe(false);
+    await wire.flush();
+    expect(
+      records
+        .filter((record) => record.type === 'llm.request')
+        .map((record) => record['projection']),
+    ).toEqual(['media-stripped', undefined, 'media-stripped']);
+
+    // ③ the vision turn sent the stored image on the wire unchanged.
+    expect(
+      parts(visionWire!).find((part) => part.type === 'image_url'),
+    ).toMatchObject({ imageUrl: { url: IMAGE_URL, id: 'img-1' } });
+
+    // ② context memory still holds the image untouched after the gated turns.
+    expect(JSON.stringify(imageHistory)).toBe(storedBefore);
+    expect(
+      imageHistory[0]!.content.some(
+        (part) => part.type === 'image_url' && part.imageUrl.url === IMAGE_URL,
+      ),
+    ).toBe(true);
+  });
+
+  it('strips audio parts for a model declared without audio input', async () => {
+    // The gate now names audio_url in its mask: a no-audio model replaces
+    // audio parts with the compatibility placeholder on the wire.
+    const calls = { value: 0 };
+    const capturedInputs: ModelRequestInput[] = [];
+    const audioHistory: Message[] = [
+      {
+        role: 'user',
+        content: [{ type: 'audio_url', audioUrl: { url: AUDIO_URL, id: 'au-1' } }],
+        toolCalls: [],
+      },
+    ];
+    const { service } = createService(
+      createRequester(calls, null, [], capturedInputs, NO_VISION_CAPABILITIES),
+      undefined,
+      { history: audioHistory },
+    );
+
+    await service.request({ source: { type: 'turn', turnId: 1, step: 1 } });
+
+    const wireParts = capturedInputs[0]!.messages.flatMap((message) => message.content);
+    expect(wireParts.some((part) => part.type === 'audio_url')).toBe(false);
+    expect(
+      wireParts.some(
+        (part) =>
+          part.type === 'text' &&
+          part.text.includes('audio omitted for provider compatibility'),
+      ),
+    ).toBe(true);
+  });
+
+  it('strips only audio for a model with image and video but no audio input', async () => {
+    // Symmetric to the vision-no-video case: a model that lacks audio keeps
+    // image and video on the wire and replaces only the audio part.
+    const calls = { value: 0 };
+    const capturedInputs: ModelRequestInput[] = [];
+    const mixedHistory: Message[] = [
+      {
+        role: 'user',
+        content: [
+          { type: 'image_url', imageUrl: { url: IMAGE_URL, id: 'img-1' } },
+          { type: 'video_url', videoUrl: { url: VIDEO_URL, id: 'vid-1' } },
+          { type: 'audio_url', audioUrl: { url: AUDIO_URL, id: 'au-1' } },
+        ],
+        toolCalls: [],
+      },
+    ];
+    const { service } = createService(
+      createRequester(calls, null, [], capturedInputs, VISION_NO_AUDIO_CAPABILITIES),
+      undefined,
+      { history: mixedHistory },
+    );
+
+    await service.request({ source: { type: 'turn', turnId: 1, step: 1 } });
+
+    const wireParts = capturedInputs[0]!.messages.flatMap((message) => message.content);
+    expect(wireParts.some((part) => part.type === 'image_url')).toBe(true);
+    expect(wireParts.some((part) => part.type === 'video_url')).toBe(true);
+    expect(wireParts.some((part) => part.type === 'audio_url')).toBe(false);
+    expect(
+      wireParts.some(
+        (part) =>
+          part.type === 'text' &&
+          part.text.includes('audio omitted for provider compatibility'),
+      ),
+    ).toBe(true);
   });
 });
 

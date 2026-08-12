@@ -21,8 +21,10 @@
  * HTTP 413 body-size rejection; media-stripped captures every media identity
  * present when degraded media is still too large or an image format is
  * rejected, then replaces only that snapshot on later steps so a newly
- * generated recovery image remains visible. Both are read-side only — the
- * history keeps its media.
+ * generated recovery image remains visible. An optional modalities mask
+ * restricts a media-stripped projection to specific media part kinds, so a
+ * request can omit only the modalities the model lacks while keeping the
+ * others. Both are read-side only — the history keeps its media.
  */
 
 import { createHash } from 'node:crypto';
@@ -38,6 +40,7 @@ import type { ContentPart, Message } from '#/kosong/contract/message';
 import { ITelemetryService } from '#/app/telemetry/telemetry';
 import {
   IAgentContextProjectorService,
+  type MediaStripModalities,
   type MediaStripSnapshot,
 } from './contextProjector';
 
@@ -87,11 +90,13 @@ export class AgentContextProjectorService implements IAgentContextProjectorServi
   projectMediaStripped(
     messages: readonly ContextMessage[],
     snapshot?: MediaStripSnapshot,
+    modalities?: MediaStripModalities,
   ): readonly Message[] {
     const projected = this.projectWithTrace(messages, project);
     return stripMediaPartsBySnapshot(
       projected,
       snapshot ?? captureMediaStripSnapshot(projected),
+      modalities,
     );
   }
 
@@ -276,13 +281,20 @@ export function captureMediaStripSnapshot(
 export function stripMediaPartsBySnapshot(
   messages: readonly Message[],
   snapshot: MediaStripSnapshot,
+  modalities?: MediaStripModalities,
 ): readonly Message[] {
   const keys = mediaStripSnapshotKeys(snapshot);
   let changed = false;
   const result = messages.map((message) => {
     let messageChanged = false;
     const content = message.content.map((part): ContentPart => {
-      if (!isDegradableMediaPart(part) || !keys.has(mediaStripKey(part))) return part;
+      if (
+        !isDegradableMediaPart(part) ||
+        !keys.has(mediaStripKey(part)) ||
+        (modalities !== undefined && modalities[part.type] !== true)
+      ) {
+        return part;
+      }
       changed = true;
       messageChanged = true;
       return { type: 'text', text: MEDIA_STRIPPED_PLACEHOLDERS[part.type] };

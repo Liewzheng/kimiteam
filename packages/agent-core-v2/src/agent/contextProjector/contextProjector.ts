@@ -17,6 +17,19 @@ export interface MediaStripSnapshot {
   readonly [mediaStripSnapshotBrand]: undefined;
 }
 
+/**
+ * Restricts a media-stripped projection to specific media part kinds
+ * (`image_url` / `video_url` / `audio_url`). A kind is replaced only when its
+ * flag is `true`; kinds absent from the mask — including an empty `{}` mask —
+ * stay in the projected messages. An `undefined` mask (the error-driven
+ * full-strip fallback) replaces every media kind.
+ */
+export interface MediaStripModalities {
+  readonly image_url?: boolean;
+  readonly video_url?: boolean;
+  readonly audio_url?: boolean;
+}
+
 export interface IAgentContextProjectorService {
   readonly _serviceBrand: undefined;
 
@@ -27,6 +40,7 @@ export interface IAgentContextProjectorService {
   projectMediaStripped(
     messages: readonly ContextMessage[],
     snapshot?: MediaStripSnapshot,
+    modalities?: MediaStripModalities,
   ): readonly Message[];
 }
 

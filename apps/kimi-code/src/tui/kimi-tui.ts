@@ -1272,7 +1272,6 @@ export class KimiTUI {
       this.showError(`Failed to prepare media attachment: ${formatErrorMessage(error)}`);
       return;
     }
-    if (!this.validateMediaCapabilities(extraction)) return;
     // Idle cache-hint interception sits before session creation; it is
     // synchronous unless a hint actually fires, keeping the send path
     // await-free up to sendMessage.
@@ -1297,29 +1296,6 @@ export class KimiTUI {
     }
     this.updateQueueDisplay();
     this.state.ui.requestRender();
-  }
-
-  validateMediaCapabilities(extraction: {
-    hasMedia: boolean;
-    imageAttachmentIds: readonly number[];
-    videoAttachmentIds: readonly number[];
-  }): boolean {
-    if (!extraction.hasMedia) return true;
-    if (
-      extraction.imageAttachmentIds.length > 0 &&
-      !this.supportsCurrentModelCapability('image_in')
-    ) {
-      this.showError('Current model does not support image input.');
-      return false;
-    }
-    if (
-      extraction.videoAttachmentIds.length > 0 &&
-      !this.supportsCurrentModelCapability('video_in')
-    ) {
-      this.showError('Current model does not support video input.');
-      return false;
-    }
-    return true;
   }
 
   private supportsCurrentModelCapability(capability: string): boolean {
@@ -1479,7 +1455,6 @@ export class KimiTUI {
       this.showError(`Failed to prepare media attachment: ${formatErrorMessage(error)}`);
       return;
     }
-    if (!this.validateMediaCapabilities(rewrite)) return;
     this.beginSessionRequest();
     void session.activateSkill(skillName, rewrite.text).catch((error: unknown) => {
       const message = formatErrorMessage(error);
@@ -1503,7 +1478,6 @@ export class KimiTUI {
       this.showError(`Failed to prepare media attachment: ${formatErrorMessage(error)}`);
       return;
     }
-    if (!this.validateMediaCapabilities(rewrite)) return;
     this.beginSessionRequest();
     void session
       .activatePluginCommand(pluginId, commandName, rewrite.text)

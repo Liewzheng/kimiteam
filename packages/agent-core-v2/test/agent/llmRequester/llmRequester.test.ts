@@ -287,6 +287,20 @@ describe('LLMRequester service migration coverage', () => {
           };
         }),
       );
+      // The default mock model is a no-vision text model, which the capability
+      // media gate sends media-stripped — the strict resend recovery is only
+      // reachable from the normal projection, so pin a full-media model here
+      // (audio included, or the audio gate would send it media-stripped too).
+      ctx.configure({
+        modelCapabilities: {
+          image_in: true,
+          video_in: true,
+          audio_in: true,
+          thinking: false,
+          tool_use: true,
+          max_context_tokens: 1_000_000,
+        },
+      });
       llmRequester = ctx.get(IAgentLLMRequesterService);
 
       await llmRequester.request();

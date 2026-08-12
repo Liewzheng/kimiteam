@@ -35,11 +35,6 @@ export interface EditorKeyboardHost {
   handleUserInput(text: string): void;
   readonly btwPanelController: BtwPanelController;
   steerMessage(session: Session, input: readonly SteerInputItem[]): void;
-  validateMediaCapabilities(extraction: {
-    hasMedia: boolean;
-    imageAttachmentIds: readonly number[];
-    videoAttachmentIds: readonly number[];
-  }): boolean;
   recallLastQueued(): QueuedMessage | undefined;
   showError(msg: string): void;
   track(event: string, props?: Record<string, unknown>): void;
@@ -278,8 +273,8 @@ export class EditorKeyboardController {
       for (const m of steerable) {
         const trimmed = m.text.trim();
         if (trimmed.length > 0) {
-          // Queued items carry the parts extracted when they were submitted
-          // (and were already capability-validated then).
+          // Queued items carry the parts extracted when they were submitted;
+          // re-extracting from the text would lose them.
           items.push({ text: trimmed, parts: m.parts, imageAttachmentIds: m.imageAttachmentIds });
         }
       }
@@ -304,15 +299,6 @@ export class EditorKeyboardController {
       }
 
       if (items.length > 0) {
-        // The editor draft is fresh input: gate it on the model's media
-        // capabilities before splicing the queue, so a rejection leaves the
-        // queue and the draft untouched.
-        if (
-          editorExtraction !== undefined &&
-          !host.validateMediaCapabilities(editorExtraction)
-        ) {
-          return;
-        }
         host.state.queuedMessages = queued.filter((m) => m.mode === 'bash');
         if (!editorIsBash) editor.setText('');
         const session = host.session;

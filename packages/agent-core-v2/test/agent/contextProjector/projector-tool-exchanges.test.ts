@@ -743,6 +743,122 @@ describe('projector tool-exchange normalization', () => {
       expect(texts.some((text) => text.includes('get conversion guidance'))).toBe(true);
     });
 
+    it('strips only the media kinds named in a modalities mask', () => {
+      const projected = projector.projectMediaStripped(
+        [
+          imageMessage('data:image/png;base64,IMG', 'img-id'),
+          {
+            role: 'user',
+            content: [
+              { type: 'video_url', videoUrl: { url: 'data:video/mp4;base64,VID', id: 'vid-id' } },
+            ],
+            toolCalls: [],
+            origin: { kind: 'user' },
+          },
+        ],
+        undefined,
+        { video_url: true },
+      );
+
+      const allParts = projected.flatMap((message) => message.content);
+      expect(allParts.some((part) => part.type === 'image_url')).toBe(true);
+      expect(allParts.some((part) => part.type === 'video_url')).toBe(false);
+    });
+
+    it('keeps media kinds absent from a modalities mask', () => {
+      const projected = projector.projectMediaStripped(
+        [
+          imageMessage('data:image/png;base64,IMG', 'img-id'),
+          {
+            role: 'user',
+            content: [
+              { type: 'video_url', videoUrl: { url: 'data:video/mp4;base64,VID', id: 'vid-id' } },
+            ],
+            toolCalls: [],
+            origin: { kind: 'user' },
+          },
+        ],
+        undefined,
+        { image_url: true },
+      );
+
+      const allParts = projected.flatMap((message) => message.content);
+      expect(allParts.some((part) => part.type === 'image_url')).toBe(false);
+      expect(allParts.some((part) => part.type === 'video_url')).toBe(true);
+    });
+
+    it('keeps every media kind when the modalities mask is an empty object', () => {
+      // An empty mask names no kind to gate: a kind is replaced only when its
+      // flag is true, so `{}` behaves as "strip nothing", distinct from the
+      // undefined-mask default that strips every media kind.
+      const projected = projector.projectMediaStripped(
+        [
+          imageMessage('data:image/png;base64,IMG', 'img-id'),
+          {
+            role: 'user',
+            content: [
+              { type: 'video_url', videoUrl: { url: 'data:video/mp4;base64,VID', id: 'vid-id' } },
+            ],
+            toolCalls: [],
+            origin: { kind: 'user' },
+          },
+        ],
+        undefined,
+        {},
+      );
+
+      const allParts = projected.flatMap((message) => message.content);
+      expect(allParts.some((part) => part.type === 'image_url')).toBe(true);
+      expect(allParts.some((part) => part.type === 'video_url')).toBe(true);
+    });
+
+    it('strips only the image part from a mixed text+image message under an image mask', () => {
+      const projected = projector.projectMediaStripped(
+        [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: 'caption' },
+              { type: 'image_url', imageUrl: { url: 'data:image/png;base64,IMG', id: 'img-id' } },
+            ],
+            toolCalls: [],
+            origin: { kind: 'user' },
+          },
+        ],
+        undefined,
+        { image_url: true },
+      );
+
+      const allParts = projected.flatMap((message) => message.content);
+      expect(allParts.some((part) => part.type === 'image_url')).toBe(false);
+      const texts = allParts.filter((part) => part.type === 'text').map((part) => part.text);
+      expect(texts).toContain('caption');
+      expect(texts.some((text) => text.includes('omitted for provider compatibility'))).toBe(true);
+    });
+
+    it('keeps audio parts absent from a modalities mask', () => {
+      // Mask semantics are per-kind: a kind survives unless its flag is `true`.
+      // A mask that omits audio_url (regardless of whether it gates image or
+      // video) leaves the audio part untouched.
+      const projected = projector.projectMediaStripped(
+        [
+          {
+            role: 'user',
+            content: [
+              { type: 'audio_url', audioUrl: { url: 'data:audio/mp3;base64,AU', id: 'au-id' } },
+            ],
+            toolCalls: [],
+            origin: { kind: 'user' },
+          },
+        ],
+        undefined,
+        { image_url: true, video_url: true },
+      );
+
+      const allParts = projected.flatMap((message) => message.content);
+      expect(allParts.some((part) => part.type === 'audio_url')).toBe(true);
+    });
+
     it('returns the projected messages untouched when there is no media', () => {
       const projected = projector.projectMediaStripped([user('just text')]);
       expect(projected).toEqual(project([user('just text')]));

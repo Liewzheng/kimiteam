@@ -67,7 +67,7 @@ const CATALOGUED_PROVIDER = {
 const CATALOGUED_MODEL_CAPABILITIES = {
   image_in: true,
   video_in: true,
-  audio_in: false,
+  audio_in: true,
   thinking: true,
   tool_use: true,
   max_context_tokens: 256_000,
