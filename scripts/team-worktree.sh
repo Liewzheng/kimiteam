@@ -4,7 +4,7 @@
 # Single source of spec: .tmp/team-worktree-design-20260807.md (§B.1 + 补遗).
 # Every command first resolves MAIN_ROOT from `git worktree list --porcelain`
 # (first entry = the main tree) and asserts the main tree is on
-# `feat/subagent-team`, so a worktree batch can never be driven from the wrong
+# `main`, so a worktree batch can never be driven from the wrong
 # baseline. Exit codes: 0 ok / 1 usage / 2 precheck failed / 3 merge conflict
 # bounced. The registry at $MAIN_ROOT/.tmp/team-worktrees.json is append-only
 # JSONL (one status-transition row per event; current state = last row per name).
@@ -16,7 +16,7 @@ usage() {
 usage: sh scripts/team-worktree.sh <command> [args]
 
 team-mode worktree lifecycle. Must be run from the main tree, which must be on
-branch feat/subagent-team.
+branch main.
 
 commands:
   create <member> <slug> [--no-install]
@@ -247,8 +247,8 @@ cmd_reap() {
   branch="team/$name"
   dir="$MAIN_ROOT/.worktrees/$name"
 
-  echo "reap $name: archiving unmerged commits (feat/subagent-team..$branch):"
-  git -C "$MAIN_ROOT" log --oneline "feat/subagent-team..$branch" 2>/dev/null || true
+  echo "reap $name: archiving unmerged commits (main..$branch):"
+  git -C "$MAIN_ROOT" log --oneline "main..$branch" 2>/dev/null || true
 
   if [ "$keep" = 0 ] && [ "$yes" != 1 ]; then
     echo "error: reap without --keep-branch requires explicit --yes (force-removes the worktree and deletes branch $branch)" >&2
@@ -321,7 +321,7 @@ cmd_list() {
       ahead="-"
       last="-"
       if git -C "$MAIN_ROOT" show-ref --verify --quiet "refs/heads/$branch"; then
-        ahead="$(git -C "$MAIN_ROOT" rev-list --count "feat/subagent-team..$branch" 2>/dev/null || true)"
+        ahead="$(git -C "$MAIN_ROOT" rev-list --count "main..$branch" 2>/dev/null || true)"
         last="$(git -C "$MAIN_ROOT" log -1 --format=%cs "$branch" 2>/dev/null || true)"
       fi
       printf '%-42s | %-8s | %-7s | %-12s | %-5s | %s\n' "$name" "$member" "$todo" "$status" "$ahead" "$last"
@@ -331,7 +331,7 @@ cmd_list() {
   for branch in $(git -C "$MAIN_ROOT" for-each-ref --format='%(refname:short)' refs/heads/team/); do
     bname="${branch#team/}"
     if ! grep -qxF "$bname" "$names_tmp" 2>/dev/null; then
-      ahead="$(git -C "$MAIN_ROOT" rev-list --count "feat/subagent-team..$branch" 2>/dev/null || true)"
+      ahead="$(git -C "$MAIN_ROOT" rev-list --count "main..$branch" 2>/dev/null || true)"
       last="$(git -C "$MAIN_ROOT" log -1 --format=%cs "$branch" 2>/dev/null || true)"
       printf '%-42s | %-8s | %-7s | %-12s | %-5s | %s\n' "$bname" "-" "-" "unregistered" "$ahead" "$last"
     fi
@@ -357,8 +357,8 @@ fi
 REGISTRY="$MAIN_ROOT/.tmp/team-worktrees.json"
 
 current="$(git -C "$MAIN_ROOT" branch --show-current 2>/dev/null || true)"
-if [ "$current" != "feat/subagent-team" ]; then
-  echo "error: main tree must be on branch 'feat/subagent-team' (found '${current:-detached}')" >&2
+if [ "$current" != "main" ]; then
+  echo "error: main tree must be on branch 'main' (found '${current:-detached}')" >&2
   exit 2
 fi
 

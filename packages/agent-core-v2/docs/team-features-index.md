@@ -11,7 +11,7 @@
 | 验收硬门禁(score_gate) | 待补(实现 `src/agent/tools/team-score/acceptanceEvidenceService.ts` + `teamScoreTool.ts`) | 决策表 Member delivers / Before scoring | `score_gate` | 待补 | 默认 `enforce`:TeamScore `record` 需可检测验收证据——读交付输出(TaskOutput / `agents/main/tasks/<task_id>/output.log`)、`git diff`/`git show`、或重跑测试(vitest/pnpm test/npm test/pytest)自交付完成起;`warn` 带警告放行;`off` 关闭;`penalty` 豁免;仅形状检测 |
 | 两级 pipeline 注入 | 待补(注入在 `src/agent/profile/context.ts`) | Innovation 节 + 决策表 Same workflow seen twice | 无(pipeline.md 文件) | TC-PIPELINE-001 | 全局 `~/.kimi-code/pipeline.md` + 项目 `.kimi-code/pipeline.md` |
 | 主管限时打断 | [lead-turn-timeout.md](lead-turn-timeout.md) | Controlling 节 Budget your turn + 决策表 Long-running task | `lead_turn_timeout_ms` | TC-LEAD-001~004 | 默认 30s,`0`=关;执行类工具耗时 + 全部 step 生成时长计入 |
-| 过错扣分(penalty) | [score-penalty.md](score-penalty.md) | 决策表 User reports a defect / Penalty confirmed + 校准节 | 无(TeamScore penalty 动作) | 待补 | 追加负向条目;分级扣分;<80 停派观察 |
+| 过错扣分(penalty) | [score-penalty.md](score-penalty.md) | 决策表 User reports a defect / Penalty confirmed + 校准节 | 无(TeamScore penalty 动作) | 待补 | 追加负向条目;分级扣分;<60 差线停派观察 |
 | 团队作用域(全局/项目) | 待补(onboarding skill) | 无(onboarding skill) | 无 | 待补 | 全局=`user` `~/.kimi-code/agents`;项目=`project` `<项目根>/.kimi-code/agents` |
 | Web 团队面板 | 待补(`apps/kimi-web/src/components/team/TeamPanel.vue`) | 无 | 无 | TC-WEB-001~005 | `/web`;只读 roster + hire/fire/评分/递话/并发/teamMode |
 | Onboarding(冷启动/调整/受控探测) | 技能本体 `src/app/skillCatalog/builtin/team-init.md` | 无(onboarding skill) | 无 | TC-TEAM-004~008 | `/team init` 触发;4 问+追问;探测经同意;调整模式 |

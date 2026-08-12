@@ -27,7 +27,7 @@
 - **缺陷分级**:
   - 轻微(minor):扣 5-10;
   - 中等(moderate):扣 15-20;
-  - 严重(severe):扣到 **80 以下**,触发既有「stop-and-observe(停派观察)」规则。
+  - 严重(severe):扣到 **60 以下**(100 分制差线),触发既有「stop-and-observe(停派观察)」规则。
 - 扣分是**追加**,不改写已存在的正向条目(保留历史可审计);累计体现在该成员均分/排名上。
 
 ## 示例
@@ -36,7 +36,7 @@
 
 ## 与既有规则衔接
 
-- **评分标尺/通胀检查**:penalty 是标尺的纠偏补丁,负向条目使均分回落,缓解通胀;若扣分后该成员近 10 条仍全 ≥90,通胀警告照常触发。
+- **评分标尺/通胀检查**:penalty 是标尺的纠偏补丁,负向条目使均分回落,缓解通胀;若扣分后该成员近 10 条仍全 ≥75,通胀警告照常触发(引擎 `INFLATION_HIGH_SCORE=75`)。
 - **计分强制提醒**:未计分交付仍会被引擎提醒;penalty 属于「已计分交付的回改」,不是替代同轮计分。
-- **stop-and-observe**:严重扣分到 <80 时,按 doctrine「Member average score < 70 停派」与「below 80 triggers stop-and-observe」规则执行。
+- **stop-and-observe**:严重扣分到 <60 时,按 doctrine「Member average score < 60 停派」与「below 60 triggers stop-and-observe」规则执行(100 分制差线)。
 - **doctrine**:对应「User reports a defect」「Penalty confirmed」两行决策表与评分校准节「已评分交付发现过错必须回改」一句。
