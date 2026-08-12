@@ -74,7 +74,8 @@
  *   `handlePrintMainTurnCompleted` → rebuilt over the v2 print-mode config
  *   helpers and the session's per-agent task services (no v2 service owns
  *   the print policy).
- * - `listGlobalMcpServers` / `addGlobalMcpServer` / `updateGlobalMcpServer` /
+ * - `listGlobalMcpServers` / `listGlobalMcpServerAuthStatuses` /
+ *   `addGlobalMcpServer` / `updateGlobalMcpServer` /
  *   `removeGlobalMcpServer` / `beginGlobalMcpServerAuth` /
  *   `completeGlobalMcpServerAuth` / `cancelGlobalMcpServerAuth` /
  *   `resetGlobalMcpServerAuth` / `testGlobalMcpServer` → the v1 user-global
@@ -265,6 +266,8 @@ import type {
   ForkSessionInput,
   GetConfigOptions,
   GetCronTasksResult,
+  GlobalMcpServerAuthState,
+  GlobalMcpServerAuthStatus,
   GoalSnapshot,
   GoalToolResult,
   JsonObject,
@@ -2062,6 +2065,21 @@ export class SDKRpcClientV2 extends SDKRpcClientBase {
     return this.globalMcpConfig.list();
   }
 
+  override async listGlobalMcpServerAuthStatuses(): Promise<
+    readonly GlobalMcpServerAuthStatus[]
+  > {
+    const servers = await this.globalMcpConfig.list();
+    const oauth = new McpOAuthService({
+      store: createMcpOAuthStore(this.engineAccessor.get(IAtomicDocumentStore)),
+    });
+    return Promise.all(
+      servers.map(async (server) => ({
+        name: server.name,
+        authStatus: await this.globalMcpServerAuthState(server, oauth),
+      })),
+    );
+  }
+
   override async addGlobalMcpServer(
     server: McpServerConfig,
   ): Promise<readonly McpServerConfig[]> {
@@ -2151,11 +2169,20 @@ export class SDKRpcClientV2 extends SDKRpcClientBase {
     options: { readonly cwd?: string } = {},
   ): Promise<McpTestResult> {
     const server = await this.globalMcpConfig.get(name);
-    const config = mcpConfigWithoutName(server);
+    return this.withGlobalMcpServerProbe(server, options.cwd, (manager) =>
+      standaloneMcpTestResult(server.name, manager),
+    );
+  }
+
+  private async withGlobalMcpServerProbe<T>(
+    server: McpServerConfig,
+    cwd: string | undefined,
+    inspect: (manager: McpConnectionManager) => T,
+  ): Promise<T> {
     await this.configReady;
     const section = this.engineAccessor.get(IConfigService).get<McpSection | undefined>(MCP_SECTION);
     const manager = new McpConnectionManager({
-      stdioCwd: options.cwd,
+      stdioCwd: cwd,
       oauthService: await this.globalMcpOAuthService(),
       resolveClientName: () => this.resolveMcpClientName(),
       resolveDefaultTimeouts: () => ({
@@ -2164,11 +2191,29 @@ export class SDKRpcClientV2 extends SDKRpcClientBase {
       }),
     });
     try {
-      await manager.connectAll({ [server.name]: config });
-      return standaloneMcpTestResult(server.name, manager);
+      await manager.connectAll({ [server.name]: mcpConfigWithoutName(server) });
+      return inspect(manager);
     } finally {
       await manager.shutdown();
     }
+  }
+
+  private async globalMcpServerAuthState(
+    server: McpServerConfig,
+    oauth: McpOAuthService,
+  ): Promise<GlobalMcpServerAuthState> {
+    if (server.transport === 'stdio') return 'not-applicable';
+    if (server.bearerTokenEnvVar !== undefined) return 'bearer-token';
+    // Keep status classification aligned with the existing connection manager:
+    // unmarked static headers are not treated as OAuth credentials.
+    if (server.headers !== undefined && server.auth !== 'oauth') return 'not-applicable';
+    if (server.transport !== 'http' && server.auth !== 'oauth') return 'not-applicable';
+    if (await oauth.hasTokens(server.name, server.url)) return 'oauth-authorized';
+    if (server.auth === 'oauth') return 'oauth-required';
+
+    return this.withGlobalMcpServerProbe(server, undefined, (manager) =>
+      manager.get(server.name)?.status === 'needs-auth' ? 'oauth-required' : 'not-applicable',
+    );
   }
 
   /**
