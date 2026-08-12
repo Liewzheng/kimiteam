@@ -39,7 +39,7 @@ const TOOL_DESCRIPTION =
  */
 export const INFLATION_MIN_SAMPLE = 5;
 /** A score at or above this is a "high" grade for inflation purposes. */
-export const INFLATION_HIGH_SCORE = 90;
+export const INFLATION_HIGH_SCORE = 75;
 /** How many recent scores the inflation check considers (including the new one). */
 export const INFLATION_WINDOW = 10;
 
@@ -47,7 +47,7 @@ export const INFLATION_WINDOW = 10;
  * Detect score inflation for a profile from its recent raw scores (newest
  * last, already capped at {@link INFLATION_WINDOW}). Returns a neutral
  * calibration warning when the sample is large enough and the distribution is
- * skewed high — every score ≥ 90, or an average ≥ 90 — and `undefined`
+ * skewed high — every score ≥ 75, or an average ≥ 75 — and `undefined`
  * otherwise. Advisory only: the caller decides whether to surface it; this
  * never rejects a score.
  */
@@ -62,8 +62,8 @@ export function detectScoreInflation(
   if (!allHigh && average < INFLATION_HIGH_SCORE) return undefined;
   const n = window.length;
   return allHigh
-    ? `Score inflation detected: the last ${n} scores for ${profileName} are all >= 90. Recalibrate against the rubric — 90s are passing grades, 95+ reserved for exceptional work.`
-    : `Score inflation detected: the average of the last ${n} scores for ${profileName} is >= 90. Recalibrate against the rubric — 90s are passing grades, 95+ reserved for exceptional work.`;
+    ? `Score inflation detected: the last ${n} scores for ${profileName} are all >= ${INFLATION_HIGH_SCORE}. Recalibrate against the rubric — 80 is the passing grade, 90+ reserved for exceptional work.`
+    : `Score inflation detected: the average of the last ${n} scores for ${profileName} is >= ${INFLATION_HIGH_SCORE}. Recalibrate against the rubric — 80 is the passing grade, 90+ reserved for exceptional work.`;
 }
 
 

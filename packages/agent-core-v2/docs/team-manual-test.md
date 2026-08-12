@@ -307,14 +307,14 @@
 - **证据**:`packages/agent-core-v2/src/agent/tools/team-score/team-score.ts:16`、`teamScoreTool.ts:113-116`
 - **关联特性**:`.changeset/subagent-performance-card.md`
 
-#### TC-TEAM-010 — 通胀警告(最近全 ≥90)
+#### TC-TEAM-010 — 通胀警告(最近全 ≥75)
 - **模块**:团队工具; **优先级**:P2
 - **前置条件**:临时环境,构造某成员近 10 条内 ≥5 条高分
-- **步骤**:连续给出高分(如 5 条以上 ≥90)后再次 TeamScore。
-- **预期结果**:样本 ≥5 且窗口(最近 10 条)内「全部 ≥90」或「平均 ≥90」时,回显警告:`Score inflation detected: the last {n} scores for {profile} are all >= 90. Recalibrate against the rubric — 90s are passing grades, 95+ reserved for exceptional work.`(或平均口径文案);仅 1-2 条高分不算(ramp-up);警告只提醒不拒收。
+- **步骤**:连续给出高分(如 5 条以上 ≥75)后再次 TeamScore。
+- **预期结果**:样本 ≥5 且窗口(最近 10 条)内「全部 ≥75」或「平均 ≥75」时,回显警告:`Score inflation detected: the last {n} scores for {profile} are all >= 75. Recalibrate against the rubric — 80 is the passing grade, 90+ reserved for exceptional work.`(或平均口径文案);仅 1-2 条高分不算(ramp-up);警告只提醒不拒收。
 - **实际结果**:——
 - **状态**:需人工(未实测:避免动现役团队)
-- **证据**:`teamScoreTool.ts:30-57`(`INFLATION_MIN_SAMPLE=5`、`INFLATION_HIGH_SCORE=90`、`INFLATION_WINDOW=10`)
+- **证据**:`teamScoreTool.ts:30-57`(`INFLATION_MIN_SAMPLE=5`、`INFLATION_HIGH_SCORE=75`、`INFLATION_WINDOW=10`)
 - **关联特性**:`.changeset/subagent-performance-card.md`
 
 #### TC-TEAM-011 — 绩效卡(派工时 subagent 见自己均分/排名)
