@@ -55,6 +55,7 @@ export default {
   exportLog: '故障排查日志',
   logHint: '加 ?debug=1 开启采集',
   exportLogBtn: '导出日志',
+  workspaceSortHint: '按名称保持列表稳定；按最后编辑时间让活跃工作区上浮；手动模式可拖拽自定义顺序。',
   conversationToc: '显示对话目录',
   conversationTocHint: '在右侧显示可点击跳转的对话目录',
   archivedTitle: '已归档会话',

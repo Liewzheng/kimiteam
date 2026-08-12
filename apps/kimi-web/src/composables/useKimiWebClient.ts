@@ -11,6 +11,8 @@ import {
   reconcileWorkspaceOrder,
   sortByWorkspaceOrder,
   sortWorkspacesByRecent,
+  sortWorkspacesByName,
+  parseWorkspaceSortMode,
   type WorkspaceSortMode,
 } from '../lib/workspaceOrder';
 import { mergeWorkspaces } from '../lib/mergeWorkspaces';
@@ -2474,12 +2476,15 @@ const mergedWorkspaces = computed<AppWorkspace[]>(() =>
 const workspaceOrder = ref<string[]>(loadWorkspaceOrder());
 
 /**
- * Sidebar workspace sort mode. `recent` (default) re-sorts by each workspace's
- * most recent session activity and stays live as sessions update; `manual` keeps
- * the persisted/dragged order. Persisted so the choice survives a refresh.
+ * Sidebar workspace sort mode. `name` (default) keeps a stable alphabetical
+ * order; `recent` re-sorts by each workspace's most recent session activity
+ * and stays live as sessions update; `manual` keeps the persisted/dragged
+ * order. Parsed from the persisted value with a `name` fallback so the list
+ * never reorders itself unless the user asked for it. Persisted so the choice
+ * survives a refresh.
  */
 const workspaceSortMode = ref<WorkspaceSortMode>(
-  loadWorkspaceSort() === 'manual' ? 'manual' : 'recent',
+  parseWorkspaceSortMode(loadWorkspaceSort()),
 );
 
 // Reconcile the persisted order with the set of currently-known workspaces:
@@ -2510,10 +2515,10 @@ watch(
 );
 
 /** Sidebar-facing workspace list. Order follows `workspaceSortMode`: the
- *  persisted/dragged order in `manual` mode, or most-recent-session-first in
- *  `recent` mode. The recent map is only built (and `rawState.sessions` only
- *  read) in the recent branch, so manual mode does not re-sort on every session
- *  update. */
+ *  persisted/dragged order in `manual` mode, most-recent-session-first in
+ *  `recent` mode, or the stable display-name order in `name` mode. The recent
+ *  map is only built (and `rawState.sessions` only read) in the recent branch,
+ *  so manual and name modes do not re-sort on every session update. */
 const workspacesView = computed<WorkspaceView[]>(() => {
   const views = mergedWorkspaces.value.map((w) => ({
     id: w.id,
@@ -2533,6 +2538,9 @@ const workspacesView = computed<WorkspaceView[]>(() => {
       }
     }
     return sortWorkspacesByRecent(views, lastEditedAt);
+  }
+  if (workspaceSortMode.value === 'name') {
+    return sortWorkspacesByName(views);
   }
   return sortByWorkspaceOrder(views, workspaceOrder.value);
 });

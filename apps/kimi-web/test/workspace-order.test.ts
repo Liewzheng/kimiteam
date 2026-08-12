@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   moveInOrder,
+  parseWorkspaceSortMode,
   reconcileWorkspaceOrder,
   sortByWorkspaceOrder,
   sortWorkspacesByRecent,
+  sortWorkspacesByName,
 } from '../src/lib/workspaceOrder';
 
 describe('reconcileWorkspaceOrder', () => {
@@ -94,6 +96,44 @@ describe('sortWorkspacesByRecent', () => {
     const copy = [...items];
     sortWorkspacesByRecent(items, new Map([['c', 1]]));
     expect(items).toEqual(copy);
+  });
+});
+
+describe('sortWorkspacesByName', () => {
+  const items = [{ id: 'a', name: 'zeta' }, { id: 'b', name: 'alpha' }, { id: 'c', name: 'Mike' }];
+
+  it('orders workspaces by display name, ascending, case-insensitive', () => {
+    expect(sortWorkspacesByName(items).map((x) => x.id)).toEqual(['b', 'c', 'a']);
+  });
+
+  it('is number-aware (ws-2 before ws-10)', () => {
+    const rows = [{ id: 'w1', name: 'ws-10' }, { id: 'w2', name: 'ws-2' }];
+    expect(sortWorkspacesByName(rows).map((x) => x.id)).toEqual(['w2', 'w1']);
+  });
+
+  it('falls back to the id when the name is empty', () => {
+    const rows = [{ id: 'zeta-ws' }, { id: 'alpha-ws', name: '' }];
+    expect(sortWorkspacesByName(rows).map((x) => x.id)).toEqual(['alpha-ws', 'zeta-ws']);
+  });
+
+  it('is stable and does not mutate the input', () => {
+    const copy = [...items];
+    sortWorkspacesByName(items);
+    expect(items).toEqual(copy);
+    expect(sortWorkspacesByName(items).length).toBe(3);
+  });
+});
+
+describe('parseWorkspaceSortMode', () => {
+  it('keeps an explicit manual / recent / name choice', () => {
+    expect(parseWorkspaceSortMode('manual')).toBe('manual');
+    expect(parseWorkspaceSortMode('recent')).toBe('recent');
+    expect(parseWorkspaceSortMode('name')).toBe('name');
+  });
+
+  it('defaults to name for unset or unknown values (list stays stable)', () => {
+    expect(parseWorkspaceSortMode(null)).toBe('name');
+    expect(parseWorkspaceSortMode('by-magic')).toBe('name');
   });
 });
 

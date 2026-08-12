@@ -3,6 +3,7 @@ export default {
   sessionsHeader: 'sessions',
   workspaces: '工作区',
   sortWorkspaces: '工作区排序',
+  sortName: '按名称',
   sortManual: '手动排序',
   sortRecent: '按最后编辑时间',
   collapseAll: '折叠全部工作区',

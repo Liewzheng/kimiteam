@@ -3,6 +3,7 @@ export default {
   sessionsHeader: 'sessions',
   workspaces: 'Workspaces',
   sortWorkspaces: 'Sort workspaces',
+  sortName: 'Name',
   sortManual: 'Manual',
   sortRecent: 'Last edited',
   collapseAll: 'Collapse all workspaces',
