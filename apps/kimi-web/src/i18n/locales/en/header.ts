@@ -21,4 +21,6 @@ export default {
   forkSession: 'Fork session',
   archiveSession: 'Archive',
   exportSession: 'Export session',
+  switchWide: 'Switch to wide layout',
+  switchNarrow: 'Switch to narrow layout',
 };

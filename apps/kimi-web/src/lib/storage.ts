@@ -40,6 +40,8 @@ export const STORAGE_KEYS = {
   openInLastTarget: 'kimi-web.open-in.last-target',
   sidebarCollapsed: 'kimi-web.sidebar-collapsed',
   sidebarWidth: 'kimi-web.sidebar-width',
+  /** Per-session content width preference (narrow/wide), see loadContentWidth. */
+  contentWidth: 'kimi-web.content-width',
   // deprecated cleanups (kept so the removals still fire for old users)
   codeFont: 'kimi-web.code-font',
   contentAlign: 'kimi-web.content-align',
@@ -198,4 +200,45 @@ export function loadWorkspaceSort(): string | null {
 
 export function saveWorkspaceSort(mode: string): void {
   safeSetString(STORAGE_KEYS.workspaceSort, mode);
+}
+
+/** Chat content width preference for a session: `'narrow'` (default) clamps
+ *  content to the reading column with wide tables scrolling inside it;
+ *  `'wide'` lets content grow to its natural width. */
+export type ContentWidthMode = 'narrow' | 'wide';
+
+/**
+ * Per-session content width preferences. Persisted as a compact JSON map keyed
+ * by session id (only the `'wide'`/`'narrow'` entries), so each session keeps
+ * its own wide/narrow choice across page reloads — same pattern as the unread
+ * map. Unknown values are dropped rather than passed through.
+ */
+export function loadContentWidth(): Record<string, ContentWidthMode> {
+  const parsed = safeGetJson<unknown>(STORAGE_KEYS.contentWidth);
+  // The stored shape is a session-id → mode object; reject arrays and
+  // primitives so an index-keyed array can never masquerade as session ids.
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+  const out: Record<string, ContentWidthMode> = {};
+  for (const [id, value] of Object.entries(parsed as Record<string, unknown>)) {
+    if (value === 'narrow' || value === 'wide') out[id] = value;
+  }
+  return out;
+}
+
+/**
+ * Apply a partial set of content width changes on top of the latest stored
+ * value. Passing only the changed entries keeps a change from another tab from
+ * being overwritten by this tab's stale state. A `undefined` value deletes the
+ * key, falling the session back to the default `'narrow'`.
+ */
+export function saveContentWidth(
+  changes: Record<string, ContentWidthMode | undefined>,
+): void {
+  const current = loadContentWidth();
+  const merged: Record<string, ContentWidthMode> = { ...current };
+  for (const [id, value] of Object.entries(changes)) {
+    if (value === undefined) delete merged[id];
+    else merged[id] = value;
+  }
+  safeSetJson(STORAGE_KEYS.contentWidth, merged);
 }

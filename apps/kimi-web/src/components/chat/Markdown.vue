@@ -793,18 +793,19 @@ function copyDiff(code: string, idx: number) {
   font-weight: var(--weight-medium);
 }
 
-/* Markdown tables — wide tables scroll horizontally INSIDE the table's own
-   wrapper instead of squeezing into (or overflowing) the reading column.
-   The wrapper is a fixed-width local scroll container: it stays pinned to the
-   message width (`width:100%`, `min-width:0` so it can shrink inside flex
-   tracks) and clips any overflow behind its own `overflow-x:auto` scrollbar —
-   the chat pane and the page never scroll sideways. The table itself grows to
-   its content width (`width:max-content`, `max-width:none`,
-   `table-layout:auto`), so many-column or long-cell tables keep their natural
-   layout and only the excess scrolls within the wrapper. `min-width:100%` keeps
-   narrow tables stretched to fill the wrapper exactly as before. `!important`
-   beats markstream's scoped `.table-node[data-v-…]` rules regardless of
-   injection order. */
+/* Markdown tables — the wrapper is a fixed-width local scroll container: it
+   stays pinned to the message width (`width:100%`, `min-width:0` so it can
+   shrink inside flex tracks) and clips any overflow behind its own
+   `overflow-x:auto` scrollbar — the chat pane and the page never scroll
+   sideways. The table's own width is two-tiered via the `--md-table-width`
+   custom property (set by the conversation pane's wide-content mode):
+   - narrow (default): `100%` — the table compresses into the reading column
+     and never exceeds the container's default display width;
+   - wide (`is-wide` ancestor): `max-content` — the table grows to its natural
+     content width and the excess scrolls inside the wrapper.
+   `min-width:100%` keeps narrow tables stretched to fill the wrapper exactly
+   as before. `!important` beats markstream's scoped `.table-node[data-v-…]`
+   rules regardless of injection order. */
 .md :deep(.table-node-wrapper) {
   width: 100%;
   max-width: 100% !important;
@@ -817,7 +818,7 @@ function copyDiff(code: string, idx: number) {
   --table-header-bg: var(--color-surface);
   font-size: var(--text-lg);
   margin: 0.5em 0;
-  width: max-content !important;
+  width: var(--md-table-width, 100%) !important;
   min-width: 100%;
   max-width: none !important;
   table-layout: auto !important;
@@ -831,8 +832,9 @@ function copyDiff(code: string, idx: number) {
      max-width on the cell itself only works in Firefox — Chromium ignores it
      under table-layout:auto — so the clamp is reinforced on the content box
      below. Wider tables made of many columns still scroll inside the
-     wrapper. */
-  max-width: var(--p-table-cell-max);
+     wrapper. The wide-content mode lifts the cap (`--md-table-cell-max: none`)
+     so a wide table keeps its natural column widths. */
+  max-width: var(--md-table-cell-max, var(--p-table-cell-max));
 }
 /* Chromium honors max-width on this inner box even under table-layout:auto:
    markstream wraps plain-text cell content in a .text-node span, and as an
@@ -844,7 +846,7 @@ function copyDiff(code: string, idx: number) {
    one that matters. */
 .md :deep(.table-node .text-node) {
   display: inline-block;
-  max-width: var(--p-table-cell-max);
+  max-width: var(--md-table-cell-max, var(--p-table-cell-max));
   vertical-align: top;
 }
 

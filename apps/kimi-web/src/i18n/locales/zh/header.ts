@@ -21,4 +21,6 @@ export default {
   forkSession: '分叉会话',
   archiveSession: '归档',
   exportSession: '导出会话',
+  switchWide: '切换到宽屏',
+  switchNarrow: '切换到窄屏',
 };

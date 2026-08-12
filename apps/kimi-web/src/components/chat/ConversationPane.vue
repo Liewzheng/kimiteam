@@ -19,6 +19,7 @@ import { getVisibleWorkspaces } from '../../lib/workspacePicker';
 import { safeRemove, STORAGE_KEYS } from '../../lib/storage';
 import { findActiveTurnIndex } from '../../lib/tocActive';
 import { teamTabState } from '../../lib/teamRows';
+import { useContentWidthMode } from '../../composables/useContentWidthMode';
 
 const { t } = useI18n();
 
@@ -211,6 +212,14 @@ function pickWorkspace(id: string): void {
 // always centered now. Drop the old persisted preference so users who once
 // picked 'left' aren't frozen on it with no way back.
 safeRemove(STORAGE_KEYS.contentAlign);
+
+// Per-session content width (narrow/wide). Session-isolated and persisted via
+// lib/storage; the header toggle and the content-wrap `is-wide` hook both read
+// from this. Kept next to the other header/UI-preference wiring, away from the
+// scroll logic below.
+const { mode: contentWidth, toggleContentWidth } = useContentWidthMode(
+  () => props.sessionId,
+);
 
 // ---------------------------------------------------------------------------
 // Per-session ChatPane caching (KeepAlive)
@@ -1366,6 +1375,7 @@ defineExpose({ loadComposerForEdit, focusComposer, openTodosHistory });
       :git-diff-stats="gitDiffStats"
       :is-git-repo="!!gitInfo"
       :pr="pr"
+      :content-width="contentWidth"
       :copied="copyConversationCopied"
       @open-changes="emit('openChanges')"
       @copy-all="chatPaneRef?.copyConversation()"
@@ -1375,6 +1385,7 @@ defineExpose({ loadComposerForEdit, focusComposer, openTodosHistory });
       @fork-session="(id) => emit('forkSession', id)"
       @archive-session="(id) => emit('archiveSession', id)"
       @export-session="(id) => emit('exportSession', id)"
+      @toggle-content-width="toggleContentWidth"
     />
 
     <!-- Conversation outline: right edge rail of vertical bars (one per user
@@ -1403,7 +1414,13 @@ defineExpose({ loadComposerForEdit, focusComposer, openTodosHistory });
         @touchstart.passive="onPanesTouchStart"
         @touchmove.passive="onPanesTouchMove"
       >
-        <div class="content-wrap" :class="[mobile ? 'align-mobile' : 'align-center']">
+        <div
+          class="content-wrap"
+          :class="[
+            mobile ? 'align-mobile' : 'align-center',
+            { 'is-wide': contentWidth === 'wide' },
+          ]"
+        >
           <template v-if="turns.length === 0 && !sessionLoading">
             <!-- Empty session: Composer rendered in the centre of the pane -->
             <div class="empty-spacer" />
@@ -1710,6 +1727,22 @@ defineExpose({ loadComposerForEdit, focusComposer, openTodosHistory });
 .content-wrap.align-left { margin-left: 0; margin-right: auto; }
 /* Mobile: bubbles span the full pane width; no reading-column constraint. */
 .content-wrap.align-mobile { max-width: none; }
+/* Wide content mode: relax the reading column to --p-content-wide and let
+   wide markdown tables grow to their natural width. The --md-table-* custom
+   properties are read by Markdown.vue's table rules (narrow default = 100%
+   width inside the scrolling wrapper); only the wide state overrides them.
+   The table's own wrapper still owns overflow-x, so the chat area never
+   scrolls sideways. */
+.content-wrap.is-wide {
+  max-width: var(--p-content-wide);
+  --md-table-width: max-content;
+  --md-table-cell-max: none;
+}
+/* Mobile has no reading column at all, so `is-wide` must not reintroduce a
+   max-width clamp there. */
+.con.mobile .content-wrap.is-wide {
+  max-width: none;
+}
 @media (max-width: 640px) {
   .con.mobile {
     min-width: 0;

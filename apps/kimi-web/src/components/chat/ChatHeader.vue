@@ -7,6 +7,7 @@ import { computed, nextTick, onUnmounted, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { copyTextToClipboard } from '../../lib/clipboard';
 import { isMacosDesktop } from '../../lib/desktopFlag';
+import type { ContentWidthMode } from '../../lib/storage';
 import Menu from '../ui/Menu.vue';
 import MenuItem from '../ui/MenuItem.vue';
 import IconButton from '../ui/IconButton.vue';
@@ -30,6 +31,8 @@ const props = defineProps<{
   isGitRepo?: boolean;
   /** GitHub PR for the current branch, when known (null/undefined = none). */
   pr?: { number: number; state: string; url: string } | null;
+  /** Current session's content width mode; drives the wide/narrow toggle. */
+  contentWidth?: ContentWidthMode;
   /** True for ~2s after a successful copy-all, to flip the icon to a check. */
   copied?: boolean;
 }>();
@@ -43,6 +46,7 @@ const emit = defineEmits<{
   forkSession: [id: string];
   archiveSession: [id: string];
   exportSession: [id: string];
+  toggleContentWidth: [];
 }>();
 
 const ahead = computed(() => props.ahead ?? 0);
@@ -69,6 +73,12 @@ function prStateClass(state: string): string {
 function prStateLabel(state: string): string {
   return t(PR_STATE_LABEL_KEYS[normalizedPrState(state)] ?? 'header.prStatusUnknown');
 }
+
+/** Wide/narrow toggle label: names the action the button takes (switch to the
+ *  other mode) so both the tooltip and aria-label read as an action. */
+const widthToggleLabel = computed(() =>
+  props.contentWidth === 'wide' ? t('header.switchNarrow') : t('header.switchWide'),
+);
 
 // ---------------------------------------------------------------------------
 // More-menu (kebab dropdown)
@@ -239,6 +249,21 @@ function startArchive(): void {
         <span class="ch-ses">{{ sessionTitle }}</span>
       </Tooltip>
     </div>
+
+    <!-- Content width toggle: narrow (default, reading column) vs wide
+         (content at natural width). Shows the action the button would take:
+         expand when narrow, collapse when wide. aria-pressed reflects the
+         current mode. -->
+    <Tooltip :text="widthToggleLabel">
+      <IconButton
+        class="ch-act-width"
+        :label="widthToggleLabel"
+        :aria-pressed="contentWidth === 'wide'"
+        @click="emit('toggleContentWidth')"
+      >
+        <Icon :name="contentWidth === 'wide' ? 'collapse' : 'expand'" size="md" />
+      </IconButton>
+    </Tooltip>
 
     <!-- More menu trigger: copy-all + session actions -->
     <IconButton
