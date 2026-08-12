@@ -1047,6 +1047,9 @@ html[lang="ru"] .vlabel {
   display: inline-flex;
   align-items: center;
   gap: .35rem;
+  flex-shrink: 0;              /* never let a long wrapping label squeeze the button */
+  white-space: nowrap;         /* keep the two-glyph label on one line */
+  align-self: flex-start;      /* pinned top-right when the label wraps to two lines */
   background: none;
   border: 0;
   padding: .15rem .35rem;
@@ -1384,6 +1387,21 @@ html[lang="ru"] .vlabel {
   .terminal-wrap .seal-hero { right: .75rem; bottom: -1.9rem; }
   .hero-meta { gap: .5rem 1rem; }
   .terminal-screen { font-size: .78rem; padding-inline: 1rem; }
+}
+
+@media (max-width: 480px) {
+  /* P2-1: keep the copy button a comfortable touch target while the
+     wrapped label + badge take the vertical space they need */
+  .code-label .code-copy { min-height: 44px; }
+
+  /* P2-2: the roster's status column overflows on phones; fade the right
+     edge of the scrollable screen so users see there is more to swipe to.
+     480px cutoff: the longest line fits above ~542px, so a wider mask
+     breakpoint would fade content that is not actually clipped */
+  .terminal-screen {
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 2rem), transparent);
+            mask-image: linear-gradient(to right, #000 calc(100% - 2rem), transparent);
+  }
 }
 
 /* ---------- 20. Reduced motion ---------- */
