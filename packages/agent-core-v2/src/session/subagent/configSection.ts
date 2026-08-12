@@ -8,7 +8,9 @@
  * the env var is set, `stripEnvBoundFields` restores the env-free raw value
  * before persistence, so the override never leaks into `config.toml`. Per-run
  * timeouts resolve through `resolveSubagentTimeoutMs`, and the timeout
- * message renders with `formatSubagentTimeoutDescription`.
+ * message renders with `formatSubagentTimeoutDescription`. The run-duration
+ * alert threshold (`run_alert_ms`, default 15 min) follows the same shape,
+ * with its own `KIMI_SUBAGENT_RUN_ALERT_MS` env override (`0` disables).
  *
  * Team mode resolves through `resolveTeamMode` with precedence: an explicit
  * `[subagent] team_mode` value wins, then the `KIMI_CODE_TEAM_MODE` env var
@@ -210,6 +212,16 @@ export const SubagentConfigSchema = z.object({
    * "perfunctory acceptance".
    */
   scoreGate: z.enum(['off', 'warn', 'enforce']).optional(),
+  /**
+   * Run-duration alert threshold (`[subagent] run_alert_ms`, default 15
+   * minutes; `0` disables). While a supervised team-mode subagent run is in
+   * flight, the engine injects a system message into the main agent's next
+   * turn once the run has been running this long, then repeats every 30
+   * minutes — the lead is nudged to review long-running work instead of
+   * waiting blind for the 2h hard timeout. Duty members (no hard timeout) are
+   * alerted too.
+   */
+  runAlertMs: z.number().int().min(0).optional(),
 });
 
 export type SubagentConfig = z.infer<typeof SubagentConfigSchema>;
@@ -261,6 +273,12 @@ export type ScoreGateMode = 'off' | 'warn' | 'enforce';
 /** Default TeamScore acceptance-gate mode: `enforce`. */
 export const DEFAULT_SCORE_GATE: ScoreGateMode = 'enforce';
 
+/** Default run-duration alert threshold: 15 minutes (`0` disables). */
+export const DEFAULT_SUBAGENT_RUN_ALERT_MS = 15 * 60 * 1000;
+
+/** Repeat cadence for run-duration alerts after the first: every 30 minutes. */
+export const SUBAGENT_RUN_ALERT_INTERVAL_MS = 30 * 60 * 1000;
+
 export const SUBAGENT_TIMEOUT_ENV = 'KIMI_SUBAGENT_TIMEOUT_MS';
 
 function parseTimeoutMsEnv(raw: string): number | undefined {
@@ -268,10 +286,20 @@ function parseTimeoutMsEnv(raw: string): number | undefined {
   return Number.isInteger(parsed) && parsed >= 1 ? parsed : undefined;
 }
 
+export const SUBAGENT_RUN_ALERT_ENV = 'KIMI_SUBAGENT_RUN_ALERT_MS';
+
+function parseRunAlertMsEnv(raw: string): number | undefined {
+  // `0` is valid (disables the alert), so the parse floor differs from the
+  // timeout env (`>= 1`).
+  const parsed = Number(raw);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
 export const subagentEnvBindings: EnvBindings<SubagentConfig> = envBindings(
   SubagentConfigSchema,
   {
     timeoutMs: { env: SUBAGENT_TIMEOUT_ENV, parse: parseTimeoutMsEnv },
+    runAlertMs: { env: SUBAGENT_RUN_ALERT_ENV, parse: parseRunAlertMsEnv },
   },
 );
 
@@ -287,6 +315,18 @@ export function resolveSubagentTimeoutMs(config: IConfigService): number {
   return (
     config.get<SubagentConfig | undefined>(SUBAGENT_SECTION)?.timeoutMs ??
     DEFAULT_SUBAGENT_TIMEOUT_MS
+  );
+}
+
+/**
+ * Resolve the run-duration alert threshold (`[subagent] run_alert_ms`, default
+ * 15 minutes; `0` disables). The first alert fires after this long; repeats
+ * follow every {@link SUBAGENT_RUN_ALERT_INTERVAL_MS}.
+ */
+export function resolveSubagentRunAlertMs(config: IConfigService): number {
+  return (
+    config.get<SubagentConfig | undefined>(SUBAGENT_SECTION)?.runAlertMs ??
+    DEFAULT_SUBAGENT_RUN_ALERT_MS
   );
 }
 
