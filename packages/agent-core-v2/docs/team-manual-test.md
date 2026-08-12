@@ -199,7 +199,7 @@
 - **实际结果**:通过。`model-roster.md` 存在(9234 字节)。
 - **状态**:通过
 - **证据**:`ls -la ~/.kimi-code/agents/model-roster.md`
-- **关联特性**:`src/agent/tools/agent/team-lead-doctrine.md`(第 31 行)
+- **关联特性**:`src/agent/tools/agent/team-lead-doctrine.md`
 
 #### TC-FILE-005 — 派工流水(call-log / call-record)
 - **模块**:文件效果; **优先级**:P3
