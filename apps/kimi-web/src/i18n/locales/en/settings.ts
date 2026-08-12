@@ -55,6 +55,7 @@ export default {
   exportLog: 'Troubleshooting log',
   logHint: 'Enable with ?debug=1 to capture',
   exportLogBtn: 'Export log',
+  workspaceSortHint: 'Name keeps the list stable; Last edited floats active workspaces up; Manual lets you drag workspaces into your own order.',
   conversationToc: 'Show conversation outline',
   conversationTocHint: 'Show a clickable outline in the right margin to jump between messages',
   archivedTitle: 'Archived sessions',

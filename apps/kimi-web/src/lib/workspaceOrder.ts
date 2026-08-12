@@ -63,8 +63,21 @@ export function moveInOrder(
 }
 
 /** Sidebar workspace sort mode. `manual` keeps the user-defined (dragged)
- *  order; `recent` orders by each workspace's most recent session activity. */
-export type WorkspaceSortMode = 'manual' | 'recent';
+ *  order; `recent` orders by each workspace's most recent session activity;
+ *  `name` orders by the workspace display name (stable — never moves on its
+ *  own). Default (unset / unknown) is `name`, so the list does not reorder
+ *  itself under the user — see parseWorkspaceSortMode. */
+export type WorkspaceSortMode = 'manual' | 'recent' | 'name';
+
+/**
+ * Resolve a persisted sort-mode string to a valid mode. Unknown / unset values
+ * fall back to `name` (the stable default that keeps the list from jumping
+ * around on its own); an explicitly persisted `manual` / `recent` choice is
+ * kept so users who picked one are unaffected.
+ */
+export function parseWorkspaceSortMode(raw: string | null): WorkspaceSortMode {
+  return raw === 'manual' || raw === 'recent' || raw === 'name' ? raw : 'name';
+}
 
 /**
  * Sort workspaces by their most recent session activity, newest first.
@@ -80,5 +93,28 @@ export function sortWorkspacesByRecent<T extends { id: string }>(
     (a, b) =>
       (lastEditedAt.get(b.id) ?? Number.NEGATIVE_INFINITY) -
       (lastEditedAt.get(a.id) ?? Number.NEGATIVE_INFINITY),
+  );
+}
+
+/**
+ * Sort workspaces by display name, ascending. The sort is case- and
+ * accent-insensitive and number-aware (`ws-2` before `ws-10`), so it matches
+ * how the names are read rather than raw code points. Workspaces with an empty
+ * name fall back to their id. Stable — unlike `recent`, the order never moves
+ * on its own while the user works.
+ */
+export function sortWorkspacesByName<T extends { id: string; name?: string }>(
+  workspaces: T[],
+): T[] {
+  // Empty / missing name sorts by the id. Kept as an explicit truthiness
+  // check (not `??`): an empty string is "unnamed" and must fall back to the
+  // id, while `??` would keep '' and sort empty names together at the front.
+  // eslint-disable-next-line typescript-eslint/prefer-nullish-coalescing -- '' must fall back to the id
+  const label = (w: T): string => (w.name ? w.name : w.id);
+  return workspaces.toSorted((a, b) =>
+    label(a).localeCompare(label(b), undefined, {
+      numeric: true,
+      sensitivity: 'base',
+    }),
   );
 }

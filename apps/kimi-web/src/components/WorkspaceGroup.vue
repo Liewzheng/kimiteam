@@ -34,6 +34,10 @@ const props = defineProps<{
   renameRequestId: string | null;
   /** True while this group is the active drag source (drag-to-reorder). */
   dragging: boolean;
+  /** When false, the group header is not draggable — used when a non-manual
+   *  sort mode owns the order, so dragging cannot fight the active sort.
+   *  Defaults to true (manual drag is the historical behavior). */
+  canDrag?: boolean;
   isCollapsed: (id: string) => boolean;
   /** When true, render all loaded sessions; otherwise only the first page
    *  (`group.initialCount`). Drives the in-group show-more / show-less toggle. */
@@ -108,7 +112,7 @@ function setRenameInputRef(el: Element | ComponentPublicInstance | null): void {
 // id on the dataTransfer (so drop targets elsewhere could read it) and tell the
 // sidebar which group is being dragged so it can compute the new order on drop.
 function onHeaderDragStart(event: DragEvent): void {
-  if (!event.dataTransfer) return;
+  if (!event.dataTransfer || !props.canDrag) return;
   event.dataTransfer.effectAllowed = 'move';
   event.dataTransfer.setData('text/plain', props.group.workspace.id);
   emit('wsDragstart', props.group.workspace.id);
@@ -120,6 +124,12 @@ function onHeaderDragStart(event: DragEvent): void {
 // toggle; plain click is a single select. Sidebar applies the set + activates.
 function onSelectSession(id: string, e: MouseEvent): void {
   if (e.shiftKey) {
+    // Range-select: never let the click also carry/extend a browser text
+    // selection over the row labels. SessionRow already stops the shift
+    // mousedown from starting one; clear any lingering selection here so a
+    // prior text-drag cannot leak into the range gesture.
+    e.preventDefault();
+    if (typeof window !== 'undefined') window.getSelection()?.removeAllRanges();
     const ids = sessionRange(
       visibleSessions.value.map((s) => s.id),
       props.selectionAnchorId ?? id,
@@ -137,7 +147,7 @@ function onSelectSession(id: string, e: MouseEvent): void {
     <div
       class="gh"
       :class="{ on: group.workspace.id === activeWorkspaceId, collapsed: isCollapsed(group.workspace.id) }"
-      draggable="true"
+      :draggable="canDrag"
       @click.stop="emit('groupClick', group.workspace.id, $event)"
       @contextmenu="emit('groupContextmenu', group.workspace, $event)"
       @dragstart="onHeaderDragStart"

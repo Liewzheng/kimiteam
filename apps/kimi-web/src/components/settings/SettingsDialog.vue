@@ -13,6 +13,7 @@ import { serverEndpointLabel } from '../../api/config';
 import { downloadTraceLog, isTraceEnabled } from '../../debug/trace';
 import type { Accent, ColorScheme } from '../../composables/useKimiWebClient';
 import type { AppConfig, AppModel, AppProvider } from '../../api/types';
+import type { WorkspaceSortMode } from '../../lib/workspaceOrder';
 import Dialog from '../ui/Dialog.vue';
 import Switch from '../ui/Switch.vue';
 import Button from '../ui/Button.vue';
@@ -53,6 +54,8 @@ const props = defineProps<{
   serverVersion?: string;
   /** Backend engine generation from GET /api/v1/meta ('v1' legacy, 'v2' kap-server). */
   backend?: 'v1' | 'v2';
+  /** Sidebar workspace sort mode (name / recent activity / manual drag). */
+  workspaceSortMode?: WorkspaceSortMode;
 }>();
 
 const emit = defineEmits<{
@@ -69,6 +72,7 @@ const emit = defineEmits<{
   openOnboarding: [];
   openProviders: [];
   updateConfig: [patch: Partial<AppConfig>];
+  setWorkspaceSortMode: [mode: WorkspaceSortMode];
   close: [];
 }>();
 
@@ -613,6 +617,21 @@ function archiveTime(iso: string): string {
             <div class="row">
               <span class="rlabel">{{ t('settings.serverVersion') }}</span>
               <span class="rvalue mono">{{ serverVersion || '-' }}</span>
+            </div>
+            <div class="row">
+              <span class="rlabel">
+                {{ t('sidebar.sortWorkspaces') }}
+                <span class="hint">{{ t('settings.workspaceSortHint') }}</span>
+              </span>
+              <SegmentedControl
+                :model-value="workspaceSortMode ?? 'name'"
+                :options="[
+                  { value: 'name', label: t('sidebar.sortName') },
+                  { value: 'recent', label: t('sidebar.sortRecent') },
+                  { value: 'manual', label: t('sidebar.sortManual') },
+                ]"
+                @update:model-value="emit('setWorkspaceSortMode', $event as WorkspaceSortMode)"
+              />
             </div>
             <div v-if="config" class="row">
               <span class="rlabel">

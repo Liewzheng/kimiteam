@@ -900,6 +900,7 @@ onBeforeUnmount(() => {
               :selection-anchor-id="selectionAnchorId"
               :rename-request-id="renameRequestId"
               :dragging="draggingWsId === g.workspace.id"
+              :can-drag="workspaceSortMode === 'manual'"
               :is-collapsed="isCollapsed"
               :is-expanded="isExpanded"
               @group-click="handleGhClick"
@@ -1018,17 +1019,23 @@ onBeforeUnmount(() => {
       :style="sectionMenuStyle"
       @click.stop
     >
-      <MenuItem @click="chooseSortMode('manual')">
+      <MenuItem @click="chooseSortMode('name')">
         <span class="section-menu-check">
-          <Icon v-if="workspaceSortMode === 'manual'" name="check" size="sm" />
+          <Icon v-if="workspaceSortMode === 'name'" name="check" size="sm" />
         </span>
-        {{ t('sidebar.sortManual') }}
+        {{ t('sidebar.sortName') }}
       </MenuItem>
       <MenuItem @click="chooseSortMode('recent')">
         <span class="section-menu-check">
           <Icon v-if="workspaceSortMode === 'recent'" name="check" size="sm" />
         </span>
         {{ t('sidebar.sortRecent') }}
+      </MenuItem>
+      <MenuItem @click="chooseSortMode('manual')">
+        <span class="section-menu-check">
+          <Icon v-if="workspaceSortMode === 'manual'" name="check" size="sm" />
+        </span>
+        {{ t('sidebar.sortManual') }}
       </MenuItem>
     </Menu>
     <!-- Dev backend switcher menu (position:fixed, anchored to the brand pill) -->
