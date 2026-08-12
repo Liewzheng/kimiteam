@@ -18,6 +18,13 @@
  * models there is no "child follows the parent's current model" invariant to
  * enforce.
  *
+ * Team-mode same-profile serialization: when the profile already has a running
+ * (or reserved) owned instance, the tool does not create a parallel one — it
+ * enqueues a detached task that waits for the busy instance's current run to
+ * settle and then reuses the SAME instance (`enqueueBusyWait` /
+ * `launchWhenProfileFree`), so dispatches of one profile queue behind each
+ * other and preserve context; different profiles stay independent.
+ *
  * Registered via the module-level `registerAgentToolService(ISubagentTool,
  * SubagentTool)` at the bottom of this file — the same "import = register"
  * pattern used by every agent tool. The per-profile tool listings in the
@@ -86,7 +93,10 @@ import { ISubagentPoolService } from '#/session/subagentPool/subagentPool';
 import { ISessionTodoService } from '#/session/todo/sessionTodo';
 
 import { emitAgentRunSpawned, mirrorAgentRun } from '#/session/subagent/mirrorAgentRun';
-import { ISessionSubagentService } from '#/session/subagent/subagent';
+import {
+  ISessionSubagentService,
+  type AgentRunHandle,
+} from '#/session/subagent/subagent';
 import {
   buildSubagentModelDescriptions,
   formatSubagentTimeoutDescription,
@@ -119,6 +129,20 @@ import AGENT_DESCRIPTION_BASE from './agent.md?raw';
 const SUBAGENT_TOOL_PARAMETERS = toInputJsonSchema(SubagentToolInputSchema);
 const SUBAGENT_TOOL_PARAMETERS_NO_MODEL = stripSubagentModelParameter(SUBAGENT_TOOL_PARAMETERS);
 
+/**
+ * Internal control-flow signal: the team-mode dispatch pick found a
+ * same-profile owned instance already running (or reserved by a batch sibling),
+ * so the caller must NOT create a parallel instance — it enqueues a detached
+ * wait that reuses that SAME instance once its current run settles. Never
+ * surfaced to the user; `execution` converts it into the busy-wait task.
+ */
+class BusyDispatchError extends Error {
+  constructor(readonly busyAgentId: string) {
+    super(`same-profile instance "${busyAgentId}" is busy`);
+    this.name = 'BusyDispatchError';
+  }
+}
+
 export class SubagentTool implements ISubagentTool {
   declare readonly _serviceBrand: undefined;
   readonly name: string = 'Agent';
@@ -139,6 +163,16 @@ export class SubagentTool implements ISubagentTool {
 
   private readonly callerAgentId: string;
   private readonly canRunInBackground: () => boolean;
+
+  /**
+   * Agent ids claimed for team-mode reuse by in-flight launch attempts (the
+   * Agent tool is Agent-scoped, so this is per-supervisor-agent). A claim is
+   * made atomically with the duty pick and released once the reused run starts
+   * (or fails to start); from then on the instance's own running loop state
+   * excludes it from reuse. Busy-wait tasks share this set so concurrent
+   * serialized dispatches of one profile cannot double-reuse the same member.
+   */
+  private readonly reservedForReuse = new Set<string>();
 
   /** Lazy-loaded profile performance cache (team mode). `undefined` = never loaded. */
   private perfCache: Map<string, PerformanceSummary> | undefined;
@@ -467,16 +501,24 @@ export class SubagentTool implements ISubagentTool {
       // skipped and behavior is identical to a plain spawn.
       let reused: IAgentScopeHandle | undefined;
       if (resolveTeamMode(this.config)) {
-        const reuseId = await this.duty.pick({
+        const pick = await this.duty.pick({
           callerAgentId: this.callerAgentId,
           profileName: requestedProfileName,
+          claimInto: this.reservedForReuse,
         });
-        if (reuseId !== undefined) {
-          const target = this.lifecycle.get(reuseId);
+        if (pick.kind === 'busy') {
+          // Same-profile serialization: an owned instance of this profile is
+          // already running (or reserved by a batch sibling). Do not create a
+          // parallel one — signal `execution` to enqueue a detached wait that
+          // reuses this SAME instance once its current run settles.
+          throw new BusyDispatchError(pick.agentId);
+        }
+        if (pick.kind === 'reuse') {
+          const target = this.lifecycle.get(pick.agentId);
           if (target === undefined) {
-            throw new Error(`Agent instance "${reuseId}" does not exist`);
+            throw new Error(`Agent instance "${pick.agentId}" does not exist`);
           }
-          await this.ensureOwnedIdleSubagent(reuseId, target);
+          await this.ensureOwnedIdleSubagent(pick.agentId, target);
           reused = target;
         }
       }
@@ -564,11 +606,20 @@ export class SubagentTool implements ISubagentTool {
       runInBackground,
     });
 
-    const run = await this.subagents.run(
-      agentId,
-      { kind: 'prompt', prompt: await this.withPerformanceCard(profileName, promptText) },
-      { signal: controller.signal },
-    );
+    let run: AgentRunHandle;
+    try {
+      run = await this.subagents.run(
+        agentId,
+        { kind: 'prompt', prompt: await this.withPerformanceCard(profileName, promptText) },
+        { signal: controller.signal },
+      );
+    } finally {
+      // Release the reuse claim once the run has started (or failed to start):
+      // from then on the instance's own running loop state excludes it from
+      // reuse, and a released claim re-exposes a parked member after a failed
+      // start. Harmless for fresh/resume ids (not in the claim set).
+      this.reservedForReuse.delete(agentId);
+    }
     const mirrored = mirrorAgentRun(requester, run, {
       profileName,
       prompt: promptText,
@@ -678,6 +729,13 @@ export class SubagentTool implements ISubagentTool {
         handle = await this.launch(args, toolCallId, controller);
       } catch (error) {
         signal.removeEventListener('abort', abortBeforeRegister);
+        if (error instanceof BusyDispatchError) {
+          // Same-profile serialization: the profile already has a running
+          // instance. Enqueue a detached wait that reuses it once its run
+          // settles — never block the supervisor turn on the wait, and never
+          // create a parallel instance.
+          return this.enqueueBusyWait(error.busyAgentId, args, toolCallId, timeoutMs);
+        }
         this.log.warn('subagent launch failed', {
           toolCallId,
           runInBackground,
@@ -755,7 +813,8 @@ export class SubagentTool implements ISubagentTool {
    * The task defers the whole launch into `start`: it acquires a slot
    * (blocking inside the task — never on the supervisor turn), runs, and its
    * terminal notification delivers the completion. Returns the immediate
-   * "已入队,稍后自动开跑" result with the task id.
+   * "已入队,稍后自动开跑" result with the task id. The deferred launch also
+   * waits out any same-profile busy (serialization) before re-planning.
    */
   private enqueuePoolFullRun(
     args: SubagentToolInput,
@@ -764,7 +823,7 @@ export class SubagentTool implements ISubagentTool {
   ): Promise<ExecutableToolResult> {
     const controller = new AbortController();
     const task = new QueuedSubagentTask(
-      (signal) => this.launch(args, toolCallId, controller),
+      (signal) => this.launchWhenProfileFree(undefined, args, toolCallId, controller, signal),
       args.description,
       controller,
     );
@@ -785,6 +844,78 @@ export class SubagentTool implements ISubagentTool {
             : message,
         isError: true,
       });
+    }
+  }
+
+  /**
+   * 同 profile 串行语义 — a dispatch whose profile already has a running (or
+   * reserved) instance is enqueued as a detached task instead of creating a
+   * parallel one. The task waits for the busy instance's current run to
+   * settle, then re-enters the launch path, which now finds the same instance
+   * idle and reuses it (context preserved). Never blocks the supervisor turn;
+   * the completion arrives via the task's automatic notification.
+   */
+  private enqueueBusyWait(
+    busyAgentId: string,
+    args: SubagentToolInput,
+    toolCallId: string,
+    timeoutMs: number | undefined,
+  ): Promise<ExecutableToolResult> {
+    const controller = new AbortController();
+    const task = new QueuedSubagentTask(
+      (signal) => this.launchWhenProfileFree(busyAgentId, args, toolCallId, controller, signal),
+      args.description,
+      controller,
+    );
+    try {
+      const taskId = this.tasks.registerTask(task, {
+        detached: true,
+        timeoutMs,
+        signal: undefined,
+      });
+      return Promise.resolve({ output: formatBusyWaitAgentResult(taskId, args.description) });
+    } catch (error) {
+      controller.abort();
+      const message = error instanceof Error ? error.message : String(error);
+      return Promise.resolve({
+        output:
+          message === 'Too many background tasks are already running.'
+            ? 'Too many background tasks are already running.'
+            : message,
+        isError: true,
+      });
+    }
+  }
+
+  /**
+   * Launch the dispatch, waiting out any same-profile busy first.
+   * `initialBusyAgentId` (from the caller's pre-pick) skips the first pick;
+   * the loop chases the busy instance as its run settles and a later dispatch
+   * re-runs it — the same-profile serialization chain. Throws for any
+   * non-busy launch error.
+   */
+  private async launchWhenProfileFree(
+    initialBusyAgentId: string | undefined,
+    args: SubagentToolInput,
+    toolCallId: string,
+    controller: AbortController,
+    signal: AbortSignal,
+  ): Promise<SubagentHandle> {
+    let busyAgentId = initialBusyAgentId;
+    for (;;) {
+      if (busyAgentId !== undefined) {
+        await this.duty.waitForSettle(busyAgentId, signal, this.reservedForReuse);
+        signal.throwIfAborted();
+      }
+      try {
+        return await this.launch(args, toolCallId, controller);
+      } catch (error) {
+        if (error instanceof BusyDispatchError) {
+          busyAgentId = error.busyAgentId;
+          continue;
+        }
+        throw error;
+      }
     }
   }
 
@@ -960,6 +1091,19 @@ function formatQueuedAgentResult(taskId: string, description: string): string {
     `description: ${description}`,
     '',
     'Enqueued (已入队,稍后自动开跑): the concurrency pool is full — the subagent will start automatically once a slot frees, and its completion arrives via automatic notification in a later turn. Do NOT wait, poll, or call TaskOutput on it; continue with other work or hand back to the user.',
+  ].join('\n');
+}
+
+/** 同 profile 串行排队 — a dispatch enqueued behind a running same-profile instance. */
+function formatBusyWaitAgentResult(taskId: string, description: string): string {
+  return [
+    `task_id: ${taskId}`,
+    'status: queued',
+    'automatic_notification: true',
+    '',
+    `description: ${description}`,
+    '',
+    'Enqueued (同 profile 串行排队): another instance of this profile is already running — this dispatch starts automatically once it settles, reusing the same instance to preserve context. Do NOT wait, poll, or call TaskOutput on it; continue with other work or hand back to the user.',
   ].join('\n');
 }
 

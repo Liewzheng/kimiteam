@@ -54,6 +54,7 @@ import { Error2, ErrorCodes } from '#/errors';
 import { runAgentTurn } from '#/session/subagent/runAgentTurn';
 import { emitAgentRunSpawned, mirrorAgentRun } from '#/session/subagent/mirrorAgentRun';
 import { IAgentLifecycleService } from '#/session/agentLifecycle/agentLifecycle';
+import { IDutySchedulerService } from '#/session/duty/duty';
 import {
   type AgentRunHandle,
   type AgentRunRequest,
@@ -2583,10 +2584,11 @@ describe('Agent tool execution contract', () => {
     );
   });
 
-  it('does not reuse a running instance — creates a fresh one (team mode)', async () => {
+  it('queues a dispatch behind a running same-profile instance and reuses it once it settles (team mode)', async () => {
+    const runningRef = { value: true };
+    const completion = deferred<{ readonly summary: string }>();
     const lifecycle = createAgentLifecycleStub({
-      createAgentIds: ['agent-child'],
-      runCompletion: async () => ({ summary: 'child result' }),
+      runCompletion: () => completion.promise,
     });
     const context = createAgentToolContext(
       lifecycle,
@@ -2604,11 +2606,21 @@ describe('Agent tool execution contract', () => {
           IAgentLoopService,
           {
             _serviceBrand: undefined,
-            status: () => ({ state: 'running', activeTurnId: 1, pendingTurnIds: [], hasPendingRequests: true }),
+            status: () => ({
+              state: runningRef.value ? 'running' : 'idle',
+              activeTurnId: 1,
+              pendingTurnIds: [],
+              hasPendingRequests: true,
+            }),
           },
         ],
       ]),
     );
+    // The running run's settle — the busy-wait awaits it before reusing the
+    // SAME instance (registered through the real duty scheduler).
+    context
+      .get(IDutySchedulerService)
+      .observeSettle('agent-parked', 'explore', 'main', completion.promise);
 
     const result = await executeAgentTool(context, {
       prompt: 'Investigate',
@@ -2616,17 +2628,31 @@ describe('Agent tool execution contract', () => {
       subagent_type: 'explore',
     });
 
-    expect(lifecycle.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        binding: expect.objectContaining({ profile: 'explore' }),
-      }),
-    );
-    expect(lifecycle.run).toHaveBeenCalledWith(
-      'agent-child',
+    // Same-profile serialization: the dispatch is queued (同 profile 串行排队),
+    // not created in parallel.
+    expect(result.isError).not.toBe(true);
+    expect(result.output).toContain('status: queued');
+    expect(result.output).toContain('同 profile 串行排队');
+    expect(lifecycle.create).not.toHaveBeenCalled();
+    expect(lifecycle.run).not.toHaveBeenCalled();
+
+    // The running instance settles → the queued task reuses the SAME instance.
+    runningRef.value = false;
+    completion.resolve({ summary: 'reused result' });
+    await vi.waitFor(() => expect(lifecycle.run).toHaveBeenCalledWith(
+      'agent-parked',
       expect.objectContaining({ kind: 'prompt' }),
       expect.anything(),
-    );
-    expect(result.output).toContain('agent_id: agent-child');
+    ));
+    expect(lifecycle.create).not.toHaveBeenCalled();
+    if (typeof result.output === 'string') {
+      const queuedTaskId = result.output.match(/task_id: (agent-[0-9a-z]{8})/)?.[1];
+      if (queuedTaskId !== undefined) {
+        await vi.waitFor(() => {
+          expect(context.get(IAgentTaskService).getTask(queuedTaskId)?.status).toBe('completed');
+        });
+      }
+    }
   });
 
   it('does not reuse an instance of a different profile — creates the requested one (team mode)', async () => {

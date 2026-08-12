@@ -15,7 +15,10 @@
  * bindings are resolved through the model catalog before lifecycle allocation.
  * Resumed agents keep the model recorded in their own wire journal — with
  * per-subagent models there is no "child follows the parent's current model"
- * invariant to enforce. Bound at Session scope.
+ * invariant to enforce. In team mode, same-profile spawns serialize on one
+ * instance (an already-running member of the profile is waited on and reused
+ * rather than duplicated); different profiles run in parallel. Bound at
+ * Session scope.
  */
 
 import type { TokenUsage } from '#/kosong/contract/usage';
@@ -170,23 +173,37 @@ export class SessionSwarmService implements ISessionSwarmService {
     // pick goes through the DutyScheduler (LRU standby pool) and the claim is
     // made atomically with it, so two spawn attempts in the same batch can
     // never claim the same instance even though its run has not started yet.
-    // When team mode is off this block is skipped and behavior is identical
-    // to a plain spawn.
+    // Same-profile serialization: when an owned instance of the profile is
+    // already running (or reserved by a batch sibling), the pick returns it
+    // as `busy` — this spawn waits for its run to settle and then reuses the
+    // SAME instance, so same-profile items in this batch serialize on one
+    // instance instead of each spawning a fresh one (round-robin drift).
+    // Different profiles stay independent and run in parallel. When team mode
+    // is off this block is skipped and behavior is identical to a plain spawn.
     if (resolveTeamMode(this.config)) {
-      const reuseId = await this.duty.pick({
-        callerAgentId,
-        profileName: options.profileName,
-        claimInto: this.reservedForReuse,
-      });
-      if (reuseId !== undefined && this.parkedHonorsSpawnBinding(reuseId, options, callerData)) {
-        return this.reuseIdleAttempt(callerAgentId, reuseId, options);
-      }
-      if (reuseId !== undefined) {
-        // The picked member's binding cannot honor this spawn's requested
-        // binding — release the batch claim (the member stays available to a
-        // later item whose binding it can serve) and fall through to a fresh
-        // spawn bound to the requested model.
-        this.reservedForReuse.delete(reuseId);
+      for (;;) {
+        const pick = await this.duty.pick({
+          callerAgentId,
+          profileName: options.profileName,
+          claimInto: this.reservedForReuse,
+        });
+        if (pick.kind === 'reuse') {
+          if (this.parkedHonorsSpawnBinding(pick.agentId, options, callerData)) {
+            return this.reuseIdleAttempt(callerAgentId, pick.agentId, options);
+          }
+          // The picked member's binding cannot honor this spawn's requested
+          // binding — release the batch claim (the member stays available to a
+          // later item whose binding it can serve) and fall through to a fresh
+          // spawn bound to the requested model.
+          this.reservedForReuse.delete(pick.agentId);
+          break;
+        }
+        if (pick.kind === 'none') break;
+        // busy: a same-profile owned instance is running or reserved. Wait for
+        // its current run to settle, then retry the pick — the settled member
+        // is now an idle reuse candidate (serialization chain).
+        await this.duty.waitForSettle(pick.agentId, options.signal, this.reservedForReuse);
+        options.signal.throwIfAborted();
       }
     }
 
