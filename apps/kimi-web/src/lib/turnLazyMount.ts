@@ -21,6 +21,27 @@ export const LAZY_MOUNT_TAIL_TURNS = 3;
  *  near-visible and mounts before the user actually reaches it. */
 export const LAZY_MOUNT_VIEWPORT_BUFFER = 480;
 
+/** Whole turns to keep pre-mounted ahead of the viewport when scaling the
+ *  overscan buffer for tall turns (see lazyMountBufferFor). */
+export const LAZY_MOUNT_OVERSCAN_TURNS = 2;
+
+/**
+ * Adaptive overscan buffer (px) for a transcript whose turns have the given
+ * estimated heights. The fixed `LAZY_MOUNT_VIEWPORT_BUFFER` (480px) covers only
+ * a fraction of a tall tool-output turn (1000-5000px), so scrolling into the
+ * next band of a large session kept hitting white before the placeholder
+ * mounted. Scaling by the mean estimated height keeps roughly
+ * `LAZY_MOUNT_OVERSCAN_TURNS` whole turns pre-mounted ahead of the viewport;
+ * the mean (not the max) keeps one outlier turn from over-mounting the window.
+ */
+export function lazyMountBufferFor(estimatedHeights: readonly number[]): number {
+  if (estimatedHeights.length === 0) return LAZY_MOUNT_VIEWPORT_BUFFER;
+  let sum = 0;
+  for (const height of estimatedHeights) sum += height;
+  const mean = sum / estimatedHeights.length;
+  return Math.ceil(Math.max(LAZY_MOUNT_VIEWPORT_BUFFER, mean * LAZY_MOUNT_OVERSCAN_TURNS));
+}
+
 /**
  * Whether a turn must mount regardless of its visibility:
  * - short transcripts (deferral is pure churn);

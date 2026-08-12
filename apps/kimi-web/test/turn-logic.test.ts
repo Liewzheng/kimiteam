@@ -8,6 +8,8 @@ import { isPlayableMediaUrl } from '../src/composables/useFilePreview';
 import {
   estimateTurnHeight,
   isTurnNearViewport,
+  LAZY_MOUNT_VIEWPORT_BUFFER,
+  lazyMountBufferFor,
   shouldEagerlyMountTurn,
 } from '../src/lib/turnLazyMount';
 import type { ChatTurn } from '../src/types';
@@ -1156,6 +1158,25 @@ describe('turnLazyMount (F2: off-screen turn lazy-mounting)', () => {
 
     it('does not mount an unrendered (display:none / KeepAlive-deactivated) element', () => {
       expect(isTurnNearViewport({ top: 0, bottom: 0, width: 0, height: 0 }, 800)).toBe(false);
+    });
+  });
+
+  describe('lazyMountBufferFor (adaptive overscan)', () => {
+    it('returns the base 480px buffer for empty or short transcripts', () => {
+      expect(lazyMountBufferFor([])).toBe(LAZY_MOUNT_VIEWPORT_BUFFER);
+      // mean 200px → 400px < 480px base.
+      expect(lazyMountBufferFor([100, 200, 300])).toBe(LAZY_MOUNT_VIEWPORT_BUFFER);
+    });
+
+    it('scales ~2× the mean height so tall turns pre-mount whole', () => {
+      // 2000px tool-output turns → 4000px window ≈ 2 whole turns ahead, instead
+      // of <1 turn inside the fixed 480px buffer.
+      expect(lazyMountBufferFor([2000, 2000, 2000])).toBe(4000);
+    });
+
+    it('is mean-driven, not max-driven, so one outlier does not blow up the window', () => {
+      // mean 1080px → 2160px; a max-driven rule would have forced 10000px.
+      expect(lazyMountBufferFor([100, 100, 100, 100, 5000])).toBe(2160);
     });
   });
 

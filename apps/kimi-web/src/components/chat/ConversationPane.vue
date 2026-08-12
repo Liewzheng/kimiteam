@@ -692,6 +692,25 @@ function restoreHistoryScroll(
   return container.scrollTop;
 }
 
+/** Resolve the saved scrollTop for a returning session. Prefers pinning the
+ *  viewport to the saved turn/tool anchors — stable across a KeepAlive-evicted
+ *  remount whose placeholder heights differ from the saved real heights — and
+ *  falls back to the saved pixel offset when no anchor survives (e.g. the turn
+ *  was rebuilt with a new id by a page-boundary split). */
+function restoreSavedScroll(container: HTMLElement, saved: SessionScrollState): number {
+  for (const anchor of saved.anchors) {
+    const attr = anchor.kind === 'tool' ? 'data-scroll-anchor-id' : 'data-turn-id';
+    const node = container.querySelector<HTMLElement>(
+      `[${attr}="${attrEscape(anchor.id)}"]`,
+    );
+    if (!node) continue;
+    // Adjust the saved pixel top by how far the anchor moved in the current
+    // (rebuilt) layout, keeping the anchor at its saved viewport position.
+    return saved.top + (scrollAnchorTop(container, node) - anchor.top);
+  }
+  return saved.top;
+}
+
 async function handleLoadOlderMessages(): Promise<void> {
   if (
     !props.sessionId ||
@@ -923,7 +942,22 @@ watch(
 // jumping to the bottom (which replayed the conversation when the session was
 // already there) or getting yanked to the bottom by a new message after
 // restoring a scrolled-up position.
-const scrollStateBySession = new Map<string, { top: number; following: boolean }>();
+type SessionScrollState = {
+  top: number;
+  following: boolean;
+  /** Turn/tool anchors at the saved viewport top, recorded at real heights.
+   *  Lets a rebuilt (KeepAlive-evicted) pane re-pin the viewport to the SAME
+   *  turns even though its fresh placeholder wall has different (estimated)
+   *  heights — a bare pixel `top` would land on the wrong turn. */
+  anchors: ScrollAnchor[];
+};
+const scrollStateBySession = new Map<string, SessionScrollState>();
+
+/** Maximum rAF passes that chase placeholder→real height displacement before
+ *  the first frame's visible band counts as settled (mountChatPaneVisibility). */
+const MOUNT_SETTLE_MAX_PASSES = 4;
+/** Consecutive stable layout keys that end the settle burst early. */
+const MOUNT_SETTLE_STABLE_FRAMES = 2;
 
 /** Re-run ChatPane's visible-range computation against the CURRENT geometry.
  *  Called after a scroll restore / bottom-follow in this pane. ChatPane's own
@@ -932,15 +966,25 @@ const scrollStateBySession = new Map<string, { top: number; following: boolean }
  *  only observed. One more pass (post-nextTick + rAF, so the final scrollTop /
  *  layout is in effect) mounts them deterministically instead of betting on
  *  IntersectionObserver delivery — which streaming turn churn can starve (see
- *  the incremental-reconcile fix in ChatPane). A second rAF pass catches the
- *  turns that become near-viewport after the first pass swaps placeholders for
- *  real content (heights shift). */
+ *  the incremental-reconcile fix in ChatPane). Mounting swaps placeholders for
+ *  real content and shifts heights, so keep re-mounting over successive frames
+ *  until `currentLayoutKey` stabilizes (or the pass budget runs out) — the old
+ *  fixed second rAF left the visible band under-converged on tall turns. */
 function mountChatPaneVisibility(): void {
   void nextTick().then(() => {
     raf(() => {
       chatPaneRef.value?.mountVisibleTurns();
-      raf(() => chatPaneRef.value?.mountVisibleTurns());
+      settleMountPasses(0, currentLayoutKey(), 0);
     });
+  });
+}
+
+function settleMountPasses(pass: number, lastKey: string, stableFrames: number): void {
+  if (pass >= MOUNT_SETTLE_MAX_PASSES || stableFrames >= MOUNT_SETTLE_STABLE_FRAMES) return;
+  raf(() => {
+    chatPaneRef.value?.mountVisibleTurns();
+    const key = currentLayoutKey();
+    settleMountPasses(pass + 1, key, key === lastKey ? stableFrames + 1 : 0);
   });
 }
 
@@ -949,7 +993,11 @@ watch(
   async (newKey, oldKey) => {
     const el = panesRef.value;
     if (oldKey && el) {
-      scrollStateBySession.set(String(oldKey), { top: el.scrollTop, following: following.value });
+      scrollStateBySession.set(String(oldKey), {
+        top: el.scrollTop,
+        following: following.value,
+        anchors: findTopAnchors(el, el.scrollTop),
+      });
     }
     cancelActiveScrollWrites();
     await nextTick();
@@ -959,7 +1007,7 @@ watch(
       const pendingRestore = pendingHistoryRestoreBySession.get(String(newKey));
       const top = pendingRestore
         ? restoreHistoryScroll(el2, pendingRestore, saved.top)
-        : saved.top;
+        : restoreSavedScroll(el2, saved);
       if (pendingRestore) pendingHistoryRestoreBySession.delete(String(newKey));
       following.value = saved.following;
       el2.scrollTop = top;

@@ -32,6 +32,7 @@ import {
   estimateTurnHeight,
   isTurnNearViewport,
   LAZY_MOUNT_VIEWPORT_BUFFER,
+  lazyMountBufferFor,
   shouldEagerlyMountTurn,
 } from '../../lib/turnLazyMount';
 
@@ -259,6 +260,17 @@ const turnAnchorEls = new Map<string, HTMLElement>();
  *  placeholders while a streaming session churns turns). */
 const observedTurnIds = new Set<string>();
 let turnVisibilityObserver: IntersectionObserver | null = null;
+/** rootMargin buffer the live observer was last created with. Recreated only
+ *  when the adaptive buffer changes materially (see ensureTurnObserver), never
+ *  per streaming append, so the observer's queued deliveries are preserved. */
+let turnObserverBuffer = LAZY_MOUNT_VIEWPORT_BUFFER;
+
+/** Recreate the turn observer only when the adaptive buffer moves past this
+ *  absolute / relative threshold — streaming appends shift the mean height by a
+ *  few px per delta, and recreating per delta would reintroduce the
+ *  delivery-cancellation starvation the incremental reconcile fixes. */
+const TURN_OBSERVER_BUFFER_HYSTERESIS_PX = 200;
+const TURN_OBSERVER_BUFFER_HYSTERESIS_RATIO = 0.25;
 
 function trackTurnAnchor(turnId: string, el: unknown): void {
   if (el instanceof HTMLElement) turnAnchorEls.set(turnId, el);
@@ -285,6 +297,37 @@ const streamingTurnIndex = computed<number | null>(() => {
   return idx >= 0 ? idx : null;
 });
 
+/** Create or re-create the IntersectionObserver with `buffer` as its vertical
+ *  rootMargin, keeping it in sync with the rect checks so scroll-triggered
+ *  mounting pre-mounts the same window. Re-observes every tracked element
+ *  synchronously in the same tick, so no queued initial delivery is dropped (a
+ *  full disconnect would cancel them — the streaming starvation bug). The
+ *  hysteresis (see the constants above) keeps the observer alive and untouched
+ *  through streaming appends; only a material buffer jump recreates it. */
+function ensureTurnObserver(buffer: number): void {
+  const want = Math.round(buffer);
+  if (
+    turnVisibilityObserver !== null &&
+    Math.abs(want - turnObserverBuffer) <
+      Math.max(TURN_OBSERVER_BUFFER_HYSTERESIS_PX, turnObserverBuffer * TURN_OBSERVER_BUFFER_HYSTERESIS_RATIO)
+  ) {
+    return;
+  }
+  if (typeof IntersectionObserver === 'undefined') return;
+  const next = new IntersectionObserver(onTurnVisibility, {
+    root: null,
+    rootMargin: `${want}px 0px ${want}px 0px`,
+    threshold: 0,
+  });
+  turnVisibilityObserver?.disconnect();
+  turnVisibilityObserver = next;
+  turnObserverBuffer = want;
+  for (const id of observedTurnIds) {
+    const el = turnAnchorEls.get(id);
+    if (el) next.observe(el);
+  }
+}
+
 /** Mount every near-viewport / eager turn and observe the rest. Safe to call
  *  repeatedly: mounted turns are skipped, and a KeepAlive-deactivated pane
  *  (display:none → offsetParent null) is skipped so onActivated can re-check.
@@ -297,16 +340,17 @@ const streamingTurnIndex = computed<number | null>(() => {
  *  placeholders near the viewport never receive isIntersecting=true until the
  *  stream stops. Keeping the observer alive preserves queued deliveries; we only
  *  drop observes for turns that mounted or left the transcript and add observes
- *  for turns not yet tracked. */
+ *  for turns not yet tracked.
+ *
+ *  The near-viewport window is adaptive: the fixed 480px buffer covers only a
+ *  fraction of a tall tool-output turn, so a large session's history stayed a
+ *  white placeholder wall until scrolled. `lazyMountBufferFor` scales the
+ *  window to ~LAZY_MOUNT_OVERSCAN_TURNS average turn heights, applied to BOTH
+ *  the rect check here and the observer's rootMargin (ensureTurnObserver). */
 function refreshTurnObservers(): void {
   if (typeof window === 'undefined') return;
-  if (turnVisibilityObserver === null && typeof IntersectionObserver !== 'undefined') {
-    turnVisibilityObserver = new IntersectionObserver(onTurnVisibility, {
-      root: null,
-      rootMargin: `${LAZY_MOUNT_VIEWPORT_BUFFER}px 0px ${LAZY_MOUNT_VIEWPORT_BUFFER}px 0px`,
-      threshold: 0,
-    });
-  }
+  const mountBuffer = lazyMountBufferFor(props.turns.map((turn) => estimateTurnHeight(turn)));
+  ensureTurnObserver(mountBuffer);
   const liveTurnIds = new Set<string>();
   for (const turn of props.turns) liveTurnIds.add(turn.id);
   // Reconcile the observed set: drop observes for turns that left the
@@ -329,7 +373,7 @@ function refreshTurnObservers(): void {
     }
     const el = turnAnchorEls.get(turn.id);
     if (!el || el.offsetParent === null) continue;
-    if (isTurnNearViewport(el.getBoundingClientRect(), window.innerHeight)) {
+    if (isTurnNearViewport(el.getBoundingClientRect(), window.innerHeight, mountBuffer)) {
       mountedTurnIds.add(turn.id);
       if (observedTurnIds.has(turn.id)) {
         turnVisibilityObserver?.unobserve(el);
