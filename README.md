@@ -50,10 +50,8 @@ kimiteam                    # 启动交互式会话（与官方 kimi 参数兼�
 - **原生 PowerShell 一键安装(首选)**:免下载,短链脚本为 ASCII-only,安全经 `irm|iex` 管道执行:
 
   ```powershell
-  irm https://liewzheng.github.io/kimi-code/install.ps1 | iex
+  irm https://liewzheng.github.io/kimiteam/install.ps1 | iex
   ```
-
-  <!-- TODO(kimiteam 迁移):kimiteam 仓库 Pages 尚未启用(gh-pages 分支仍在 Liewzheng/kimi-code,旧短链仍 200 服务中),短链暂保持 liewzheng.github.io/kimi-code;待 Liewzheng/kimiteam 启用 Pages 后切换为 liewzheng.github.io/kimiteam/install.ps1,并删除本注释。 -->
 
   若公司/系统限制 `irm|iex`,可下载脚本后用 `-File` 方式执行(仓库内中文版):
 
