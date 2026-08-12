@@ -39,28 +39,90 @@ export function shouldEagerlyMountTurn(
   return false;
 }
 
+/** Estimated rendered line height used by the height heuristics (px). */
+const ESTIMATE_LINE_HEIGHT = 24;
+
+/** Tool cards render their output at ~1lh per line and cap the visible window at
+ *  50 lines (ToolOutputBlock's `--tool-output-visible-lines`), so a long tool
+ *  output contributes at most 50 * line-height per card. */
+const TOOL_OUTPUT_VISIBLE_LINES = 50;
+
+/** Average chars per rendered line for prose (browser wraps ~90 chars); code
+ *  fences usually stay unwrapped, but then explicit newlines dominate and the
+ *  max() below picks the larger term. */
+const CHARS_PER_LINE = 90;
+
+/** Estimate the rendered line count of `text`: explicit newlines are lines, and
+ *  a very long single line wraps at ~CHARS_PER_LINE chars. */
+function estimateTextLines(text: string): number {
+  if (text.length === 0) return 0;
+  let newlines = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (text.charCodeAt(i) === 10) newlines++;
+  }
+  const wrapped = Math.ceil(text.length / CHARS_PER_LINE);
+  return Math.max(newlines + 1, wrapped);
+}
+
 /**
  * Estimated rendered height (px) of an unmounted turn, used to size the
  * placeholder so the transcript's scrollbar stays in the right ballpark while
  * off-screen turns are not yet mounted. Cheap content heuristics only — the
  * placeholder is a stand-in, not a layout guarantee (growing to the real height
  * happens while the turn is still inside the viewport buffer).
+ *
+ * Deliberately a ceiling-ish estimate rather than a tight one: the previous
+ * text/thinking caps (520px / 160px) badly underestimated long code fences and
+ * tool outputs (a 500-line diff renders >10kpx), so a turn would jump to its
+ * real height the moment it mounted and force the layout to re-converge
+ * (scheduleStableFollow). Line-based estimation keeps long turns in the right
+ * ballpark from the start. Result is cached per ChatTurn object — the incremental
+ * turns builder reuses the same turn references for the stable prefix, so a
+ * re-render re-reads the cache instead of re-splitting text.
  */
+const heightCache = new WeakMap<ChatTurn, number>();
+
 export function estimateTurnHeight(turn: ChatTurn): number {
+  const cached = heightCache.get(turn);
+  if (cached !== undefined) return cached;
+  const height = computeEstimateTurnHeight(turn);
+  heightCache.set(turn, height);
+  return height;
+}
+
+function computeEstimateTurnHeight(turn: ChatTurn): number {
   if (turn.role === 'compaction' || turn.role === 'cron') return 40;
-  const textLen = turn.text.length;
-  const thinkLen = turn.thinking?.length ?? 0;
   const toolCount = turn.tools?.length ?? 0;
   if (turn.role === 'user') {
-    const text = Math.min(textLen * 0.35, 240);
+    // User bubbles stay short and wrap; the cap keeps a pathological paste from
+    // producing a multi-thousand-px placeholder.
+    const text = Math.min(estimateTextLines(turn.text) * ESTIMATE_LINE_HEIGHT, 240);
     const attachments = (turn.attachments?.length ?? 0) * 56;
     return Math.round(40 + text + attachments);
   }
-  // Assistant: thinking block + text + collapsed tool-card headers.
-  const text = Math.min(textLen * 0.3, 520);
-  const thinking = Math.min(thinkLen * 0.2, 160);
-  const tools = toolCount * 40;
+  // Assistant: thinking block + markdown text + tool cards (headers + output).
+  const thinking = estimateThinkingHeight(turn.thinking);
+  const text = estimateTextLines(turn.text) * ESTIMATE_LINE_HEIGHT;
+  let toolOutputLines = 0;
+  for (const tool of turn.tools ?? []) {
+    toolOutputLines += Math.min(tool.output?.length ?? 0, TOOL_OUTPUT_VISIBLE_LINES);
+  }
+  const tools = toolCount * 40 + toolOutputLines * ESTIMATE_LINE_HEIGHT;
   return Math.round(56 + thinking + text + tools);
+}
+
+/** A settled thinking block folds to a one-paragraph teaser (ThinkingBlock only
+ *  stays open while streaming or when it is a single paragraph), so a
+ *  multi-paragraph block is short; a single long paragraph renders in full. */
+function estimateThinkingHeight(thinking: string | undefined): number {
+  if (!thinking) return 0;
+  let paragraphs = 0;
+  for (const p of thinking.split(/\n{2,}/)) {
+    if (p.trim().length > 0) paragraphs++;
+  }
+  const lines = estimateTextLines(thinking);
+  if (paragraphs > 1) return Math.min(lines * ESTIMATE_LINE_HEIGHT, 160);
+  return lines * ESTIMATE_LINE_HEIGHT;
 }
 
 /**
