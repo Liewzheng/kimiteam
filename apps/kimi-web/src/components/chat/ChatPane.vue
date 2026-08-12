@@ -180,6 +180,7 @@ onUnmounted(() => {
   topSentinelObserver = null;
   turnVisibilityObserver?.disconnect();
   turnVisibilityObserver = null;
+  observedTurnIds.clear();
 });
 watch(
   () => [props.hasMoreMessages, props.loadingMore, props.loadingMoreError],
@@ -196,7 +197,9 @@ watch(
   () => {
     // New turns (history prepend, streaming appends, session switch) land as
     // placeholders; mount whatever is near the viewport now that the DOM has
-    // settled (flush: 'post').
+    // settled (flush: 'post'). This runs before ConversationPane's scroll
+    // restore, so restored-position turns are only observed here — the parent
+    // calls mountVisibleTurns() afterwards to mount them on the final geometry.
     refreshTurnObservers();
   },
   { flush: 'post' },
@@ -238,13 +241,23 @@ const streamingTurnId = computed<string | null>(() => {
 // KeepAlive session switches / theme changes and left code blocks blank. Lazy
 // mounting keeps the whole lifecycle under our own observer, re-checked
 // deterministically on activation (rect-based, not IO-timing-based), so the old
-// blank-content regression cannot recur.
+// blank-content regression cannot recur. The observer itself is reconciled
+// incrementally (no disconnect — see refreshTurnObservers) so queued initial
+// deliveries survive streaming turn churn, and ConversationPane re-drives the
+// rect check after a scroll restore (mountVisibleTurns) so the restored
+// position never depends on IO timing.
 // ---------------------------------------------------------------------------
 
 /** Turn ids whose real content is currently mounted (reactive → re-renders). */
 const mountedTurnIds = reactive(new Set<string>());
 /** turn id → its `.a-msg` wrapper element, for the visibility observer. */
 const turnAnchorEls = new Map<string, HTMLElement>();
+/** Turn ids currently registered with the IntersectionObserver. Tracked so the
+ *  reconcile below can observe only new/unobserved turns and unobserve ones
+ *  that mounted or left the transcript — WITHOUT a full disconnect (which would
+ *  cancel the observer's queued initial deliveries and starve visible
+ *  placeholders while a streaming session churns turns). */
+const observedTurnIds = new Set<string>();
 let turnVisibilityObserver: IntersectionObserver | null = null;
 
 function trackTurnAnchor(turnId: string, el: unknown): void {
@@ -260,6 +273,7 @@ function onTurnVisibility(entries: IntersectionObserverEntry[]): void {
     if (id !== undefined) {
       mountedTurnIds.add(id);
       turnVisibilityObserver?.unobserve(el);
+      observedTurnIds.delete(id);
     }
   }
 }
@@ -273,7 +287,17 @@ const streamingTurnIndex = computed<number | null>(() => {
 
 /** Mount every near-viewport / eager turn and observe the rest. Safe to call
  *  repeatedly: mounted turns are skipped, and a KeepAlive-deactivated pane
- *  (display:none → offsetParent null) is skipped so onActivated can re-check. */
+ *  (display:none → offsetParent null) is skipped so onActivated can re-check.
+ *
+ *  This is an INCREMENTAL reconcile, never a `disconnect()` + re-observe. A full
+ *  disconnect is the root cause of the "white screen ~3s after switching to a
+ *  streaming session": the observer's initial delivery is asynchronous, so while
+ *  `props.turns` keeps churning (~16/s, eventBatcher minDrainIntervalMs=60) every
+ *  pending delivery is cancelled by the next refresh, and the observed
+ *  placeholders near the viewport never receive isIntersecting=true until the
+ *  stream stops. Keeping the observer alive preserves queued deliveries; we only
+ *  drop observes for turns that mounted or left the transcript and add observes
+ *  for turns not yet tracked. */
 function refreshTurnObservers(): void {
   if (typeof window === 'undefined') return;
   if (turnVisibilityObserver === null && typeof IntersectionObserver !== 'undefined') {
@@ -283,7 +307,18 @@ function refreshTurnObservers(): void {
       threshold: 0,
     });
   }
-  turnVisibilityObserver?.disconnect();
+  const liveTurnIds = new Set<string>();
+  for (const turn of props.turns) liveTurnIds.add(turn.id);
+  // Reconcile the observed set: drop observes for turns that left the
+  // transcript (session switch / history replace) or are now mounted (eager
+  // tail / rect-mounted). Deleting while iterating a Set is safe.
+  for (const id of observedTurnIds) {
+    if (!liveTurnIds.has(id) || mountedTurnIds.has(id)) {
+      const el = turnAnchorEls.get(id);
+      if (el) turnVisibilityObserver?.unobserve(el);
+      observedTurnIds.delete(id);
+    }
+  }
   const count = props.turns.length;
   for (let i = 0; i < count; i++) {
     const turn = props.turns[i]!;
@@ -296,9 +331,16 @@ function refreshTurnObservers(): void {
     if (!el || el.offsetParent === null) continue;
     if (isTurnNearViewport(el.getBoundingClientRect(), window.innerHeight)) {
       mountedTurnIds.add(turn.id);
+      if (observedTurnIds.has(turn.id)) {
+        turnVisibilityObserver?.unobserve(el);
+        observedTurnIds.delete(turn.id);
+      }
       continue;
     }
-    turnVisibilityObserver?.observe(el);
+    if (!observedTurnIds.has(turn.id)) {
+      turnVisibilityObserver?.observe(el);
+      observedTurnIds.add(turn.id);
+    }
   }
 }
 
@@ -557,7 +599,20 @@ function copyFinalSummary(): void {
   }).catch(() => {/* ignore */});
 }
 
-defineExpose({ copyConversation, copyFinalSummary });
+/** Recompute which turns are near the viewport and mount them immediately, using
+ *  the CURRENT geometry (rect-based, not IO-timing-based). ConversationPane
+ *  drives this after a scroll restore / bottom-follow: ChatPane's own rect
+ *  checks (flush:'post' turns watcher, KeepAlive onActivated) run before the
+ *  parent restores scrollTop, so turns at the restored position would otherwise
+ *  only be observed and bet on IntersectionObserver delivery. */
+function mountVisibleTurns(): void {
+  refreshTurnObservers();
+}
+
+// `refreshTurnObservers` is exposed as well (same work) for callers that want
+// the internal name; `mountVisibleTurns` is the intent-revealing alias used by
+// ConversationPane's scroll-restore path.
+defineExpose({ copyConversation, copyFinalSummary, mountVisibleTurns, refreshTurnObservers });
 
 function isAssistantRunEnd(index: number): boolean {
   const turn = props.turns[index];
