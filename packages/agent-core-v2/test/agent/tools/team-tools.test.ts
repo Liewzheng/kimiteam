@@ -266,6 +266,7 @@ interface GateStubs {
   readonly sessionMeta: unknown;
   readonly bootstrap: unknown;
   readonly scopeContext: unknown;
+  readonly sessionContext: unknown;
 }
 
 function gateStubs(tmpDir: string, callerId: string, agents: Record<string, unknown>): GateStubs {
@@ -273,6 +274,7 @@ function gateStubs(tmpDir: string, callerId: string, agents: Record<string, unkn
     sessionMeta: { read: async () => ({ agents }) },
     bootstrap: { homeDir: tmpDir, osHomeDir: tmpDir, cwd: tmpDir },
     scopeContext: { agentId: callerId },
+    sessionContext: { sessionId: 'test-session' },
   };
 }
 
@@ -717,6 +719,7 @@ function makeScoreTool(
     gateLogStub() as never,
     configStub as never,
     evidenceStub as never,
+    stubs.sessionContext as never,
   );
 }
 
@@ -791,6 +794,7 @@ describe('TeamScore', () => {
     expect(entry.note).toBe('fast and clean');
     expect(entry.model).toBe('local/qwen');
     expect(entry.agentId).toBe('inst-42'); // agent_id → agentId
+    expect(entry.sessionId).toBe('test-session'); // filled from the session context
     expect(entry.ts).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
   });
 
@@ -893,6 +897,7 @@ describe('TeamScore', () => {
     expect(entry.note).toBe('[penalty] missed the review deadline');
     expect(entry.model).toBe('provider/model-x');
     expect(entry.agentId).toBe('inst-7');
+    expect(entry.sessionId).toBe('test-session'); // penalty entries carry the session too
   });
 
   it('penalty clamps the recorded score at 0 and carries the [penalty] note prefix', async () => {

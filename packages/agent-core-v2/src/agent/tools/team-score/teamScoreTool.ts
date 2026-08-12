@@ -2,7 +2,10 @@
  * `team-score` tool domain (L7) — ITeamScoreTool implementation.
  *
  * Writes a score entry via IAgentPerformanceService and returns an updated
- * summary text. When invoked by a subagent, returns an error. The `record`
+ * summary text. Each entry carries the originating session id, filled from
+ * the session context rather than the caller's arguments so it cannot be
+ * forged by the main agent. When invoked by a subagent, returns an error. The
+ * `record`
  * action is gated by the TeamScore acceptance gate (`[subagent] score_gate`,
  * default `enforce`): unless disabled (`off`) or downgraded (`warn`), a
  * record requires a detectable acceptance action since the profile's latest
@@ -23,6 +26,7 @@ import { resolveScoreGate, resolveTeamMode } from '#/session/subagent/configSect
 
 import { ISessionMetadata } from '#/session/sessionMetadata/sessionMetadata';
 import { isSubagentMeta } from '#/session/agentLifecycle/subagentMetadata';
+import { ISessionContext } from '#/session/sessionContext/sessionContext';
 import { ITeamScoreTool, TeamScoreToolInputSchema, SUBAGENT_NOT_ALLOWED, type TeamScoreToolInput } from './team-score';
 import { IAcceptanceEvidenceService } from './acceptanceEvidence';
 
@@ -80,6 +84,7 @@ export class TeamScoreTool implements ITeamScoreTool {
     @ILogService private readonly log: ILogService,
     @IConfigService private readonly config: IConfigService,
     @IAcceptanceEvidenceService private readonly evidence: IAcceptanceEvidenceService,
+    @ISessionContext private readonly sessionContext: ISessionContext,
   ) {
     this.callerAgentId = scopeContext.agentId;
   }
@@ -152,6 +157,7 @@ export class TeamScoreTool implements ITeamScoreTool {
       model: args.model,
       agentId: args.agent_id,
       todoId: args.todo_id,
+      sessionId: this.sessionContext.sessionId,
     });
 
     const sum = await this.perf.summary(args.profile);
@@ -210,6 +216,7 @@ export class TeamScoreTool implements ITeamScoreTool {
       model: args.model,
       agentId: args.agent_id,
       todoId: args.todo_id,
+      sessionId: this.sessionContext.sessionId,
     });
 
     const parts: string[] = [
