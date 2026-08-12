@@ -575,24 +575,70 @@ function covers(folded: ContentSig, incoming: ContentSig): boolean {
   );
 }
 
-export function messagesToTurns(
+/**
+ * Per-position derivation-segment bookkeeping, index-aligned with `messages`
+ * (length = messages.length + 1).
+ *
+ * A *segment* is a maximal run of messages over which the assistant group stays
+ * open (pendingGroup non-null). Only the positions right after a USER or
+ * COMPACTION message — both unconditionally call flushGroup(), so the group is
+ * null there — plus index 0 are clean resume points: a replay from such a
+ * position needs no group state (just the turn prefix + `no` counter). Anything
+ * inside a segment (tool results, assistant deltas, mid-group promptId splits)
+ * must be re-derived from the segment's start, because `absorbContent` mutates
+ * the shared group object in place.
+ */
+interface TurnsDerivation {
+  turns: ChatTurn[];
+  /** Segment-start message index at each position. */
+  segStart: number[];
+  /** `no` counter at that segment start. */
+  segNo: number[];
+  /** `turns.length` at that segment start. */
+  segTurns: number[];
+}
+
+interface TurnsInitial {
+  turns: ChatTurn[];
+  no: number;
+}
+
+/**
+ * Core turn derivation. `fromIndex` + `initial` let a caller resume a previous
+ * derivation mid-way: every message before `fromIndex` is assumed already
+ * processed into `initial.turns` at counter `initial.no` (the caller is
+ * responsible for those turns being correct — the incremental builder only
+ * resumes at a clean segment boundary from its own previous result). When
+ * `fromIndex` is 0 the result is the full `messagesToTurns` derivation.
+ */
+function deriveTurns(
   messages: AppMessage[],
   approvals: AppApprovalRequest[],
-  getFileUrl?: (fileId: string) => string,
-  /**
-   * Whether the active session is still producing output. Only a live session's
-   * FINAL group keeps a dangling tool spinning (a genuine in-flight tool). When
-   * the session is idle, a tool that never got its result — e.g. a result frame
-   * the projector dropped on a reconnect/ordering race — must settle instead of
-   * spinning forever after the turn already finished.
-   */
-  sessionActive = true,
-  /** Preserved `plan_review` displays keyed by toolCallId — used to link the
-   *  ExitPlanMode tool card back to the plan file after the approval resolves. */
-  planReviewByToolCallId: Record<string, { plan: string; path?: string }> = {},
-): ChatTurn[] {
-  const turns: ChatTurn[] = [];
-  let no = 1;
+  getFileUrl: ((fileId: string) => string) | undefined,
+  sessionActive: boolean,
+  planReviewByToolCallId: Record<string, { plan: string; path?: string }>,
+  fromIndex: number,
+  initial: TurnsInitial,
+  prevSeg: { segStart: number[]; segNo: number[]; segTurns: number[] } | null,
+): TurnsDerivation {
+  const turns: ChatTurn[] = initial.turns;
+  let no = initial.no;
+
+  const segStart = new Array<number>(messages.length + 1);
+  const segNo = new Array<number>(messages.length + 1);
+  const segTurns = new Array<number>(messages.length + 1);
+  if (fromIndex > 0 && prevSeg) {
+    // The unchanged prefix's segment structure is identical to the previous
+    // run's — reuse it verbatim instead of re-deriving messages[0..fromIndex).
+    for (let i = 0; i < fromIndex; i++) {
+      segStart[i] = prevSeg.segStart[i]!;
+      segNo[i] = prevSeg.segNo[i]!;
+      segTurns[i] = prevSeg.segTurns[i]!;
+    }
+  }
+  let seg = fromIndex;
+  let segNoV = initial.no;
+  let segTurnsV = initial.turns.length;
 
   // Build approval lookup by toolCallId
   const approvalByTool = new Map<string, AppApprovalRequest>();
@@ -743,7 +789,29 @@ export function messagesToTurns(
     return undefined;
   }
 
-  for (const msg of messages) {
+  for (let i = fromIndex; i < messages.length; i++) {
+    // Record the segment this message belongs to BEFORE processing it. A new
+    // segment opens at `i` when the previous message flushed the group: USER and
+    // COMPACTION messages unconditionally call flushGroup(), so `no` /
+    // `turns.length` here already reflect that flush and `pendingGroup` is null
+    // at `i` — a clean resume point.
+    if (i === fromIndex) {
+      seg = fromIndex;
+      segNoV = initial.no;
+      segTurnsV = initial.turns.length;
+    } else {
+      const prevMsg = messages[i - 1]!;
+      if (prevMsg.role === 'user' || isCompactionSummaryMessage(prevMsg)) {
+        seg = i;
+        segNoV = no;
+        segTurnsV = turns.length;
+      }
+    }
+    segStart[i] = seg;
+    segNo[i] = segNoV;
+    segTurns[i] = segTurnsV;
+
+    const msg = messages[i]!;
     if (msg.role === 'system') continue;
 
     // Compaction summaries become a divider turn — never a chat bubble. The
@@ -943,5 +1011,169 @@ export function messagesToTurns(
   }
 
   flushGroup(true);
-  return turns;
+  segStart[messages.length] = seg;
+  segNo[messages.length] = segNoV;
+  segTurns[messages.length] = segTurnsV;
+  return { turns, segStart, segNo, segTurns };
+}
+
+/**
+ * Convert a flat list of AppMessages into ChatTurn[] for rendering — a full
+ * rebuild from scratch. The streaming hot path should use
+ * `createIncrementalTurnsBuilder` instead, which reuses this core for only the
+ * changed segment; this plain form stays for one-shot / non-repeating callers
+ * (side chats, tests).
+ */
+export function messagesToTurns(
+  messages: AppMessage[],
+  approvals: AppApprovalRequest[],
+  getFileUrl?: (fileId: string) => string,
+  /**
+   * Whether the active session is still producing output. Only a live session's
+   * FINAL group keeps a dangling tool spinning (a genuine in-flight tool). When
+   * the session is idle, a tool that never got its result — e.g. a result frame
+   * the projector dropped on a reconnect/ordering race — must settle instead of
+   * spinning forever after the turn already finished.
+   */
+  sessionActive = true,
+  /** Preserved `plan_review` displays keyed by toolCallId — used to link the
+   *  ExitPlanMode tool card back to the plan file after the approval resolves. */
+  planReviewByToolCallId: Record<string, { plan: string; path?: string }> = {},
+): ChatTurn[] {
+  return deriveTurns(
+    messages,
+    approvals,
+    getFileUrl,
+    sessionActive,
+    planReviewByToolCallId,
+    0,
+    { turns: [], no: 1 },
+    null,
+  ).turns;
+}
+
+// ---------------------------------------------------------------------------
+// Incremental turns builder (F1: session-switch / streaming render lag)
+//
+// The reducer rebuilds `messagesBySession[sid]` on every streaming event
+// (assistantDelta / toolOutput arrive ~16x/sec while a turn is in flight), and
+// each new array reference previously forced a FULL `messagesToTurns` pass over
+// every message — including contentSig concatenation, JSON.stringify of tool
+// inputs and toolResult regex normalization — even though only the tail message
+// changed. This builder turns that O(entire transcript) rebuild into O(changed
+// segment): unchanged messages keep their object identity across reducer
+// updates, so the builder replays only the derivation segment containing the
+// first changed message and hands back the SAME ChatTurn references for the
+// stable prefix — Vue then skips re-rendering those turns.
+//
+// Invalidation semantics (when to rebuild everything vs reuse):
+// - messages identity-prefix unchanged → reuse every turn before the segment.
+// - any non-message input changed (approvals / sessionActive / planReview) →
+//   full rebuild: those fold into arbitrary turns, so no prefix is reusable.
+// - the whole message array changed identity (e.g. a snapshot that replaced
+//   every object) → the identity scan finds divergence at index 0 → full.
+// ---------------------------------------------------------------------------
+
+export interface IncrementalTurnsInput {
+  messages: AppMessage[];
+  approvals: AppApprovalRequest[];
+  sessionActive: boolean;
+  planReviewByToolCallId: Record<string, { plan: string; path?: string }>;
+}
+
+export interface IncrementalTurnsBuilder {
+  /** Derive `input.messages` → turns, reusing the previous result for every
+   *  unchanged message. Returns the same ChatTurn objects for the stable
+   *  prefix. */
+  update(input: IncrementalTurnsInput): ChatTurn[];
+}
+
+export function createIncrementalTurnsBuilder(
+  getFileUrl?: (fileId: string) => string,
+): IncrementalTurnsBuilder {
+  let messages: AppMessage[] | null = null;
+  let approvals: AppApprovalRequest[] | null = null;
+  let sessionActive = true;
+  let planReviewByToolCallId: Record<string, { plan: string; path?: string }> = {};
+  let turns: ChatTurn[] = [];
+  let segStart: number[] = [];
+  let segNo: number[] = [];
+  let segTurns: number[] = [];
+
+  function fullDerive(input: IncrementalTurnsInput): ChatTurn[] {
+    const d = deriveTurns(
+      input.messages,
+      input.approvals,
+      getFileUrl,
+      input.sessionActive,
+      input.planReviewByToolCallId,
+      0,
+      { turns: [], no: 1 },
+      null,
+    );
+    messages = input.messages;
+    approvals = input.approvals;
+    sessionActive = input.sessionActive;
+    planReviewByToolCallId = input.planReviewByToolCallId;
+    turns = d.turns;
+    segStart = d.segStart;
+    segNo = d.segNo;
+    segTurns = d.segTurns;
+    return turns;
+  }
+
+  return {
+    update(input) {
+      // Any change in a non-message input can affect ANY turn — nothing in the
+      // previous result is safe to reuse.
+      if (
+        messages !== null &&
+        (approvals !== input.approvals ||
+          sessionActive !== input.sessionActive ||
+          planReviewByToolCallId !== input.planReviewByToolCallId)
+      ) {
+        return fullDerive(input);
+      }
+      if (messages === null) return fullDerive(input);
+      // Same array reference → nothing to do.
+      if (input.messages === messages) return turns;
+
+      // Identity-prefix scan. Reducers build every new array by spreading /
+      // mapping the old one, so unchanged messages keep their object identity —
+      // the scan is pointer comparisons only (no content touched).
+      const prev = messages;
+      const common = Math.min(prev.length, input.messages.length);
+      let k = 0;
+      while (k < common && prev[k] === input.messages[k]) k++;
+      if (k === common && k === prev.length && k === input.messages.length) {
+        // All messages identity-identical → result unchanged.
+        return turns;
+      }
+      if (k === 0) return fullDerive(input);
+
+      // Replay only the segment containing message k. Every turn completed
+      // before that segment started (`segTurns[k]` of them) is unchanged and
+      // reused by reference.
+      const b = segStart[k]!;
+      const d = deriveTurns(
+        input.messages,
+        input.approvals,
+        getFileUrl,
+        input.sessionActive,
+        input.planReviewByToolCallId,
+        b,
+        { turns: turns.slice(0, segTurns[k]!), no: segNo[k]! },
+        { segStart, segNo, segTurns },
+      );
+      messages = input.messages;
+      approvals = input.approvals;
+      sessionActive = input.sessionActive;
+      planReviewByToolCallId = input.planReviewByToolCallId;
+      turns = d.turns;
+      segStart = d.segStart;
+      segNo = d.segNo;
+      segTurns = d.segTurns;
+      return turns;
+    },
+  };
 }

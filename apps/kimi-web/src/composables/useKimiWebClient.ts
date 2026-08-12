@@ -77,7 +77,7 @@ import type {
 import { createInitialState, reduceAppEvent, type CompactionStatus, type KimiClientState } from '../api/daemon/eventReducer';
 import { isPlaceholderSessionUsage, toAppEvent } from '../api/daemon/mappers';
 
-import { messagesToTurns } from './messagesToTurns';
+import { createIncrementalTurnsBuilder, type IncrementalTurnsBuilder } from './messagesToTurns';
 import { createSessionDerivedCache } from './sessionDerivedCache';
 import { latestTodos, todoHistory as aggregateTodoHistory } from './latestTodos';
 import { buildSwarmGroups, countSwarmMembers, swarmMembersByToolCall } from './swarmGroups';
@@ -592,6 +592,9 @@ function forgetSession(sessionId: string): void {
   enqueueEvent.discard(({ meta }) => meta.sessionId === sessionId);
   removeSession(sessionId);
   removeSessionMessages(sessionId);
+  turnsBuilders.delete(sessionId);
+  const builderIdx = turnsBuildersOrder.indexOf(sessionId);
+  if (builderIdx !== -1) turnsBuildersOrder.splice(builderIdx, 1);
   delete rawState.approvalsBySession[sessionId];
   delete rawState.questionsBySession[sessionId];
   delete rawState.tasksBySession[sessionId];
@@ -2023,18 +2026,63 @@ const activeAppTasks = computed<AppTask[]>(() => {
 
 const taskPoller = useTaskPoller(rawState, activeAppTasks);
 
+// Per-session incremental turn builders. The reducer rebuilds
+// messagesBySession[sid] on every streaming event (~16x/sec), and the plain
+// messagesToTurns pass over the whole transcript for each new array reference
+// was the streaming render bottleneck. Each builder replays only the segment
+// containing the first changed message and returns the SAME ChatTurn references
+// for the stable prefix, so Vue skips re-rendering them. The registry mirrors
+// createSessionDerivedCache's MRU cap: a session past the cap is cold on every
+// layer (DOM evicted, WS cursor stale), so its builder's incremental state is
+// dead weight too. A stale builder is harmless anyway — the identity scan
+// self-heals on the next update.
+const turnsBuilders = new Map<string, IncrementalTurnsBuilder>();
+const turnsBuildersOrder: string[] = [];
+/** Stable empty approvals identity — `rawState.approvalsBySession[sid] ?? []`
+ *  would mint a NEW array every derive, which the builder treats as an
+ *  input change and full-rebuilds. */
+const EMPTY_APPROVALS: AppApprovalRequest[] = [];
+function getTurnsBuilder(sessionId: string): IncrementalTurnsBuilder {
+  const existing = turnsBuilders.get(sessionId);
+  if (existing !== undefined) {
+    const idx = turnsBuildersOrder.indexOf(sessionId);
+    if (idx !== -1) turnsBuildersOrder.splice(idx, 1);
+    turnsBuildersOrder.push(sessionId);
+    return existing;
+  }
+  const builder = createIncrementalTurnsBuilder((fileId) => getKimiWebApi().getFileUrl(fileId));
+  turnsBuilders.set(sessionId, builder);
+  turnsBuildersOrder.push(sessionId);
+  while (turnsBuildersOrder.length > SESSION_DERIVED_CACHE_MAX) {
+    const victim = turnsBuildersOrder.shift();
+    if (victim === undefined) break;
+    turnsBuilders.delete(victim);
+  }
+  return builder;
+}
+
 const turnsForSession = createSessionDerivedCache<ChatTurn[]>(
   (sid) => {
     const hiddenIds = new Set(rawState.sideChatUserMessageIdsBySession[sid] ?? []);
     const messages = (rawState.messagesBySession[sid] ?? []).filter((m) => !hiddenIds.has(m.id));
-    const approvals = rawState.approvalsBySession[sid] ?? [];
-    return messagesToTurns(
+    const approvals = rawState.approvalsBySession[sid] ?? EMPTY_APPROVALS;
+    const builder = getTurnsBuilder(sid);
+    const startedAt = performance.now();
+    const result = builder.update({
       messages,
       approvals,
-      (fileId) => getKimiWebApi().getFileUrl(fileId),
-      isSessionTurnActive(sid),
-      rawState.planReviewByToolCallId,
-    );
+      sessionActive: isSessionTurnActive(sid),
+      planReviewByToolCallId: rawState.planReviewByToolCallId,
+    });
+    // Slow-derive guard: a full rebuild after a snapshot or a turn-boundary
+    // settle is expected on the cold path, but anything over a frame budget
+    // during streaming is a regression worth surfacing in the debug trace
+    // (traceClientEvent is a no-op unless tracing is enabled).
+    const elapsedMs = performance.now() - startedAt;
+    if (elapsedMs > 16) {
+      traceClientEvent('turns:derive:slow', { sessionId: sid, ms: Math.round(elapsedMs) });
+    }
+    return result;
   },
   SESSION_DERIVED_CACHE_MAX,
 );

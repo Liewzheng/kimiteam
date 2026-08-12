@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { reactive } from 'vue';
-import type { AppMessage, AppMessageContent } from '../src/api/types';
+import type { AppApprovalRequest, AppMessage, AppMessageContent } from '../src/api/types';
 import { latestTodos, todoHistory } from '../src/composables/latestTodos';
-import { messagesToTurns } from '../src/composables/messagesToTurns';
+import { createIncrementalTurnsBuilder, messagesToTurns } from '../src/composables/messagesToTurns';
 import { createSessionDerivedCache } from '../src/composables/sessionDerivedCache';
 import { isPlayableMediaUrl } from '../src/composables/useFilePreview';
 import {
@@ -1160,7 +1160,7 @@ describe('turnLazyMount (F2: off-screen turn lazy-mounting)', () => {
   });
 
   describe('estimateTurnHeight', () => {
-    it('scales with text/tool volume but stays bounded', () => {
+    it('scales with text/thinking/tool volume using line-based estimates', () => {
       const small = estimateTurnHeight(assistantTurn({ text: 'hi' }));
       const big = estimateTurnHeight(
         assistantTurn({
@@ -1175,7 +1175,55 @@ describe('turnLazyMount (F2: off-screen turn lazy-mounting)', () => {
         }),
       );
       expect(big).toBeGreaterThan(small);
-      expect(big).toBeLessThanOrEqual(56 + 160 + 520 + 20 * 40);
+      // Line-based: 10k chars ≈ 112 wrapped lines × 24px — the old 520px text
+      // cap badly underestimated code fences. No hard text/thinking cap anymore.
+      expect(big).toBeGreaterThan(4000);
+    });
+
+    it('estimates a long code fence by line count, not a 520px cap', () => {
+      const fence = '```ts\n' + 'const x = 1;\n'.repeat(500) + '```';
+      const tall = estimateTurnHeight(assistantTurn({ text: fence }));
+      const short = estimateTurnHeight(assistantTurn({ text: 'hello' }));
+      // 500 fence lines × 24px — well past the old 520px cap, and much taller
+      // than a one-line turn.
+      expect(tall).toBeGreaterThan(500 * 24);
+      expect(tall).toBeGreaterThan(short * 10);
+    });
+
+    it('estimates a single-paragraph thinking block in full (it is not foldable)', () => {
+      const single = estimateTurnHeight(assistantTurn({ text: '', thinking: 'p'.repeat(10_000) }));
+      // 10k chars ≈ 112 wrapped lines × 24px — NOT capped at the old 160px.
+      expect(single).toBeGreaterThan(2000);
+    });
+
+    it('folds multi-paragraph thinking to a short teaser (ThinkingBlock collapses it)', () => {
+      const folded = estimateTurnHeight(
+        assistantTurn({ text: '', thinking: 'para one\n\n' + 'para two\n\n' + 'para three' }),
+      );
+      expect(folded).toBeLessThanOrEqual(160 + 56);
+    });
+
+    it('accounts for long tool outputs, capped at the 50 visible lines', () => {
+      const withOutput = estimateTurnHeight(
+        assistantTurn({
+          text: 'x',
+          tools: [
+            {
+              id: 't',
+              name: 'bash',
+              arg: '{}',
+              status: 'ok',
+              output: Array.from({ length: 200 }, (_, i) => `line ${i}`),
+            },
+          ],
+        }),
+      );
+      const withoutOutput = estimateTurnHeight(
+        assistantTurn({ text: 'x', tools: [{ id: 't', name: 'bash', arg: '{}', status: 'ok' }] }),
+      );
+      expect(withOutput).toBeGreaterThan(withoutOutput);
+      // ToolOutputBlock renders at most 50 lines before scrolling.
+      expect(withOutput - withoutOutput).toBeLessThanOrEqual(50 * 24 + 40);
     });
 
     it('accounts for user attachments', () => {
@@ -1189,5 +1237,151 @@ describe('turnLazyMount (F2: off-screen turn lazy-mounting)', () => {
       const without = estimateTurnHeight({ id: 'u', role: 'user', no: 1, text: 'look' });
       expect(withAtt).toBeGreaterThan(without);
     });
+  });
+});
+
+describe('createIncrementalTurnsBuilder (F1: streaming tail re-derive)', () => {
+  const userMsg = (id: string, text: string): AppMessage =>
+    message(id, 'user', [{ type: 'text', text }], { promptId: `u-${id}` });
+  const assistantMsg = (id: string, text: string): AppMessage =>
+    message(id, 'assistant', [{ type: 'text', text }], { promptId: 'p-main' });
+  const toolUseMsg = (id: string, toolCallId: string): AppMessage =>
+    message(id, 'tool', [
+      { type: 'toolUse', toolCallId, toolName: 'bash', input: 'ls' },
+      { type: 'toolResult', toolCallId, output: 'ok' },
+    ]);
+
+  const NO_APPROVALS: AppApprovalRequest[] = [];
+  const NO_PLAN_REVIEW: Record<string, { plan: string; path?: string }> = {};
+  const update = (builder: ReturnType<typeof createIncrementalTurnsBuilder>, messages: AppMessage[]) =>
+    builder.update({
+      messages,
+      approvals: NO_APPROVALS,
+      sessionActive: false,
+      planReviewByToolCallId: NO_PLAN_REVIEW,
+    });
+
+  it('reuses prefix turns by reference when only the streaming tail changes', () => {
+    const builder = createIncrementalTurnsBuilder();
+    const v1 = [userMsg('u1', 'hi'), assistantMsg('a1', 'hello'), userMsg('u2', 'next'), assistantMsg('a2', 'streaming')];
+    const t1 = update(builder, v1);
+    expect(t1).toHaveLength(4);
+
+    // assistantDelta on a2: the reducer maps the array, keeping identity of
+    // every other message.
+    const v2 = v1.map((m) =>
+      m.id === 'a2' ? { ...m, content: [{ type: 'text', text: 'streaming more' }] } : m,
+    );
+    const t2 = update(builder, v2);
+
+    expect(t2).toHaveLength(4);
+    expect(t2[0]).toBe(t1[0]); // user u1 — same reference, Vue skips re-render
+    expect(t2[1]).toBe(t1[1]); // assistant a1 — same reference
+    expect(t2[2]).toBe(t1[2]); // user u2 — same reference
+    expect(t2[3]).not.toBe(t1[3]); // only the tail streaming turn is re-derived
+    expect(t2[3]!.text).toBe('streaming more');
+  });
+
+  it('re-derives the whole group when a delta lands mid-group (tool messages included)', () => {
+    const builder = createIncrementalTurnsBuilder();
+    const v1 = [userMsg('u1', 'go'), assistantMsg('a1', 'thinking…'), toolUseMsg('t1', 'tc1'), assistantMsg('a2', 'done')];
+    const t1 = update(builder, v1);
+    expect(t1).toHaveLength(2); // user + one merged assistant group (a1,t1,a2)
+
+    const v2 = v1.map((m) =>
+      m.id === 'a2' ? { ...m, content: [{ type: 'text', text: 'done!' }] } : m,
+    );
+    const t2 = update(builder, v2);
+    expect(t2).toEqual(messagesToTurns(v2, [], undefined, false));
+    expect(t2[0]).toBe(t1[0]); // user turn reused
+    expect(t2[1]).not.toBe(t1[1]); // group re-derived from its start
+    expect(t2[1]!.text).toBe('thinking…\ndone!');
+  });
+
+  it('returns the cached result when the same array reference is passed again', () => {
+    const builder = createIncrementalTurnsBuilder();
+    const v1 = [userMsg('u1', 'hi'), assistantMsg('a1', 'hello')];
+    const t1 = update(builder, v1);
+    expect(update(builder, v1)).toBe(t1);
+  });
+
+  it('appends a message by replaying only from the last clean boundary', () => {
+    const builder = createIncrementalTurnsBuilder();
+    const v1 = [userMsg('u1', 'hi'), assistantMsg('a1', 'hello')];
+    const t1 = update(builder, v1);
+    const v2 = [...v1, assistantMsg('a2', 'again')]; // continues a1's group
+    const t2 = update(builder, v2);
+    expect(t2[0]).toBe(t1[0]); // user turn reused
+    expect(t2).toEqual(messagesToTurns(v2, [], undefined, false));
+    expect(t2[1]!.text).toBe('hello\nagain');
+  });
+
+  it('rebuilds everything when approvals change (they fold into any turn)', () => {
+    const builder = createIncrementalTurnsBuilder();
+    const v1 = [userMsg('u1', 'hi'), assistantMsg('a1', 'hello')];
+    const t1 = update(builder, v1);
+
+    const approvals: AppApprovalRequest[] = [
+      {
+        approvalId: 'appr-1',
+        sessionId: 'session-1',
+        toolCallId: 'tc9',
+        toolName: 'Bash',
+        action: 'approve',
+        display: {},
+        expiresAt: '2026-01-01T00:00:01.000Z',
+        createdAt: '2026-01-01T00:00:00.000Z',
+      },
+    ];
+    const t2 = builder.update({
+      messages: v1,
+      approvals,
+      sessionActive: false,
+      planReviewByToolCallId: {},
+    });
+    expect(t2[0]).not.toBe(t1[0]); // nothing is reusable across input-key change
+    expect(t2).toEqual(messagesToTurns(v1, approvals, undefined, false));
+  });
+
+  it('rebuilds when a snapshot replaces every message object', () => {
+    const builder = createIncrementalTurnsBuilder();
+    const v1 = [userMsg('u1', 'hi'), assistantMsg('a1', 'hello')];
+    const t1 = update(builder, v1);
+    // Fresh objects, same ids/content — like mergeSnapshotMessages' snapshot tail.
+    const v2 = [userMsg('u1', 'hi'), assistantMsg('a1', 'hello')];
+    const t2 = update(builder, v2);
+    expect(t2).not.toBe(t1);
+    expect(t2[0]).not.toBe(t1[0]);
+    expect(t2).toEqual(messagesToTurns(v2, [], undefined, false));
+  });
+
+  it('stays byte-identical to a full rebuild across a streaming sequence', () => {
+    const builder = createIncrementalTurnsBuilder();
+    let msgs = [userMsg('u1', 'hi'), assistantMsg('a1', 'hello')];
+    expect(update(builder, msgs)).toEqual(messagesToTurns(msgs, [], undefined, false));
+
+    // delta on the tail assistant message
+    msgs = msgs.map((m) => (m.id === 'a1' ? { ...m, content: [{ type: 'text', text: 'hello world' }] } : m));
+    expect(update(builder, msgs)).toEqual(messagesToTurns(msgs, [], undefined, false));
+
+    // a new user turn + a fresh streaming assistant group
+    msgs = [...msgs, userMsg('u2', 'again'), assistantMsg('a2', 'ok')];
+    expect(update(builder, msgs)).toEqual(messagesToTurns(msgs, [], undefined, false));
+
+    // messageUpdated on an existing USER message (mid-list change)
+    msgs = msgs.map((m) => (m.id === 'u2' ? { ...m, content: [{ type: 'text', text: 'again!' }] } : m));
+    expect(update(builder, msgs)).toEqual(messagesToTurns(msgs, [], undefined, false));
+
+    // compaction divider inserted between groups
+    const compacted = msgs.map((m) =>
+      m.id === 'u2'
+        ? {
+            ...m,
+            metadata: { origin: { kind: 'compaction_summary' } },
+            content: [{ type: 'text', text: 'older context compacted' }],
+          }
+        : m,
+    );
+    expect(update(builder, compacted)).toEqual(messagesToTurns(compacted, [], undefined, false));
   });
 });
