@@ -9,7 +9,7 @@
 #
 # Usage:
 #   powershell -ExecutionPolicy Bypass -File install.ps1
-#   irm https://liewzheng.github.io/kimi-code/install.ps1 | iex
+#   irm https://liewzheng.github.io/kimiteam/install.ps1 | iex
 #
 # Requires: node >= 24. Idempotent; re-running backs up the old bundle (upgrade).
 

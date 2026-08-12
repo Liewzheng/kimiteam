@@ -1,5 +1,5 @@
 #!/bin/sh
-# install-kimiteam.sh — POSIX-sh one-shot installer for the kimiteam CLI bundle.
+# install-kimiteam.sh -- POSIX-sh one-shot installer for the kimiteam CLI bundle.
 #
 # Downloads the latest kimiteam-dev rolling release from GitHub and sets it up
 # alongside the official `kimi` CLI.  The official `kimi` binary and its
@@ -13,7 +13,7 @@
 set -eu
 
 # ---------------------------------------------------------------------------
-# RED LINE — NEVER touch the official kimi installation
+# RED LINE -- NEVER touch the official kimi installation
 # ---------------------------------------------------------------------------
 # This script ONLY manages:
 #   ~/.kimi-code/bin/kimiteam          (the team-build launcher)
@@ -199,7 +199,7 @@ command rm -f "${LIB_DIR}/${DIST_WEB_ZIP_NAME}"
 # The runtime resolves dist-web by walking up from the bundle (version.ts
 # looks for a package.json within 6 levels); without one in ${LIB_DIR} the
 # web server runs API-only and `kimi web` returns 404 on GET /.  If the
-# official kimi already left a package.json here, keep it untouched — our
+# official kimi already left a package.json here, keep it untouched -- our
 # fork dist-web already overlays that directory, so the semantics are
 # unchanged either way.
 if [ ! -f "${LIB_DIR}/package.json" ]; then

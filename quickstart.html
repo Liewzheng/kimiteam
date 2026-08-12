@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>快速部署 — kimiteam</title>
+  <meta name="description" content="kimiteam 安装：macOS/Linux 一键脚本、Windows irm 短链、Release 手动下载；首次启动 4 问组建团队，kimiteam --version 验证。">
+  <meta name="color-scheme" content="dark">
+  <script>document.documentElement.classList.add('js')</script>
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="assets/site.css">
+  <script src="assets/i18n/zh-CN.js" defer></script>
+  <script src="assets/i18n/en.js" defer></script>
+  <script src="assets/i18n/zh-TW.js" defer></script>
+  <script src="assets/i18n/fr.js" defer></script>
+  <script src="assets/i18n/ja.js" defer></script>
+  <script src="assets/i18n/ko.js" defer></script>
+  <script src="assets/i18n/ru.js" defer></script>
+  <script src="assets/i18n.js" defer></script>
+  <script src="assets/site.js" defer></script>
+</head>
+<body data-page="quickstart">
+  <a class="skip-link" href="#main" data-i18n="skip.link">跳到正文</a>
+
+  <header class="site-header">
+    <div class="container header-inner">
+      <a class="brand" href="index.html" aria-label="kimiteam 首页" data-i18n-attr="aria-label:brand.aria">
+        <span class="brand-name">kimi<span class="brand-accent">team</span></span>
+        <span class="brand-alias">cli</span>
+      </a>
+      <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav" data-i18n="nav.toggle">菜单</button>
+      <nav class="site-nav" id="site-nav" aria-label="主导航" data-i18n-attr="aria-label:nav.aria">
+        <ul>
+          <li><a href="index.html" data-i18n="nav.index">总览</a></li>
+          <li><a href="features.html" data-i18n="nav.features">特性</a></li>
+          <li><a href="quickstart.html" aria-current="page" data-i18n="nav.quickstart">快速部署</a></li>
+          <li><a href="https://liewzheng.github.io/kimiteam/docs/" target="_blank" rel="noopener noreferrer" data-i18n="nav.docs">文档</a></li>
+          <li class="nav-gh"><a href="https://github.com/Liewzheng/kimiteam" target="_blank" rel="noopener noreferrer" data-i18n="nav.github">GitHub ↗</a></li>
+        </ul>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main">
+    <!-- ============ 页首 ============ -->
+    <section class="page-hero hero">
+      <div class="container">
+        <div class="hero-top">
+          <div class="hero-vlabel" aria-hidden="true"><span class="vlabel" data-i18n="vl.start">部署</span></div>
+          <div class="hero-head" data-reveal>
+            <p class="eyebrow" data-i18n="quickstart.hero.eyebrow">QUICKSTART · 安装 → 组队 → 派工</p>
+            <h1 class="hero-title"><span data-i18n="quickstart.hero.title.l1">一条命令，</span><br><span data-i18n="quickstart.hero.title.l2">装好一支团队。</span></h1>
+            <p class="hero-sub" data-i18n="quickstart.hero.sub">三种安装方式任选其一；装完运行 kimiteam，4 问组队即可派工。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 安装 ============ -->
+    <section class="sec" id="install">
+      <div class="container sec-grid">
+        <div class="sec-label" aria-hidden="true"><span class="vlabel" data-i18n="vl.install">安装</span></div>
+        <div class="sec-body">
+          <div class="sec-head" data-reveal>
+            <p class="eyebrow" data-i18n="quickstart.install.eyebrow">INSTALL · 三选一</p>
+            <h2 data-i18n="quickstart.install.h2">装到官方 kimi 旁边。</h2>
+          </div>
+
+          <div class="code" data-reveal data-os="unix">
+            <div class="code-label"><span class="code-label-left"><span data-i18n="quickstart.install.c1.label">bash · 一键脚本（macOS / Linux）</span><span class="rec-badge" data-i18n="quickstart.recBadge" hidden>推荐 · 你的系统</span></span></div>
+            <pre>curl -fsSL https://raw.githubusercontent.com/Liewzheng/kimiteam/main/scripts/install-kimiteam.sh | bash</pre>
+          </div>
+          <p class="sec-lead" style="margin-top:-.8rem" data-reveal data-i18n="quickstart.install.c1.note">自动下载 Release kimiteam-dev 最新分发，安装到官方 kimi CLI 旁；官方二进制与 bundle 原样保留。</p>
+
+          <div class="code" data-reveal data-os="win">
+            <div class="code-label"><span class="code-label-left"><span data-i18n="quickstart.install.c2.label">powershell · Windows（irm 短链）</span><span class="rec-badge" data-i18n="quickstart.recBadge" hidden>推荐 · 你的系统</span></span></div>
+            <pre><span class="cm" data-i18n="quickstart.install.c2.m1"># 方式 1 · irm 短链</span>
+irm https://liewzheng.github.io/kimiteam/install.ps1 | iex
+<span class="cm" data-i18n="quickstart.install.c2.m2"># 方式 2 · raw 长链（备选）</span>
+irm https://raw.githubusercontent.com/Liewzheng/kimiteam/main/scripts/install-kimiteam.ps1 | iex
+<span class="cm" data-i18n="quickstart.install.c2.m3"># 方式 3 · 下载后以 -File 运行</span>
+powershell -ExecutionPolicy Bypass -File install-kimiteam.ps1</pre>
+          </div>
+
+          <div class="code" data-reveal>
+            <div class="code-label"><span data-i18n="quickstart.install.c3.label">Release · 手动下载</span></div>
+            <pre><span class="cm" data-i18n="quickstart.install.c3.cm"># 资产清单</span>
+main-team.cjs
+dist-web.zip</pre>
+          </div>
+          <p class="sec-lead" style="margin-top:-.8rem" data-reveal><span data-i18n="quickstart.install.c3.desc">从 kimiteam-dev 发布页下载资产（main-team.cjs + dist-web.zip），解压到官方 kimi 旁即可。</span> <a href="https://github.com/Liewzheng/kimiteam/releases" target="_blank" rel="noopener noreferrer" data-i18n="quickstart.install.c3.link">打开 Release 页</a></p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 首跑与验证 ============ -->
+    <section class="sec" id="first-run">
+      <div class="container sec-grid">
+        <div class="sec-label" aria-hidden="true"><span class="vlabel" data-i18n="vl.verify">验证</span></div>
+        <div class="sec-body">
+          <div class="sec-head" data-reveal>
+            <p class="eyebrow" data-i18n="quickstart.first.eyebrow">FIRST RUN · 组队与验证</p>
+            <h2 data-i18n="quickstart.first.h2">首跑，组队，验证。</h2>
+          </div>
+
+          <div class="code" data-reveal>
+            <div class="code-label"><span>bash</span></div>
+            <pre>kimiteam   <span class="cm" data-i18n="quickstart.first.cm1"># 首跑：冷启动 4 问，组建你的团队</span>
+kimiteam --version   <span class="cm" data-i18n="quickstart.first.cm2"># 验证版本</span></pre>
+          </div>
+
+          <p class="sec-lead" data-reveal><span data-i18n="quickstart.first.lead.a">运行</span> <code class="mono">kimiteam</code><span data-i18n="quickstart.first.lead.b">完成冷启动 4 问后，用</span> <code class="mono">kimiteam --version</code><span data-i18n="quickstart.first.lead.c">验证安装版本。</span></p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ CTA ============ -->
+    <section class="cta-band">
+      <div class="container" data-reveal>
+        <h2 data-i18n="quickstart.cta.h2">团队就绪？</h2>
+        <p data-i18n="quickstart.cta.p">4 问组队后，主模型就开始后台并行派工。</p>
+        <div class="hero-cta" style="justify-content:center">
+          <a class="btn btn-primary" href="features.html"><span data-i18n="nav.features">特性</span><span class="btn-arrow">→</span></a>
+          <a class="btn btn-ghost" href="https://github.com/Liewzheng/kimiteam" target="_blank" rel="noopener noreferrer"><span data-i18n="cta.github">GitHub</span><span class="btn-arrow">↗</span></a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container">
+      <div class="footer-grid">
+        <div class="footer-brand">
+          <a class="brand" href="index.html" aria-label="kimiteam 首页" data-i18n-attr="aria-label:brand.aria">
+            <span class="brand-name">kimi<span class="brand-accent">team</span></span>
+            <span class="brand-alias">cli</span>
+          </a>
+          <p class="footer-tag" data-i18n="footer.tagline">给官方 Kimi Code CLI 装上团队能力的社区发行版。</p>
+          <p class="footer-license" data-i18n="footer.license">MIT · 开源，自由使用</p>
+        </div>
+        <div class="footer-col">
+          <p class="footer-h" data-i18n="footer.col.site">站点</p>
+          <ul>
+            <li><a href="index.html" data-i18n="nav.index">总览</a></li>
+            <li><a href="features.html" data-i18n="nav.features">特性</a></li>
+            <li><a href="quickstart.html" data-i18n="nav.quickstart">快速部署</a></li>
+            <li><a href="https://liewzheng.github.io/kimiteam/docs/" target="_blank" rel="noopener noreferrer" data-i18n="nav.docs">文档</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <p class="footer-h" data-i18n="footer.col.project">项目</p>
+          <p><a class="github-url" href="https://github.com/Liewzheng/kimiteam" target="_blank" rel="noopener noreferrer">github.com/Liewzheng/kimiteam</a></p>
+          <p data-i18n="footer.baseline">基于官方 Kimi Code 0.33 基线（v0.33.0）· Node ≥ 24</p>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <span>© 2026 kimiteam</span>
+        <span data-i18n="footer.motto">一个命令，一支团队。</span>
+      </div>
+    </div>
+  </footer>
+</body>
+</html>
