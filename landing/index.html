@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>kimiteam — 给官方 Kimi Code CLI 装上团队能力</title>
+  <meta name="description" content="kimiteam 是官方 Kimi Code CLI 的社区发行版：多 Subagent 独立角色/模型/上下文，主模型派工默认后台并行，/team 面板管理团队，TeamScore 绩效与 score_gate 验收门禁。MIT 开源，Node ≥ 24。">
+  <meta name="color-scheme" content="dark">
+  <script>document.documentElement.classList.add('js')</script>
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="assets/site.css">
+  <script src="assets/i18n/zh-CN.js" defer></script>
+  <script src="assets/i18n/en.js" defer></script>
+  <script src="assets/i18n/zh-TW.js" defer></script>
+  <script src="assets/i18n/fr.js" defer></script>
+  <script src="assets/i18n/ja.js" defer></script>
+  <script src="assets/i18n/ko.js" defer></script>
+  <script src="assets/i18n/ru.js" defer></script>
+  <script src="assets/i18n.js" defer></script>
+  <script src="assets/site.js" defer></script>
+</head>
+<body data-page="index">
+  <a class="skip-link" href="#main" data-i18n="skip.link">跳到正文</a>
+
+  <!-- 落印用的做旧滤镜：只此一处，随印章一起使用 -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+    <filter id="stamp-rough" x="-15%" y="-15%" width="130%" height="130%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.55" numOctaves="2" seed="9" result="noise"/>
+      <feDisplacementMap in="SourceGraphic" in2="noise" scale="6" xChannelSelector="R" yChannelSelector="G"/>
+    </filter>
+  </svg>
+
+  <header class="site-header">
+    <div class="container header-inner">
+      <a class="brand" href="index.html" aria-label="kimiteam 首页" data-i18n-attr="aria-label:brand.aria">
+        <span class="brand-name">kimi<span class="brand-accent">team</span></span>
+        <span class="brand-alias">cli</span>
+      </a>
+      <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav" data-i18n="nav.toggle">菜单</button>
+      <nav class="site-nav" id="site-nav" aria-label="主导航" data-i18n-attr="aria-label:nav.aria">
+        <ul>
+          <li><a href="index.html" aria-current="page" data-i18n="nav.index">总览</a></li>
+          <li><a href="features.html" data-i18n="nav.features">特性</a></li>
+          <li><a href="quickstart.html" data-i18n="nav.quickstart">快速部署</a></li>
+          <li><a href="https://liewzheng.github.io/kimiteam/docs/" target="_blank" rel="noopener noreferrer" data-i18n="nav.docs">文档</a></li>
+          <li class="nav-gh"><a href="https://github.com/Liewzheng/kimiteam" target="_blank" rel="noopener noreferrer" data-i18n="nav.github">GitHub ↗</a></li>
+        </ul>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main">
+    <!-- ============ Hero ============ -->
+    <section class="hero">
+      <div class="container">
+        <div class="hero-grid">
+        <div class="hero-top">
+          <div class="hero-vlabel" aria-hidden="true"><span class="vlabel" data-i18n="vl.team">团队</span></div>
+          <div class="hero-head" data-reveal>
+            <p class="eyebrow" data-i18n="index.hero.eyebrow">KIMITEAM · 官方 KIMI CODE CLI · SUBAGENT 团队</p>
+            <h1 class="hero-title"><span data-i18n="index.hero.title.l1">一个命令，</span><br><span data-i18n="index.hero.title.l2a">一支</span><span class="mark" data-i18n="index.hero.title.l2b">团队</span><span data-i18n="index.hero.title.l2c">。</span></h1>
+            <p class="hero-sub">
+              <span class="en-line">A community edition that puts a whole subagent team on the official Kimi Code CLI.</span>
+              <span data-i18n="index.hero.sub">主模型派工默认后台并行；每个 Subagent 独立角色、模型与上下文，/team 面板统一管理——绩效记账、门禁验收、全生命周期一目了然。</span>
+            </p>
+            <div class="hero-cta">
+              <a class="btn btn-primary" href="quickstart.html"><span data-i18n="cta.quickstart">快速部署</span><span class="btn-arrow">→</span></a>
+              <a class="btn btn-ghost" href="https://github.com/Liewzheng/kimiteam" target="_blank" rel="noopener noreferrer"><span data-i18n="cta.github">GitHub</span><span class="btn-arrow">↗</span></a>
+            </div>
+            <!-- 系统感知安装推荐：JS 识别 OS 才显示对应代码块与链接行，其余与无 JS 时整块隐藏 -->
+            <div class="code rec-code" data-rec-os="unix" hidden>
+              <div class="code-label"><span data-i18n="index.recLabel">bash · 推荐安装</span></div>
+              <pre>curl -fsSL https://raw.githubusercontent.com/Liewzheng/kimiteam/main/scripts/install-kimiteam.sh | bash</pre>
+            </div>
+            <div class="code rec-code" data-rec-os="win" hidden>
+              <div class="code-label"><span data-i18n="index.recLabel">bash · 推荐安装</span></div>
+              <pre>irm https://liewzheng.github.io/kimiteam/install.ps1 | iex</pre>
+            </div>
+            <div class="rec-links" data-rec-links hidden>
+              <a href="quickstart.html#install" data-i18n="index.recOther">其他平台 →</a>
+              <a href="https://github.com/Liewzheng/kimiteam/releases" target="_blank" rel="noopener noreferrer" data-i18n="index.recBinary">下载二进制 →</a>
+            </div>
+            <ul class="hero-meta">
+              <li data-i18n="index.hero.meta1">MIT 开源</li>
+              <li data-i18n="index.hero.meta2">基于官方 0.33 基线</li>
+              <li data-i18n="index.hero.meta3">TUI · Web 双形态</li>
+              <li data-i18n="index.hero.meta4">后台并行派工</li>
+            </ul>
+          </div>
+        </div>
+        <div class="terminal-wrap" data-reveal data-d="0.08">
+          <div class="terminal" data-terminal>
+            <div class="terminal-bar">
+              <span class="terminal-dot"></span>
+              <span class="terminal-dot"></span>
+              <span class="terminal-dot"></span>
+              <span class="terminal-title" data-i18n="index.terminal.title">kimiteam · 团队会话</span>
+            </div>
+            <div class="terminal-screen">
+              <span class="ln ln-cmd"><span class="prompt">$ </span>kimiteam</span>
+              <span class="ln ln-muted">Subagent Team · 4 members loaded</span>
+              <span class="ln ln-ok"><span class="ok">✓</span> yan-ge    Staff Engineer     kimi-k2     on-duty</span>
+              <span class="ln ln-ok"><span class="ok">✓</span> lin-xue   QA Lead            kimi-k2     resting</span>
+              <span class="ln ln-ok"><span class="ok">✓</span> chen-han  DevOps Engineer    kimi-k2     resting</span>
+              <span class="ln ln-ok"><span class="ok">✓</span> wang-yue  Docs &amp; UX          kimi-k2     off-duty</span>
+              <span class="ln ln-sep">────────────────────────────────────────</span>
+              <span class="ln ln-muted">Dispatch #d7c2 → yan-ge · task_id=8f3a1c4e</span>
+              <span class="ln ln-score">[TeamScore] Scored "yan-ge" — 88/100.</span>
+              <span class="ln ln-muted">Score inflation detected: the last 5 scores for yan-ge are all &gt;= 75...</span>
+              <span class="ln ln-score">[TeamScore] Penalized "yan-ge" — deducted 15 points (recorded 85/100).</span>
+              <span class="ln ln-score">[TeamScore] Blocked by acceptance gate</span>
+            </div>
+          </div>
+
+          <div class="seal seal-hero" data-seal="hero" role="img" aria-label="团队绩效 88/100" data-i18n-attr="aria-label:index.seal.hero.aria">
+            <svg class="seal-ring" viewBox="0 0 200 200" aria-hidden="true">
+              <defs>
+                <path id="sealArcTopH" d="M 28 100 A 72 72 0 0 1 172 100" fill="none"/>
+                <path id="sealArcBotH" d="M 28 100 A 72 72 0 0 0 172 100" fill="none"/>
+              </defs>
+              <text font-size="13" letter-spacing="2"><textPath href="#sealArcTopH" startOffset="50%" text-anchor="middle">KIMITEAM</textPath></text>
+              <text font-size="10" letter-spacing="1.5"><textPath href="#sealArcBotH" startOffset="50%" text-anchor="middle">SUBAGENT TEAM</textPath></text>
+            </svg>
+            <span class="seal-disc" aria-hidden="true"></span>
+            <span class="seal-core">
+              <span class="seal-score">88</span>
+              <span class="seal-denom">/ 100</span>
+              <span class="seal-tag">TEAMSCORE</span>
+            </span>
+          </div>
+        </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 卖点条 ============ -->
+    <section class="stats" aria-label="核心卖点" data-i18n-attr="aria-label:index.stats.aria">
+      <div class="container">
+        <div class="stats-grid" data-reveal>
+          <div class="stat">
+            <span class="stat-num">0.33</span>
+            <span class="stat-label" data-i18n="index.stats.label1">官方 Kimi Code 基线</span>
+          </div>
+          <div class="stat">
+            <span class="stat-num">2h</span>
+            <span class="stat-label" data-i18n="index.stats.label2">停靠记忆 TTL（KV-cache 保活）</span>
+          </div>
+          <div class="stat">
+            <span class="stat-num">4</span>
+            <span class="stat-label" data-i18n="index.stats.label3">成员四态生命周期</span>
+          </div>
+          <div class="stat">
+            <span class="stat-num">100</span>
+            <span class="stat-label" data-i18n="index.stats.label4">TeamScore 满分</span>
+          </div>
+        </div>
+        <p class="stats-note"><span data-i18n="index.stats.note">基于官方 0.33 基线（v0.33.0）· Node ≥ 24 · 详见</span> <a href="features.html" data-i18n="index.stats.note.link">特性</a></p>
+      </div>
+    </section>
+
+    <!-- ============ 工作流 ============ -->
+    <section class="sec" id="workflow">
+      <div class="container sec-grid">
+        <div class="sec-label" aria-hidden="true"><span class="vlabel" data-i18n="vl.workflow">工作流</span></div>
+        <div class="sec-body">
+          <div class="sec-head" data-reveal>
+            <p class="eyebrow">WORKFLOW</p>
+            <h2 data-i18n="index.workflow.h2">四步，把 CLI 变成一支团队。</h2>
+          </div>
+          <p class="sec-lead" data-reveal data-i18n="index.workflow.lead">从冷启动到绩效闭环，kimiteam 把「团队」变成 CLI 的一等能力。</p>
+          <ol class="steps">
+            <li class="step" data-reveal>
+              <span class="step-no">01 · ASSEMBLE</span>
+              <h3 data-i18n="index.workflow.s1.title">组建</h3>
+              <p data-i18n="index.workflow.s1.desc">首次启动 4 问快速定义团队：角色、模型、职责与工位——主模型据此派工。</p>
+            </li>
+            <li class="step" data-reveal data-d="0.06">
+              <span class="step-no">02 · DISPATCH</span>
+              <h3 data-i18n="index.workflow.s2.title">派工</h3>
+              <p data-i18n="index.workflow.s2.desc">主模型派工默认后台并行；Agent 池满入队，standby 成员按权重加权选人。</p>
+            </li>
+            <li class="step" data-reveal data-d="0.12">
+              <span class="step-no">03 · ACCEPT</span>
+              <h3 data-i18n="index.workflow.s3.title">验收</h3>
+              <p data-i18n="index.workflow.s3.desc">score_gate 硬门禁：不达标的任务被拦截，避免低质量结果继续扩散。</p>
+            </li>
+            <li class="step" data-reveal data-d="0.18">
+              <span class="step-no">04 · SCORE</span>
+              <h3 data-i18n="index.workflow.s4.title">绩效</h3>
+              <p data-i18n="index.workflow.s4.desc">TeamScore 0–100 记账：通胀检测、扣分、未计分引擎提醒，绩效可追溯。</p>
+            </li>
+          </ol>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 绩效 ============ -->
+    <section class="sec" id="score">
+      <div class="container sec-grid">
+        <div class="sec-label" aria-hidden="true"><span class="vlabel" data-i18n="vl.score">绩效</span></div>
+        <div class="sec-body">
+          <div class="sec-head" data-reveal>
+            <p class="eyebrow" data-i18n="index.score.eyebrow">TEAMSCORE · 真实输出</p>
+            <h2 data-i18n="index.score.h2">分数记账，团队可见。</h2>
+          </div>
+          <p class="sec-lead" data-reveal data-i18n="index.score.lead">每位成员的得分进入同一本账：评分、通胀告警、扣分、门禁拦截，全部落印可查。</p>
+          <div class="code" data-reveal>
+            <div class="code-label"><span>TeamScore · ledger</span></div>
+            <pre>[TeamScore] Scored "yan-ge" — 88/100.
+Score inflation detected: the last 5 scores for yan-ge are all >= 75...
+[TeamScore] Penalized "yan-ge" — deducted 15 points (recorded 85/100).
+[TeamScore] Blocked by acceptance gate</pre>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ CTA ============ -->
+    <section class="cta-band">
+      <div class="container" data-reveal>
+        <h2 data-i18n="index.cta.h2">装上团队，现在就跑。</h2>
+        <p data-i18n="index.cta.p">一条命令装好，首次启动 4 问组队，然后交给后台并行。</p>
+        <div class="hero-cta" style="justify-content:center">
+          <a class="btn btn-primary" href="quickstart.html"><span data-i18n="cta.quickstart">快速部署</span><span class="btn-arrow">→</span></a>
+          <a class="btn btn-ghost" href="https://github.com/Liewzheng/kimiteam" target="_blank" rel="noopener noreferrer"><span data-i18n="cta.github">GitHub</span><span class="btn-arrow">↗</span></a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container">
+      <div class="footer-grid">
+        <div class="footer-brand">
+          <a class="brand" href="index.html" aria-label="kimiteam 首页" data-i18n-attr="aria-label:brand.aria">
+            <span class="brand-name">kimi<span class="brand-accent">team</span></span>
+            <span class="brand-alias">cli</span>
+          </a>
+          <p class="footer-tag" data-i18n="footer.tagline">给官方 Kimi Code CLI 装上团队能力的社区发行版。</p>
+          <p class="footer-license" data-i18n="footer.license">MIT · 开源，自由使用</p>
+        </div>
+        <div class="footer-col">
+          <p class="footer-h" data-i18n="footer.col.site">站点</p>
+          <ul>
+            <li><a href="index.html" data-i18n="nav.index">总览</a></li>
+            <li><a href="features.html" data-i18n="nav.features">特性</a></li>
+            <li><a href="quickstart.html" data-i18n="nav.quickstart">快速部署</a></li>
+            <li><a href="https://liewzheng.github.io/kimiteam/docs/" target="_blank" rel="noopener noreferrer" data-i18n="nav.docs">文档</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <p class="footer-h" data-i18n="footer.col.project">项目</p>
+          <p><a class="github-url" href="https://github.com/Liewzheng/kimiteam" target="_blank" rel="noopener noreferrer">github.com/Liewzheng/kimiteam</a></p>
+          <p data-i18n="footer.baseline">基于官方 Kimi Code 0.33 基线（v0.33.0）· Node ≥ 24</p>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <span>© 2026 kimiteam</span>
+        <span data-i18n="footer.motto">一个命令，一支团队。</span>
+      </div>
+    </div>
+  </footer>
+</body>
+</html>

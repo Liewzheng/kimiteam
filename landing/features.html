@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>特性 — kimiteam</title>
+  <meta name="description" content="kimiteam 核心特性：多智能体独立角色与模型分工、后台并行派工、TeamScore 绩效与通胀检测、score_gate 验收门禁、具名名册与四态生命周期、技能与 memory 复用、TUI + Web 双形态。">
+  <meta name="color-scheme" content="dark">
+  <script>document.documentElement.classList.add('js')</script>
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="assets/site.css">
+  <script src="assets/i18n/zh-CN.js" defer></script>
+  <script src="assets/i18n/en.js" defer></script>
+  <script src="assets/i18n/zh-TW.js" defer></script>
+  <script src="assets/i18n/fr.js" defer></script>
+  <script src="assets/i18n/ja.js" defer></script>
+  <script src="assets/i18n/ko.js" defer></script>
+  <script src="assets/i18n/ru.js" defer></script>
+  <script src="assets/i18n.js" defer></script>
+  <script src="assets/site.js" defer></script>
+</head>
+<body data-page="features">
+  <a class="skip-link" href="#main" data-i18n="skip.link">跳到正文</a>
+
+  <header class="site-header">
+    <div class="container header-inner">
+      <a class="brand" href="index.html" aria-label="kimiteam 首页" data-i18n-attr="aria-label:brand.aria">
+        <span class="brand-name">kimi<span class="brand-accent">team</span></span>
+        <span class="brand-alias">cli</span>
+      </a>
+      <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav" data-i18n="nav.toggle">菜单</button>
+      <nav class="site-nav" id="site-nav" aria-label="主导航" data-i18n-attr="aria-label:nav.aria">
+        <ul>
+          <li><a href="index.html" data-i18n="nav.index">总览</a></li>
+          <li><a href="features.html" aria-current="page" data-i18n="nav.features">特性</a></li>
+          <li><a href="quickstart.html" data-i18n="nav.quickstart">快速部署</a></li>
+          <li><a href="https://liewzheng.github.io/kimiteam/docs/" target="_blank" rel="noopener noreferrer" data-i18n="nav.docs">文档</a></li>
+          <li class="nav-gh"><a href="https://github.com/Liewzheng/kimiteam" target="_blank" rel="noopener noreferrer" data-i18n="nav.github">GitHub ↗</a></li>
+        </ul>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main">
+    <!-- ============ 页首 ============ -->
+    <section class="page-hero hero">
+      <div class="container">
+        <div class="hero-top">
+          <div class="hero-vlabel" aria-hidden="true"><span class="vlabel" data-i18n="vl.features">特性</span></div>
+          <div class="hero-head" data-reveal>
+            <p class="eyebrow" data-i18n="features.hero.eyebrow">FEATURES · 能力清单</p>
+            <h1 class="hero-title"><span data-i18n="features.hero.title.l1">每个 Subagent，</span><br><span data-i18n="features.hero.title.l2">各司其职。</span></h1>
+            <p class="hero-sub" data-i18n="features.hero.sub">十项能力，六章讲完：从独立角色到绩效闭环，全部在官方 CLI 之上原生运行。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 特性 ============ -->
+    <section class="sec" id="features">
+      <div class="container sec-grid">
+        <div class="sec-label" aria-hidden="true"><span class="vlabel" data-i18n="vl.design">设计</span></div>
+        <div class="sec-body">
+          <!-- 1 独立角色与模型分工 -->
+          <div class="feature" data-reveal>
+            <div class="feature-head">
+              <span class="feature-k" data-i18n="features.f1.k">SUBAGENTS · 独立角色与模型分工</span>
+              <h3 data-i18n="features.f1.h3">每个 Subagent，都有自己的角色、模型与上下文。</h3>
+            </div>
+            <div class="feature-body">
+              <p data-i18n="features.f1.body">名册里每位成员都是具名工程师：独立 role、独立 model、独立上下文窗口。模型分工用 [subagent.model_overrides] 三级优先配置，主模型按职责派工。</p>
+            </div>
+          </div>
+
+          <!-- 2 后台并行派工 -->
+          <div class="feature" data-reveal>
+            <div class="feature-head">
+              <span class="feature-k" data-i18n="features.f2.k">PARALLEL DISPATCH · 后台并行派工</span>
+              <h3 data-i18n="features.f2.h3">派工默认后台并行。</h3>
+            </div>
+            <div class="feature-body">
+              <p data-i18n="features.f2.body">主模型派工即建 Agent / AgentSwarm 任务，默认后台并行执行；Agent 池满时任务入队等待，standby 成员按权重加权选人，不空转、不阻塞主流程。</p>
+            </div>
+          </div>
+
+          <!-- 3 TeamScore -->
+          <div class="feature" data-reveal>
+            <div class="feature-head">
+              <span class="feature-k" data-i18n="features.f3.k">TEAMSCORE · 绩效与通胀检测</span>
+              <h3 data-i18n="features.f3.h3">分数记账，通胀无处遁形。</h3>
+            </div>
+            <div class="feature-body">
+              <p data-i18n="features.f3.body">每位成员按 0–100 记账：连续高分触发通胀检测，异常扣分入账，未计分引擎主动提醒。</p>
+              <div class="code" data-reveal>
+                <div class="code-label"><span data-i18n="features.f3.sample">TeamScore 记账 · 真实输出</span></div>
+                <pre>[TeamScore] Scored "yan-ge" — 88/100.
+Score inflation detected: the last 5 scores for yan-ge are all >= 75...
+[TeamScore] Penalized "yan-ge" — deducted 15 points (recorded 85/100).</pre>
+              </div>
+            </div>
+          </div>
+
+          <!-- 4 score_gate -->
+          <div class="feature" data-reveal>
+            <div class="feature-head">
+              <span class="feature-k" data-i18n="features.f4.k">ACCEPTANCE GATE · score_gate 硬门禁</span>
+              <h3 data-i18n="features.f4.h3">不达标，不放行。</h3>
+            </div>
+            <div class="feature-body">
+              <p data-i18n="features.f4.body">score_gate 作为验收硬门禁：未达到阈值的任务被拦截，低质量结果不会继续扩散。</p>
+              <div class="code" data-reveal>
+                <div class="code-label"><span data-i18n="features.f4.sample">门禁拦截 · 真实输出</span></div>
+                <pre>[TeamScore] Blocked by acceptance gate</pre>
+              </div>
+            </div>
+          </div>
+
+          <!-- 5 名册与四态 -->
+          <div class="feature" data-reveal>
+            <div class="feature-head">
+              <span class="feature-k" data-i18n="features.f5.k">ROSTER · 具名名册与四态生命周期</span>
+              <h3 data-i18n="features.f5.h3">谁在干活，谁在休息，一目了然。</h3>
+            </div>
+            <div class="feature-body">
+              <p data-i18n="features.f5.body">具名工程师名册 + 四态生命周期：working / resting / on-duty / off-duty。/team 面板实时呈现每位成员的岗位、模型、均分与当前状态。</p>
+            </div>
+          </div>
+
+          <!-- 6 技能与 memory -->
+          <div class="feature" data-reveal>
+            <div class="feature-head">
+              <span class="feature-k" data-i18n="features.f6.k">SKILLS &amp; MEMORY · 技能注入与停靠复用</span>
+              <h3 data-i18n="features.f6.h3">会技能，也记得住。</h3>
+            </div>
+            <div class="feature-body">
+              <p data-i18n="features.f6.body">技能体系走两级 pipeline 注入 + model-roster；memory 与停靠复用（KV-cache 保活、TTL 2h）让成员记得上轮上下文。TUI 与 Web 双形态，onboarding 冷启动 4 问即可「组建我的团队」。</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ CTA ============ -->
+    <section class="cta-band">
+      <div class="container" data-reveal>
+        <h2 data-i18n="features.cta.h2">十项能力，六章讲完。</h2>
+        <p data-i18n="features.cta.p">从独立角色到绩效闭环，装好即可体验。</p>
+        <div class="hero-cta" style="justify-content:center">
+          <a class="btn btn-primary" href="quickstart.html"><span data-i18n="cta.quickstart">快速部署</span><span class="btn-arrow">→</span></a>
+          <a class="btn btn-ghost" href="https://github.com/Liewzheng/kimiteam" target="_blank" rel="noopener noreferrer"><span data-i18n="cta.github">GitHub</span><span class="btn-arrow">↗</span></a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container">
+      <div class="footer-grid">
+        <div class="footer-brand">
+          <a class="brand" href="index.html" aria-label="kimiteam 首页" data-i18n-attr="aria-label:brand.aria">
+            <span class="brand-name">kimi<span class="brand-accent">team</span></span>
+            <span class="brand-alias">cli</span>
+          </a>
+          <p class="footer-tag" data-i18n="footer.tagline">给官方 Kimi Code CLI 装上团队能力的社区发行版。</p>
+          <p class="footer-license" data-i18n="footer.license">MIT · 开源，自由使用</p>
+        </div>
+        <div class="footer-col">
+          <p class="footer-h" data-i18n="footer.col.site">站点</p>
+          <ul>
+            <li><a href="index.html" data-i18n="nav.index">总览</a></li>
+            <li><a href="features.html" data-i18n="nav.features">特性</a></li>
+            <li><a href="quickstart.html" data-i18n="nav.quickstart">快速部署</a></li>
+            <li><a href="https://liewzheng.github.io/kimiteam/docs/" target="_blank" rel="noopener noreferrer" data-i18n="nav.docs">文档</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <p class="footer-h" data-i18n="footer.col.project">项目</p>
+          <p><a class="github-url" href="https://github.com/Liewzheng/kimiteam" target="_blank" rel="noopener noreferrer">github.com/Liewzheng/kimiteam</a></p>
+          <p data-i18n="footer.baseline">基于官方 Kimi Code 0.33 基线（v0.33.0）· Node ≥ 24</p>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <span>© 2026 kimiteam</span>
+        <span data-i18n="footer.motto">一个命令，一支团队。</span>
+      </div>
+    </div>
+  </footer>
+</body>
+</html>
