@@ -124,6 +124,12 @@ function onHeaderDragStart(event: DragEvent): void {
 // toggle; plain click is a single select. Sidebar applies the set + activates.
 function onSelectSession(id: string, e: MouseEvent): void {
   if (e.shiftKey) {
+    // Range-select: never let the click also carry/extend a browser text
+    // selection over the row labels. SessionRow already stops the shift
+    // mousedown from starting one; clear any lingering selection here so a
+    // prior text-drag cannot leak into the range gesture.
+    e.preventDefault();
+    if (typeof window !== 'undefined') window.getSelection()?.removeAllRanges();
     const ids = sessionRange(
       visibleSessions.value.map((s) => s.id),
       props.selectionAnchorId ?? id,

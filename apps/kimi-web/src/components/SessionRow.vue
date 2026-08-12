@@ -55,6 +55,17 @@ function onContextmenu(e: MouseEvent): void {
   emit('contextmenu', props.session.id, e);
 }
 
+/**
+ * Shift+click is the range-select gesture; its mousedown would otherwise also
+ * start a browser text selection over the row's label (the row keeps
+ * `user-select: text` so a plain click-drag can copy the title). Stopping the
+ * default on the SHIFT mousedown only — plain mousedown still selects text and
+ * Ctrl/Cmd+click is unaffected.
+ */
+function onRowMousedown(e: MouseEvent): void {
+  if (e.shiftKey) e.preventDefault();
+}
+
 // Context-menu "Rename" request from Sidebar → trigger this row's inline rename
 // (identical to dblclick / kebab rename). The parent clears the request once
 // we've handled it, so a repeat request (null → id) fires again.
@@ -208,7 +219,7 @@ defineExpose({ closeMenu });
 </script>
 
 <template>
-  <div class="se" :class="{ on: active, sel: selected }" @click="emit('select', session.id, $event)" @contextmenu="onContextmenu">
+  <div class="se" :class="{ on: active, sel: selected }" @click="emit('select', session.id, $event)" @mousedown="onRowMousedown" @contextmenu="onContextmenu">
     <div class="row">
       <!-- Leading status slot (in the gutter left of the title): a spinner
            while the session runs, otherwise an unread blue dot. Fixed width
