@@ -125,12 +125,16 @@ onBeforeUnmount(() => {
   z-index: var(--z-sticky);
   top: 50%;
   transform: translateY(-50%);
-  /* Anchor to the reading-column edge, the rail's original position. Tables
-     that grow past it (up to --p-table-max) temporarily hide the rail via the
-     occlusion hit-test in ConversationPane, so proximity is safe again.
-     The cqi cap keeps the rail inside narrow containers. */
+  /* Anchor to the CURRENT reading column edge: the conversation pane sets
+     --toc-anchor-max to the narrow column (`--p-content-max`) by default and
+     to the wide column (`--p-content-wide`) in wide mode, so the rail always
+     sits just outside the column that is actually rendered and never overlaps
+     the content. Tables that grow past it (up to --p-table-max / wide
+     max-content) temporarily hide the rail via the occlusion hit-test in
+     ConversationPane, so proximity is safe again. The cqi cap keeps the rail
+     inside narrow containers. */
   --toc-content-max: min(
-    var(--p-content-max),
+    var(--toc-anchor-max, var(--p-content-max)),
     calc(100cqi - var(--space-5) - var(--space-5))
   );
   left: calc(50% + (var(--toc-content-max) / 2) + 14px);

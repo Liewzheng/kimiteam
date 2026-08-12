@@ -542,7 +542,18 @@ html[data-color-scheme="dark"][data-accent="mono"] {
   /* -- layout & breakpoints (design-system §02) ---------------------------- */
   --p-sidebar-w: 264px;
   --p-content-max: 760px;
+  /* Wide content max width (settings / panels / desktop wide chat column).
+     The chat's wide mode overrides this on the conversation container
+     (`.con.is-wide`) with a container-query value so the column grows with
+     the pane while always leaving symmetric room for the conversation TOC;
+     this root value is the fallback for the settings/panel usages. */
   --p-content-wide: 1200px;
+  /* Symmetric side room the conversation TOC needs beside the wide reading
+     column: 14px anchor gap + 240px expanded label — mirrors
+     ConversationToc.vue's EXPANDED_WIDTH (240) plus its 14px `left` offset.
+     The wide-mode column width subtracts 2× this from the pane width so the
+     rail always has its own space and never overlaps the content. */
+  --p-content-toc-space: 254px;
   --p-table-max: 1040px;
   --p-table-cell-max: 700px;
   --p-bp-sm: 640px;

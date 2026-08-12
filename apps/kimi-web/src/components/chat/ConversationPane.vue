@@ -1359,7 +1359,7 @@ defineExpose({ loadComposerForEdit, focusComposer, openTodosHistory });
 </script>
 
 <template>
-  <section class="con" :class="{ mobile }">
+  <section class="con" :class="{ mobile, 'is-wide': contentWidth === 'wide' }">
     <!-- Chat context header: workspace/session, git status, open-in-editor,
          copy-all, PR. Hidden for the empty-composer (no session context yet). -->
     <ChatHeader
@@ -1416,10 +1416,7 @@ defineExpose({ loadComposerForEdit, focusComposer, openTodosHistory });
       >
         <div
           class="content-wrap"
-          :class="[
-            mobile ? 'align-mobile' : 'align-center',
-            { 'is-wide': contentWidth === 'wide' },
-          ]"
+          :class="[mobile ? 'align-mobile' : 'align-center']"
         >
           <template v-if="turns.length === 0 && !sessionLoading">
             <!-- Empty session: Composer rendered in the centre of the pane -->
@@ -1676,12 +1673,36 @@ defineExpose({ loadComposerForEdit, focusComposer, openTodosHistory });
 <style scoped>
 .con {
   --read-max: 760px;
+  /* Anchor the conversation TOC to the current reading column: the narrow
+     column by default; wide mode (`.con.is-wide` below) swaps this to the
+     wide column width so the rail always sits just outside the content. */
+  --toc-anchor-max: var(--p-content-max);
   display: flex;
   flex-direction: column;
   min-width: 0;
   height: 100%;
   position: relative;
   container-type: inline-size;
+}
+/* Wide content mode (the per-session wide/narrow toggle). The reading column
+   grows with the pane — no fixed 1200px ceiling — but always reserves
+   symmetric TOC room: `--p-content-toc-space` per side (14px anchor gap +
+   240px expanded label, see style.css). The `--toc-anchor-max` swap is what
+   moves the TOC rail out to the wide column's edge so it never overlaps the
+   content. `--md-table-*` are read by Markdown.vue's table rules (narrow
+   default = 100% width inside the scrolling wrapper); only wide overrides
+   them, letting tables render at natural width. */
+.con.is-wide {
+  --toc-anchor-max: var(--p-content-wide);
+  --p-content-wide: max(
+    var(--p-content-max),
+    calc(100cqi - 2 * var(--space-5) - 2 * var(--p-content-toc-space))
+  );
+  --md-table-width: max-content;
+  --md-table-cell-max: none;
+}
+.con.is-wide .content-wrap {
+  max-width: var(--p-content-wide);
 }
 
 .panes {
@@ -1727,20 +1748,9 @@ defineExpose({ loadComposerForEdit, focusComposer, openTodosHistory });
 .content-wrap.align-left { margin-left: 0; margin-right: auto; }
 /* Mobile: bubbles span the full pane width; no reading-column constraint. */
 .content-wrap.align-mobile { max-width: none; }
-/* Wide content mode: relax the reading column to --p-content-wide and let
-   wide markdown tables grow to their natural width. The --md-table-* custom
-   properties are read by Markdown.vue's table rules (narrow default = 100%
-   width inside the scrolling wrapper); only the wide state overrides them.
-   The table's own wrapper still owns overflow-x, so the chat area never
-   scrolls sideways. */
-.content-wrap.is-wide {
-  max-width: var(--p-content-wide);
-  --md-table-width: max-content;
-  --md-table-cell-max: none;
-}
-/* Mobile has no reading column at all, so `is-wide` must not reintroduce a
+/* Mobile has no reading column at all, so wide mode must not reintroduce a
    max-width clamp there. */
-.con.mobile .content-wrap.is-wide {
+.con.mobile.is-wide .content-wrap {
   max-width: none;
 }
 @media (max-width: 640px) {
