@@ -263,118 +263,127 @@ function statusLabel(status: AppProvider['status']): string {
         </template>
       </div>
 
-      <!-- Add / Edit provider form -->
+      <!-- Add / Edit provider form — opened as a modal (see below) -->
       <div v-if="!unavailable" class="add-section">
-        <template v-if="!showAddForm && !showEditForm">
-          <div class="add-btns">
-            <!-- OAuth login shortcuts for common platforms -->
-            <Button variant="secondary" size="sm" @click="emit('openLogin', 'moonshot')">
-              <Icon name="user" size="sm" />
-              {{ t('providers.loginKimi') }}
-            </Button>
-            <Button variant="secondary" size="sm" @click="emit('openLogin', 'anthropic')">
-              <Icon name="user" size="sm" />
-              {{ t('providers.loginAnthropic') }}
-            </Button>
-            <Button variant="primary" size="sm" @click="openAdd">
-              <Icon name="plus" size="sm" />
-              {{ t('providers.enterApiKey') }}
-            </Button>
-          </div>
-        </template>
-        <template v-else>
-          <div class="add-form">
-            <Field :label="t('providers.fieldId')">
-              <Input
-                v-if="showAddForm"
-                v-model="form.id"
-                :placeholder="t('providers.idPlaceholder')"
-                autocomplete="off"
-                spellcheck="false"
-              />
-              <span v-else class="edit-id">{{ form.id }}</span>
-            </Field>
-            <Field :label="t('providers.fieldType')">
-              <Select :model-value="form.type" @update:model-value="onTypeChange">
-                <option v-for="pt in PROVIDER_WIRE_TYPES" :key="pt" :value="pt">
-                  {{ t(PROVIDER_TYPE_LABEL_KEYS[pt]) }}
-                </option>
-              </Select>
-            </Field>
-            <Field :label="t('providers.fieldApiKey')" :hint="showEditForm ? t('providers.keyKeepHint') : undefined">
-              <Input
-                v-model="form.apiKey"
-                type="password"
-                :placeholder="showEditForm ? t('providers.keyKeepPlaceholder') : 'sk-…'"
-                autocomplete="off"
-                spellcheck="false"
-              />
-            </Field>
-            <Field :label="t('providers.fieldBaseUrl')">
-              <Input
-                v-model="form.baseUrl"
-                :placeholder="t('providers.baseUrlPlaceholder')"
-                autocomplete="off"
-                spellcheck="false"
-              />
-            </Field>
-
-            <!-- Model rows — the server requires >= 1 model on create and on replace. -->
-            <div class="models-section">
-              <span class="models-label">{{ t('providers.fieldModels') }}</span>
-              <div v-for="(row, idx) in form.models" :key="idx" class="model-row">
-                <Input
-                  v-model="row.model"
-                  :placeholder="t('providers.modelPlaceholder')"
-                  autocomplete="off"
-                  spellcheck="false"
-                />
-                <Input
-                  :model-value="row.maxContextSize"
-                  type="number"
-                  min="1"
-                  class="model-ctx"
-                  :aria-label="t('providers.contextLabel')"
-                  @update:model-value="row.maxContextSize = Number($event)"
-                />
-                <IconButton
-                  size="sm"
-                  :label="t('providers.removeModel')"
-                  :disabled="form.models.length <= 1"
-                  @click="removeModelRow(idx)"
-                >
-                  <Icon name="close" size="sm" />
-                </IconButton>
-              </div>
-              <Button variant="ghost" size="sm" class="add-model-btn" @click="addModelRow">
-                <Icon name="plus" size="sm" />
-                {{ t('providers.addModel') }}
-              </Button>
-            </div>
-
-            <Field :label="t('providers.fieldDefaultModel')">
-              <Select v-model="form.defaultModel">
-                <option value="">{{ t('providers.defaultModelNone') }}</option>
-                <option v-for="row in nonEmptyModelRows" :key="row.model" :value="row.model">
-                  {{ row.model }}
-                </option>
-              </Select>
-            </Field>
-
-            <div v-if="formError" class="add-error" role="alert">{{ t(formError) }}</div>
-            <div v-if="editLoading" class="state-row">
-              <Spinner size="sm" />
-              <span>{{ t('providers.loading') }}</span>
-            </div>
-            <div class="form-btns">
-              <Button variant="primary" size="sm" :disabled="editLoading" @click="submitForm">
-                {{ showEditForm ? t('providers.save') : t('providers.add') }}
-              </Button>
-              <Button variant="secondary" size="sm" @click="cancelForm">{{ t('common.cancel') }}</Button>
-            </div>
-          </div>
-        </template>
+        <div class="add-btns">
+          <!-- OAuth login shortcuts for common platforms -->
+          <Button variant="secondary" size="sm" @click="emit('openLogin', 'moonshot')">
+            <Icon name="user" size="sm" />
+            {{ t('providers.loginKimi') }}
+          </Button>
+          <Button variant="secondary" size="sm" @click="emit('openLogin', 'anthropic')">
+            <Icon name="user" size="sm" />
+            {{ t('providers.loginAnthropic') }}
+          </Button>
+          <Button variant="primary" size="sm" @click="openAdd">
+            <Icon name="plus" size="sm" />
+            {{ t('providers.enterApiKey') }}
+          </Button>
+        </div>
       </div>
+
+      <!-- Add / Edit provider form modal. Esc / overlay-click / Cancel close
+           it; save keeps the form open on a validation error (shown below) and
+           closes on success (the parent refreshes the list from the
+           add/update event). id is read-only while editing. -->
+      <Dialog
+        v-if="showAddForm || showEditForm"
+        :open="true"
+        :title="showEditForm ? t('providers.editTitle') : t('providers.enterApiKey')"
+        size="lg"
+        @close="cancelForm"
+      >
+        <div class="add-form">
+          <Field :label="t('providers.fieldId')">
+            <Input
+              v-if="showAddForm"
+              v-model="form.id"
+              :placeholder="t('providers.idPlaceholder')"
+              autocomplete="off"
+              spellcheck="false"
+            />
+            <span v-else class="edit-id">{{ form.id }}</span>
+          </Field>
+          <Field :label="t('providers.fieldType')">
+            <Select :model-value="form.type" @update:model-value="onTypeChange">
+              <option v-for="pt in PROVIDER_WIRE_TYPES" :key="pt" :value="pt">
+                {{ t(PROVIDER_TYPE_LABEL_KEYS[pt]) }}
+              </option>
+            </Select>
+          </Field>
+          <Field :label="t('providers.fieldApiKey')" :hint="showEditForm ? t('providers.keyKeepHint') : undefined">
+            <Input
+              v-model="form.apiKey"
+              type="password"
+              :placeholder="showEditForm ? t('providers.keyKeepPlaceholder') : 'sk-…'"
+              autocomplete="off"
+              spellcheck="false"
+            />
+          </Field>
+          <Field :label="t('providers.fieldBaseUrl')">
+            <Input
+              v-model="form.baseUrl"
+              :placeholder="t('providers.baseUrlPlaceholder')"
+              autocomplete="off"
+              spellcheck="false"
+            />
+          </Field>
+
+          <!-- Model rows — the server requires >= 1 model on create and on replace. -->
+          <div class="models-section">
+            <span class="models-label">{{ t('providers.fieldModels') }}</span>
+            <div v-for="(row, idx) in form.models" :key="idx" class="model-row">
+              <Input
+                v-model="row.model"
+                :placeholder="t('providers.modelPlaceholder')"
+                autocomplete="off"
+                spellcheck="false"
+              />
+              <Input
+                :model-value="row.maxContextSize"
+                type="number"
+                min="1"
+                class="model-ctx"
+                :aria-label="t('providers.contextLabel')"
+                @update:model-value="row.maxContextSize = Number($event)"
+              />
+              <IconButton
+                size="sm"
+                :label="t('providers.removeModel')"
+                :disabled="form.models.length <= 1"
+                @click="removeModelRow(idx)"
+              >
+                <Icon name="close" size="sm" />
+              </IconButton>
+            </div>
+            <Button variant="ghost" size="sm" class="add-model-btn" @click="addModelRow">
+              <Icon name="plus" size="sm" />
+              {{ t('providers.addModel') }}
+            </Button>
+          </div>
+
+          <Field :label="t('providers.fieldDefaultModel')">
+            <Select v-model="form.defaultModel">
+              <option value="">{{ t('providers.defaultModelNone') }}</option>
+              <option v-for="row in nonEmptyModelRows" :key="row.model" :value="row.model">
+                {{ row.model }}
+              </option>
+            </Select>
+          </Field>
+
+          <div v-if="formError" class="add-error" role="alert">{{ t(formError) }}</div>
+          <div v-if="editLoading" class="state-row">
+            <Spinner size="sm" />
+            <span>{{ t('providers.loading') }}</span>
+          </div>
+        </div>
+        <template #foot>
+          <Button variant="secondary" size="sm" @click="cancelForm">{{ t('common.cancel') }}</Button>
+          <Button variant="primary" size="sm" :disabled="editLoading" @click="submitForm">
+            {{ showEditForm ? t('providers.save') : t('providers.add') }}
+          </Button>
+        </template>
+      </Dialog>
 
       <!-- Footer -->
       <div class="footer-hint">{{ t('providers.escClose') }}</div>
@@ -531,11 +540,6 @@ function statusLabel(status: AppProvider['status']): string {
   font-family: var(--font-ui);
   font-size: var(--text-sm);
   color: var(--color-danger);
-}
-.form-btns {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
 }
 
 /* Footer */

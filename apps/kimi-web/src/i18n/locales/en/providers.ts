@@ -15,6 +15,7 @@ export default {
   modelCount: '{count} models',
   confirmDelete: 'Confirm delete?',
   edit: 'Edit',
+  editTitle: 'Edit provider',
   save: 'Save',
   refresh: 'Refresh',
   delete: 'Delete',
