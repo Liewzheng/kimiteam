@@ -19,6 +19,7 @@
 
 1. 触发:对 kimiteam 产品做架构升级 → 动作:放弃旧 V1 web 架构,全面升级到官方 0.33 基线,团队特性(Clerical / TeamStatus / TodoList / TeamMessage / 配置化等)随基线迁移、不丢 → 验收:基线与官方 0.33 对齐且团队特性可用。
 2. 触发:官方 web 侧闭源(待确认)→ 动作:自建开源 bundle `open-kimiteam`(Apache 2.0,README 对比官方闭源差异),发布到 github.com/Liewzheng → 验收:开源 bundle 可独立构建发布,README 含对比表。
+3. **仓库维护模式(2026-08-12 用户拍板)**:以后**只维护 kimiteam 仓库**(`Liewzheng/kimiteam` main + 开发分支),官方 `MoonshotAI/kimi-code` 仅为上游只读参考;官方更新按需评估吸收(评估流程:读官方 CHANGELOG → 判断价值/冲突 → 需要则对照代码吸收),不主动跟随官方基线。背景:kimiteam 是做给自己用的,官方可能更新有用内容。待确认:官方 0.34.0+ 的哪些更新值得吸收(见 T28 卷启评估报告)。
 
 ## 团队状态语义(2026-08-07 拍板)
 
