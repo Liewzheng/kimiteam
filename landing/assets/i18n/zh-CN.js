@@ -62,8 +62,8 @@ LANDING_I18N['zh-CN'] = {
 
   /* ================= index ================= */
   'index.hero.eyebrow': 'KIMITEAM · 官方 KIMI CODE CLI · SUBAGENT 团队',
-  'index.hero.title.l1': '一个命令，',
-  'index.hero.title.l2a': '一支',
+  'index.hero.title.l1': '一句话，',
+  'index.hero.title.l2a': '管理一个',
   'index.hero.title.l2b': '团队',
   'index.hero.title.l2c': '。',
   'index.hero.sub': '主模型派工默认后台并行；每个 Subagent 独立角色、模型与上下文，/team 面板统一管理——绩效记账、门禁验收、全生命周期一目了然。',
