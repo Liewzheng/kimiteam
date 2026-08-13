@@ -30,6 +30,7 @@ const emit = defineEmits<{ 'update:modelValue': [value: string] }>();
 <style scoped>
 .ui-seg {
   display: inline-flex;
+  flex-shrink: 0;
   gap: 2px;
   padding: 2px;
   background: var(--color-surface-sunken);
@@ -45,6 +46,7 @@ const emit = defineEmits<{ 'update:modelValue': [value: string] }>();
   font-weight: var(--weight-medium);
   cursor: pointer;
   line-height: 1;
+  white-space: nowrap;
   transition: background var(--duration-base) var(--ease-out),
     color var(--duration-base) var(--ease-out),
     box-shadow var(--duration-base) var(--ease-out);
